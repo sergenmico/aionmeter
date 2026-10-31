@@ -82,6 +82,12 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
+    public const int VK_MENU = 0x12; // Alt
+
+    /// <summary>Tuşun anlık durumu (yoklama). Klavye kancası değildir.</summary>
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 

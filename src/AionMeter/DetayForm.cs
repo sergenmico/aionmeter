@@ -64,6 +64,7 @@ internal sealed class DetayForm : Form
     private Rectangle _sonOverlay;
 
     public long OyuncuId { get; private set; }
+    private bool _tiklanmaz; // kilitli overlay'de sabit panel: Alt basılı değilken tıklamalar oyuna geçer
     public event Action? KapatIstendi;
 
     public DetayForm(IMeterEngine motor, SinifIkonlari ikonlar, float olcek, byte alfa)
@@ -120,6 +121,7 @@ internal sealed class DetayForm : Form
             var cp = base.CreateParams;
             cp.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOPMOST;
             cp.ExStyle &= ~Native.WS_EX_APPWINDOW;
+            if (_tiklanmaz) cp.ExStyle |= Native.WS_EX_TRANSPARENT;
             return cp;
         }
     }
@@ -147,6 +149,16 @@ internal sealed class DetayForm : Form
     }
 
     // ---------------- Dış arayüz ----------------
+
+    /// <summary>Paneli tıklanmaz (WS_EX_TRANSPARENT) yapar ya da geri alır. Odak hiçbir durumda değişmez.</summary>
+    public void TiklanmazAyarla(bool tiklanmaz)
+    {
+        if (_tiklanmaz == tiklanmaz) return;
+        _tiklanmaz = tiklanmaz;
+        if (!IsHandleCreated) return; // tutamaç yaratılınca CreateParams uygular
+        long ex = Native.GetExStyle(Handle);
+        Native.SetExStyle(Handle, tiklanmaz ? ex | Native.WS_EX_TRANSPARENT : ex & ~(long)Native.WS_EX_TRANSPARENT);
+    }
 
     /// <summary>Oyuncuyu gösterir (ya da başka oyuncuya geçer) ve overlay'in yanına yerleşir.</summary>
     public void Goster(long oyuncuId, Rectangle overlay)

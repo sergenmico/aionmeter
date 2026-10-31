@@ -21,6 +21,8 @@ Gösterdikleri:
 | `Ctrl+Alt+L` | Kilitle / kilidi aç (kilitliyken tıklamalar oyuna geçer) |
 | `Ctrl+Alt+H` | Göster / gizle |
 | `Ctrl+Alt+R` | Sıfırla |
+| `Alt` (basılı tut) | Kilitliyken satırın üstüne gel: detay; tıkla: sabitle |
+| `Ctrl+Alt+D` | Kendi detayın |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (tepsi menüsünden kapatılabilir).

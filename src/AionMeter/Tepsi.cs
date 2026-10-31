@@ -12,16 +12,17 @@ internal sealed class Tepsi : IDisposable
 
     public ContextMenuStrip Menu { get; }
 
-    public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sadeceOyundaDegistir, Action sifirla, Action cikis)
+    public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sadeceOyundaDegistir, Action sifirla, Action detayim, Action cikis)
     {
         Menu = new ContextMenuStrip { ShowImageMargin = false };
         _kilit = new ToolStripMenuItem("Kilitle", null, (_, _) => kilitDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" };
         _goster = new ToolStripMenuItem("Gizle", null, (_, _) => gosterDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+H" };
         var sifir = new ToolStripMenuItem("Sıfırla", null, (_, _) => sifirla()) { ShortcutKeyDisplayString = "Ctrl+Alt+R" };
+        var detay = new ToolStripMenuItem("Detayım (Ctrl+Alt+D)", null, (_, _) => detayim());
         _sadeceOyunda = new ToolStripMenuItem("Sadece oyun öndeyken göster", null, (_, _) => sadeceOyundaDegistir());
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
         Menu.ShowCheckMargin = true;
-        Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, new ToolStripSeparator(), _sadeceOyunda, new ToolStripSeparator(), cik });
+        Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), _sadeceOyunda, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon

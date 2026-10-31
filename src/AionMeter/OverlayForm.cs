@@ -11,7 +11,7 @@ namespace AionMeter;
 internal sealed class OverlayForm : Form
 {
     private const int MaxSatir = 12;
-    private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3;
+    private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4;
 
     // Renkler
     private static readonly Color RenkArka = Color.FromArgb(18, 20, 26);
@@ -94,6 +94,14 @@ internal sealed class OverlayForm : Form
     private int _tikSayaci;
     private bool _kilitli;
 
+    // Kilitliyken Alt ile göz atma: Alt basılıyken overlay tıklanabilir olur (odak yine alınmaz).
+    // 50 ms'lik yoklama sadece kilitliyken ve oyun (ya da bizim pencerelerimiz) öndeyken çalışır. Klavye kancası yok.
+    private readonly System.Windows.Forms.Timer _altZamanlayici;
+    private bool _altAcik;   // Alt şu an basılı ve overlay tıklanabilir
+    private bool _sabit;     // detay paneli sabitlendi (Alt bırakılınca kapanmaz)
+    private long _sabitId;
+    private long _hoverBastirId = long.MinValue; // Alt+tık ile kapatılan satır: Alt bırakılana/başka satıra geçilene dek yeniden açma
+
     // Görünürlük: kullanıcı gizlediyse (Ctrl+Alt+H) ya da "sadece oyun öndeyken" açıkken oyun önde değilse gizli.
     private readonly OnPlanIzleyici _onPlan = new();
     private bool _kullaniciGizledi, _sadeceOyunda, _gorunur = true;
@@ -131,6 +139,8 @@ internal sealed class OverlayForm : Form
 
         _zamanlayici = new System.Windows.Forms.Timer { Interval = 500 }; // 2 Hz
         _zamanlayici.Tick += (_, _) => Tick();
+        _altZamanlayici = new System.Windows.Forms.Timer { Interval = 50 };
+        _altZamanlayici.Tick += (_, _) => AltTick();
 
         SystemEvents.DisplaySettingsChanged += EkranDegisti;
     }
@@ -146,7 +156,7 @@ internal sealed class OverlayForm : Form
             var cp = base.CreateParams;
             cp.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOPMOST;
             cp.ExStyle &= ~Native.WS_EX_APPWINDOW;
-            if (_kilitli) cp.ExStyle |= Native.WS_EX_TRANSPARENT;
+            if (_kilitli && !_altAcik) cp.ExStyle |= Native.WS_EX_TRANSPARENT;
             else cp.ExStyle &= ~Native.WS_EX_TRANSPARENT;
             return cp;
         }
@@ -160,7 +170,7 @@ internal sealed class OverlayForm : Form
                 // Tıklama pencereyi etkinleştirmesin; oyun odakta kalsın.
                 m.Result = (IntPtr)Native.MA_NOACTIVATE;
                 return;
-            case Native.WM_NCHITTEST when _kilitli:
+            case Native.WM_NCHITTEST when _kilitli && !_altAcik:
                 m.Result = (IntPtr)Native.HTTRANSPARENT;
                 return;
         }
@@ -191,13 +201,14 @@ internal sealed class OverlayForm : Form
     {
         base.OnLoad(e);
 
-        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Close);
+        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Detayim, Close);
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
         if (!_kisayol.Kaydet(KisayolKilit, Keys.L)) alinamayan.Add("Ctrl+Alt+L");
         if (!_kisayol.Kaydet(KisayolGoster, Keys.H)) alinamayan.Add("Ctrl+Alt+H");
         if (!_kisayol.Kaydet(KisayolSifirla, Keys.R)) alinamayan.Add("Ctrl+Alt+R");
+        if (!_kisayol.Kaydet(KisayolDetayim, Keys.D)) alinamayan.Add("Ctrl+Alt+D");
         TepsiGuncelle();
 
         if (alinamayan.Count > 0)
@@ -234,6 +245,7 @@ internal sealed class OverlayForm : Form
         bool olmali = !_kullaniciGizledi && (!_sadeceOyunda || _onPlan.OyunOnde());
         if (olmali == _gorunur) return;
         _gorunur = olmali;
+        AltZamanlayiciGuncelle();
         if (olmali)
         {
             Native.ShowWindow(Handle, Native.SW_SHOWNOACTIVATE); // asla etkinleştirme
@@ -281,6 +293,7 @@ internal sealed class OverlayForm : Form
             _tikSayaci++;
             if (_tikSayaci == 6) GC.Collect(); // açılıştan ~3 sn sonra bir kez: başlangıç çöplerini bırak
             GorunurlukUygula();
+            AltZamanlayiciGuncelle();
             if (!_gorunur) return; // gizliyken motor okunmaz, çizilmez
 
             if ((_tikSayaci & 3) == 0)
@@ -751,7 +764,11 @@ internal sealed class OverlayForm : Form
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (_kilitli) return;
+        if (_kilitli)
+        {
+            if (_altAcik && e.Button == MouseButtons.Left) AltTiklandi(e.Y); // Alt+tık: sabitle / bırak
+            return;
+        }
         if (e.Button == MouseButtons.Left)
         {
             _surukle = true;
@@ -771,7 +788,11 @@ internal sealed class OverlayForm : Form
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (_kilitli) return;
+        if (_kilitli)
+        {
+            if (_altAcik) UzerineGelindi(e.Y);
+            return;
+        }
         if (!_surukle)
         {
             Cursor = KenardaMi(e.X) ? Cursors.SizeWE : Cursors.SizeAll;
@@ -809,30 +830,155 @@ internal sealed class OverlayForm : Form
 
     // ---------------- Detay paneli ----------------
 
+    private int SatirIndeksi(int y)
+    {
+        if (_durum != null || _satirSayisi == 0 || y < _satirlarUst) return -1;
+        int i = (y - _satirlarUst) / RowH;
+        return i >= 0 && i < _satirSayisi ? i : -1;
+    }
+
+    /// <summary>Kilitsiz mod: düz tıklama paneli açar; aynı satıra ikinci tıklama kapatır.</summary>
     private void SatiraTiklandi(int y)
     {
-        if (_durum != null || _satirSayisi == 0 || y < _satirlarUst) return;
-        int i = (y - _satirlarUst) / RowH;
-        if (i < 0 || i >= _satirSayisi) return;
+        int i = SatirIndeksi(y);
+        if (i < 0) return;
         long id = _satirlar[i].Id;
-
         if (_detay is { Visible: true } && _detay.OyuncuId == id)
         {
             DetayKapat(); // aynı satıra ikinci tıklama
             return;
         }
+        DetayAc(id, sabit: false);
+    }
+
+    /// <summary>Paneli açar ya da oyuncuyu değiştirir. sabit null ise sabitleme durumu değişmez (Alt ile üzerine gelme).</summary>
+    private void DetayAc(long id, bool? sabit)
+    {
         if (_detay is null)
         {
             byte alfa = (byte)Math.Clamp(_ayar.Opaklik * 255 / 100, 40, 255);
             _detay = new DetayForm(_motor, _ikonlar, _olcek, alfa);
             _detay.KapatIstendi += DetayKapat;
         }
-        _detay.Goster(id, Bounds);
+        if (sabit is bool b)
+        {
+            _sabit = b;
+            if (b) _sabitId = id;
+        }
+        _detay.TiklanmazAyarla(_kilitli && !_altAcik);
+        _detay.Goster(id, Bounds); // SW_SHOWNOACTIVATE
         Invalidate();
+    }
+
+    // ---------------- Kilitliyken Alt ile göz atma ----------------
+
+    private void AltZamanlayiciGuncelle()
+    {
+        // Demoda oyun yok: oyun-önde şartı aranmaz (test edilebilsin).
+        bool calismali = _kilitli && _gorunur && (_demo || _onPlan.OyunOnde());
+        if (calismali == _altZamanlayici.Enabled) return;
+        if (calismali) _altZamanlayici.Start();
+        else
+        {
+            _altZamanlayici.Stop();
+            AltBirakildi();
+        }
+    }
+
+    private void AltTick()
+    {
+        try
+        {
+            bool basili = (Native.GetAsyncKeyState(Native.VK_MENU) & 0x8000) != 0;
+            if (basili && !_altAcik)
+            {
+                _altAcik = true;
+                TiklanmazlikUygula(); // WS_EX_TRANSPARENT kalkar; NOACTIVATE kalır
+            }
+            else if (!basili && _altAcik)
+            {
+                AltBirakildi();
+                return;
+            }
+            if (_altAcik)
+            {
+                // Stil değişiminden hemen sonra WM_MOUSEMOVE gelmeyebilir: imleci burada da yokla.
+                var p = PointToClient(Cursor.Position);
+                if (ClientRectangle.Contains(p)) UzerineGelindi(p.Y);
+            }
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Alt izleme", ex);
+        }
+    }
+
+    private void AltBirakildi()
+    {
+        if (!_altAcik) return;
+        _altAcik = false;
+        _hoverBastirId = long.MinValue;
+        TiklanmazlikUygula();
+        if (!_sabit) DetayKapat();
+        else if (_detay is not null && _detay.OyuncuId != _sabitId) DetayAc(_sabitId, sabit: null); // sabitlenen oyuncuya dön
+    }
+
+    /// <summary>Overlay ve detay paneli: kilitli ve Alt basılı değilse tıklanmaz.</summary>
+    private void TiklanmazlikUygula()
+    {
+        bool tiklanmaz = _kilitli && !_altAcik;
+        if (IsHandleCreated)
+        {
+            long ex = Native.GetExStyle(Handle);
+            long yeni = tiklanmaz ? ex | Native.WS_EX_TRANSPARENT : ex & ~(long)Native.WS_EX_TRANSPARENT;
+            if (yeni != ex) Native.SetExStyle(Handle, yeni);
+        }
+        _detay?.TiklanmazAyarla(tiklanmaz);
+    }
+
+    private void UzerineGelindi(int y)
+    {
+        int i = SatirIndeksi(y);
+        if (i < 0) return;
+        long id = _satirlar[i].Id;
+        if (id == _hoverBastirId) return;
+        _hoverBastirId = long.MinValue;
+        if (_detay is { Visible: true } && _detay.OyuncuId == id) return;
+        DetayAc(id, sabit: null);
+    }
+
+    private void AltTiklandi(int y)
+    {
+        int i = SatirIndeksi(y);
+        if (i < 0) return;
+        long id = _satirlar[i].Id;
+        if (_sabit && _sabitId == id && _detay is not null)
+        {
+            DetayKapat(); // aynı satır: sabitlemeyi kaldır ve kapat
+            _hoverBastirId = id; // Alt hâlâ basılı: üzerine gelme hemen yeniden açmasın
+        }
+        else DetayAc(id, sabit: true);
+    }
+
+    /// <summary>Ctrl+Alt+D / tepsi: kendi satırının detayını sabitlenmiş olarak aç ya da kapat (kilitli/kilitsiz).</summary>
+    private void Detayim()
+    {
+        if (!_gorunur) return;
+        long? id = null;
+        for (int i = 0; i < _satirSayisi; i++)
+            if (_satirlar[i].Yerel) { id = _satirlar[i].Id; break; }
+        if (id is null)
+        {
+            _tepsi?.Bildir("Kendi satırın henüz yok (dövüş verisi bekleniyor).");
+            return;
+        }
+        if (_detay is { Visible: true } && _detay.OyuncuId == id.Value) DetayKapat();
+        else DetayAc(id.Value, sabit: true);
     }
 
     private void DetayKapat()
     {
+        _sabit = false;
         if (_detay is null) return;
         var d = _detay;
         _detay = null;
@@ -863,26 +1009,28 @@ internal sealed class OverlayForm : Form
             case KisayolKilit: KilitDegistir(); break;
             case KisayolGoster: GosterDegistir(); break;
             case KisayolSifirla: Sifirla(); break;
+            case KisayolDetayim: Detayim(); break;
         }
     }
 
     private void KilitDegistir()
     {
         _kilitli = !_kilitli;
-        if (_kilitli) DetayKapat(); // tıklanmaz modda detay paneli kapanır
+        if (_kilitli && !_sabit) DetayKapat(); // kilitlenince sabitlenmemiş panel kapanır
         _surukle = false;
         Capture = false;
+        _altAcik = false;
+        TiklanmazlikUygula(); // overlay + sabit panel: kilitliyse tıklanmaz
         if (IsHandleCreated)
         {
-            long ex = Native.GetExStyle(Handle);
-            ex = _kilitli ? ex | Native.WS_EX_TRANSPARENT : ex & ~(long)Native.WS_EX_TRANSPARENT;
-            ex |= Native.WS_EX_LAYERED | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW;
+            long ex = Native.GetExStyle(Handle) | Native.WS_EX_LAYERED | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW;
             Native.SetExStyle(Handle, ex);
             Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_FRAMECHANGED);
             SaydamlikUygula();
         }
         Cursor = Cursors.Default;
+        AltZamanlayiciGuncelle(); // kilitsizken Alt yoklaması durur
         TepsiGuncelle();
         IpucuGuncelle();
         _onceki = null; // ipucu genişliği değişti: modeli yeniden kur
@@ -932,6 +1080,7 @@ internal sealed class OverlayForm : Form
         {
             SystemEvents.DisplaySettingsChanged -= EkranDegisti;
             _zamanlayici.Dispose();
+            _altZamanlayici.Dispose();
             DetayKapat();
             _kisayol?.Dispose();
             _tepsi?.Dispose();
