@@ -2,8 +2,6 @@
 
 AION 2 (Global) için küçük, Türkçe hasar ölçer overlay'i. Oyunun ağ trafiğini Npcap ile pasif okur; oyuna dokunmaz.
 
-![AionMeter](src/AionMeter/docs/demo-detay.png)
-
 Gösterdikleri:
 - **Boss:** ad, tam can, %, dövüş süresi, tahmini öldürme süresi, öfke geri sayımı (`Yetişir` / `geç`)
 - **Parti:** sınıf ikonu, isim, CP, Boss DPS, DPS, toplam hasar, katkı % — en çok vuran en üstte
