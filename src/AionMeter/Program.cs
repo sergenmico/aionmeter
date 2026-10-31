@@ -13,6 +13,10 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Güncelleme kurucusu modu: her şeyden önce (mutex, ayarlar, UI, Npcap, güncelleme kontrolü yok).
+        if (Guncelleyici.KurulumModuMu(args, out string kurKlasoru, out int beklePid))
+            return Guncelleyici.KurulumModu(kurKlasoru, beklePid, args);
+
         bool demoIstendi = Arg(args, "--demo");
         bool guncellemeYok = Arg(args, "--guncelleme-yok");
         bool guncellendi = Arg(args, "--guncellendi"); // güncelleyicinin yeniden başlattığı süreç
@@ -80,16 +84,9 @@ internal static class Program
         else if (!demoIstendi && !guncellemeYok && ayar.OtomatikGuncelleme)
         {
             var sonuc = Guncelleyici.Calistir();
-            if (sonuc.YeniExe is string yeniExe)
-            {
-                // Mutex'i bırak ki yeni süreç alabilsin; başlatılamazsa geri al ve eski sürümle devam et.
-                try { tekKopya!.ReleaseMutex(); } catch { /* yok say */ }
-                tekKopya!.Dispose();
-                tekKopya = null;
-                if (Guncelleyici.YenidenBaslat(yeniExe, args)) return 0;
-                tekKopya = TekKopyaAl(TimeSpan.FromSeconds(2));
-                if (tekKopya is null) return 1;
-            }
+            // Kurucu (geçici klasördeki yeni exe) başlatıldıysa hemen çık; mutex finally'de bırakılır.
+            // Uygulama klasörüne bu süreçte hiç dokunulmadı. Başlatılamazsa eski sürümle devam.
+            if (sonuc.KurucuExe is not null && Guncelleyici.KurucuyuBaslat(sonuc, args)) return 0;
         }
 
         bool demo = demoIstendi || EngineFactory is null;

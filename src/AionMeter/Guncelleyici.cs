@@ -10,7 +10,10 @@ namespace AionMeter;
 
 /// <summary>
 /// Açılışta GitHub'daki son sürümü kontrol eder; yenisi varsa notlarını gösterip sorar, onaylanırsa
-/// AionMeter.zip'i indirir, AionMeter.zip.sha256 ile doğrular, exe klasörüne kurar ve yeniden başlatır.
+/// AionMeter.zip'i indirir, AionMeter.zip.sha256 ile doğrular ve geçici klasöre açar.
+/// Kurulumu ÇALIŞAN süreç yapmaz (tek dosya paketi derlemeleri exe'den tembel yükler; exe değişirse çöker):
+/// geçici klasördeki YENİ exe "--kur &lt;klasör&gt; --bekle &lt;pid&gt;" ile başlatılır, eski süreç hemen çıkar;
+/// kurucu eski sürecin bitmesini bekleyip dosyaları kopyalar (exe en son) ve uygulamayı --guncellendi ile açar.
 /// Her hata eski sürümle devam etmeyle sonuçlanır (hata.log'a yazılır). ayarlar.ini ve hata.log'a dokunulmaz.
 /// </summary>
 internal static class Guncelleyici
@@ -27,8 +30,9 @@ internal static class Guncelleyici
     private const int NotSiniri = 4000;
     private static readonly string[] Korunanlar = { "ayarlar.ini", "ayarlar.ini.tmp", "hata.log", EskiExeAdi };
 
-    public sealed record Sonuc(string? YeniExe); // YeniExe != null → yeniden başlat
-    private static readonly Sonuc Devam = new((string?)null);
+    /// <summary>KurucuExe != null → geçici klasördeki yeni exe kurulum için başlatılmalı (Program.Main).</summary>
+    public sealed record Sonuc(string? KurucuExe, string? Gecici);
+    private static readonly Sonuc Devam = new(null, null);
 
     private sealed record SurumBilgisi(Version Surum, string Etiket, string ZipUrl, string ShaUrl, string Notlar);
 
@@ -92,7 +96,12 @@ internal static class Guncelleyici
             {
                 foreach (string d in Directory.EnumerateDirectories(Path.GetTempPath(), GeciciOnek + "*"))
                 {
-                    try { Directory.Delete(d, recursive: true); } catch { /* sonra */ }
+                    // Kurucu exe bu klasörden çalıştı; kapanması birkaç yüz ms sürebilir.
+                    for (int i = 0; i < deneme && Directory.Exists(d); i++)
+                    {
+                        try { Directory.Delete(d, recursive: true); }
+                        catch { Thread.Sleep(250); }
+                    }
                 }
             }
             catch { /* önemsiz */ }
@@ -118,24 +127,181 @@ internal static class Guncelleyici
         }
     }
 
-    /// <summary>Yeni exe'yi --guncellendi ve özgün argümanlarla başlatır.</summary>
-    public static bool YenidenBaslat(string exe, string[] args)
+    private static readonly string[] KontrolArgumanlari = { "--guncellendi", "--guncelleme-yok", "--kur", "--bekle" };
+
+    /// <summary>Özgün argümanlar, güncelleyicinin kendi bayrakları (ve --kur/--bekle değerleri) çıkarılarak.</summary>
+    private static IEnumerable<string> KullaniciArgumanlari(string[] args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+            if (a.Equals("--kur", StringComparison.OrdinalIgnoreCase) || a.Equals("--bekle", StringComparison.OrdinalIgnoreCase)) { i++; continue; }
+            bool kontrol = false;
+            foreach (string k in KontrolArgumanlari) if (a.Equals(k, StringComparison.OrdinalIgnoreCase)) kontrol = true;
+            if (!kontrol) yield return a;
+        }
+    }
+
+    /// <summary>
+    /// ESKİ süreçte: geçici klasördeki yeni exe'yi "--kur &lt;uygulama klasörü&gt; --bekle &lt;pid&gt;" ile başlatır.
+    /// Uygulama klasörüne hiç dokunulmadan çağrılır; başarılıysa çağıran hemen çıkmalıdır.
+    /// </summary>
+    public static bool KurucuyuBaslat(Sonuc sonuc, string[] args)
     {
         try
         {
-            var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = UygulamaKlasoru };
-            psi.ArgumentList.Add("--guncellendi");
-            foreach (string a in args)
-                if (!string.Equals(a, "--guncellendi", StringComparison.OrdinalIgnoreCase)) psi.ArgumentList.Add(a);
+            var psi = new ProcessStartInfo(sonuc.KurucuExe!)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(sonuc.KurucuExe!)!,
+            };
+            psi.ArgumentList.Add("--kur");
+            psi.ArgumentList.Add(UygulamaKlasoru); // boşluklu / Türkçe karakterli yollar ArgumentList ile güvenle aktarılır
+            psi.ArgumentList.Add("--bekle");
+            psi.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            foreach (string a in KullaniciArgumanlari(args)) psi.ArgumentList.Add(a);
             using var p = Process.Start(psi);
             return p is not null;
         }
         catch (Exception ex)
         {
-            HataLog.Yaz("Güncellenen sürüm başlatılamadı", ex);
+            HataLog.Yaz("Güncelleme kurucusu başlatılamadı", ex);
+            try { if (sonuc.Gecici is not null) Directory.Delete(sonuc.Gecici, recursive: true); } catch { /* açılışta temizlenir */ }
             return false;
         }
     }
+
+    /// <summary>args içinde "--kur &lt;klasör&gt;" varsa kurulum modudur (Program.Main bunu her şeyden önce kontrol eder).</summary>
+    public static bool KurulumModuMu(string[] args, out string klasor, out int beklePid)
+    {
+        klasor = "";
+        beklePid = 0;
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals("--kur", StringComparison.OrdinalIgnoreCase)) klasor = args[i + 1];
+            else if (args[i].Equals("--bekle", StringComparison.OrdinalIgnoreCase))
+                int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out beklePid);
+        }
+        return klasor.Length > 0;
+    }
+
+    /// <summary>
+    /// KURUCU süreç (geçici klasördeki yeni exe): eski süreç bitince dosyaları uygulama klasörüne kopyalar,
+    /// sonra uygulamayı açar (başarılıysa --guncellendi, değilse eski sürüm --guncelleme-yok ile). Hiç UI yok.
+    /// </summary>
+    public static int KurulumModu(string uygKlasor, int beklePid, string[] args)
+    {
+        uygKlasor = Path.GetFullPath(uygKlasor);
+        HataLog.Klasor = uygKlasor; // hata.log uygulama klasöründe kalsın
+        bool basarili = false;
+        try
+        {
+            if (beklePid > 0)
+            {
+                try
+                {
+                    using var eski = Process.GetProcessById(beklePid);
+                    if (!eski.WaitForExit(15000)) HataLog.Yaz("Güncelleme: eski süreç 15 sn içinde kapanmadı, yine de deneniyor");
+                }
+                catch (ArgumentException) { /* zaten kapanmış */ }
+            }
+            string kaynak = Path.GetFullPath(AppContext.BaseDirectory);
+            string? hata = DosyalariKopyala(kaynak, uygKlasor);
+            if (hata is null) basarili = true;
+            else HataLog.Yaz("Güncelleme kurulamadı: " + hata);
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Güncelleme kurulumu", ex);
+        }
+
+        try
+        {
+            string exe = Path.Combine(uygKlasor, "AionMeter.exe");
+            var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = uygKlasor };
+            psi.ArgumentList.Add(basarili ? "--guncellendi" : "--guncelleme-yok"); // başarısızsa aynı oturumda tekrar sorma
+            foreach (string a in KullaniciArgumanlari(args)) psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Güncelleme sonrası uygulama açılamadı", ex);
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Kaynak (açılmış yeni sürüm) → uygulama klasörü. assets bütünüyle değişir (eskisi assets.eski'ye alınır),
+    /// exe EN SON kopyalanır (kilitliyse birkaç sn tekrar denenir). Hata olursa assets geri alınır; exe kopyalanamadıysa
+    /// eski exe yerinde kalır. ayarlar.ini / hata.log'a dokunulmaz. null = başarılı.
+    /// </summary>
+    private static string? DosyalariKopyala(string kaynakKok, string uygKlasor)
+    {
+        string kaynakExe = Path.Combine(kaynakKok, "AionMeter.exe");
+        if (!File.Exists(kaynakExe)) return "kaynakta AionMeter.exe yok: " + kaynakKok;
+        string assets = Path.Combine(uygKlasor, "assets");
+        string eskiAssets = Path.Combine(uygKlasor, EskiAssetsAdi);
+        bool assetsTasindi = false;
+        try
+        {
+            if (Directory.Exists(eskiAssets)) Directory.Delete(eskiAssets, recursive: true);
+            if (Directory.Exists(assets))
+            {
+                Directory.Move(assets, eskiAssets);
+                assetsTasindi = true;
+            }
+
+            foreach (string dosya in Directory.EnumerateFiles(kaynakKok, "*", SearchOption.AllDirectories))
+            {
+                string goreli = Path.GetRelativePath(kaynakKok, dosya);
+                if (Korunan(goreli) || goreli.Equals("AionMeter.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                string hedef = Path.Combine(uygKlasor, goreli);
+                string? hedefKlasor = Path.GetDirectoryName(hedef);
+                if (hedefKlasor is not null) Directory.CreateDirectory(hedefKlasor);
+                File.Copy(dosya, hedef, overwrite: true);
+            }
+
+            // exe en son: eski süreç yeni kapandıysa dosya kısa süre kilitli olabilir.
+            string hedefExe = Path.Combine(uygKlasor, "AionMeter.exe");
+            for (int deneme = 1; ; deneme++)
+            {
+                try
+                {
+                    File.Copy(kaynakExe, hedefExe, overwrite: true);
+                    break;
+                }
+                catch (IOException) when (deneme < 20)
+                {
+                    Thread.Sleep(250);
+                }
+                catch (UnauthorizedAccessException) when (deneme < 20)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+
+            if (assetsTasindi)
+            {
+                try { Directory.Delete(eskiAssets, recursive: true); } catch { /* --guncellendi açılışında silinir */ }
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            if (assetsTasindi)
+            {
+                try
+                {
+                    if (Directory.Exists(assets)) Directory.Delete(assets, recursive: true);
+                    Directory.Move(eskiAssets, assets);
+                }
+                catch (Exception ex2) { HataLog.Yaz("Güncelleme geri alma (assets)", ex2); }
+            }
+            return ex.GetType().Name + ": " + ex.Message;
+        }
+    }
+
 
     // ---------------- Akış (UI iş parçacığında, async) ----------------
 
@@ -185,6 +351,7 @@ internal static class Guncelleyici
 
         // 3) İndir, doğrula, kur
         string gecici = Path.Combine(Path.GetTempPath(), GeciciOnek + Guid.NewGuid().ToString("N"));
+        bool devredildi = false;
         try
         {
             Directory.CreateDirectory(gecici);
@@ -213,8 +380,20 @@ internal static class Guncelleyici
             }
 
             f.Durum("Kuruluyor…");
-            string exe = ExeYolu;
-            string? hata = await Task.Run(() => Kur(zipYol, gecici, klasor, exe));
+            string acilan = Path.Combine(gecici, "acilan");
+            string? hata = await Task.Run(() =>
+            {
+                try
+                {
+                    ZipAc(zipYol, acilan);
+                    File.Delete(zipYol); // yer açılsın
+                    return File.Exists(Path.Combine(acilan, "AionMeter", "AionMeter.exe")) ? null : "zip içinde AionMeter/AionMeter.exe yok";
+                }
+                catch (Exception ex)
+                {
+                    return "zip açılamadı: " + ex.Message;
+                }
+            });
             if (hata is not null)
             {
                 HataLog.Yaz("Güncelleme kurulamadı: " + hata);
@@ -223,7 +402,8 @@ internal static class Guncelleyici
             }
 
             await f.MesajAsync("Güncellendi, yeniden başlatılıyor…", 700);
-            return new Sonuc(exe);
+            devredildi = true; // geçici klasör kurucu exe'yi içeriyor: burada silinmez
+            return new Sonuc(Path.Combine(acilan, "AionMeter", "AionMeter.exe"), gecici);
         }
         catch (OperationCanceledException) when (iptal.IsCancellationRequested)
         {
@@ -238,7 +418,10 @@ internal static class Guncelleyici
         }
         finally
         {
-            try { Directory.Delete(gecici, recursive: true); } catch { /* açılışta temizlenir */ }
+            if (!devredildi)
+            {
+                try { Directory.Delete(gecici, recursive: true); } catch { /* açılışta temizlenir */ }
+            }
         }
     }
 
@@ -375,83 +558,6 @@ internal static class Guncelleyici
     }
 
     // ---------------- Kurulum (iş parçacığı havuzunda) ----------------
-
-    /// <summary>null = başarılı; aksi halde hata metni (geri alma yapılmış olur).</summary>
-    private static string? Kur(string zipYol, string gecici, string uygKlasor, string exe)
-    {
-        string acilan = Path.Combine(gecici, "acilan");
-        try
-        {
-            ZipAc(zipYol, acilan);
-        }
-        catch (Exception ex)
-        {
-            return "zip açılamadı: " + ex.Message;
-        }
-        string kok = Path.Combine(acilan, "AionMeter");
-        if (!File.Exists(Path.Combine(kok, "AionMeter.exe"))) return "zip içinde AionMeter/AionMeter.exe yok";
-
-        string eskiExe = Path.Combine(uygKlasor, EskiExeAdi);
-        string assets = Path.Combine(uygKlasor, "assets");
-        string eskiAssets = Path.Combine(uygKlasor, EskiAssetsAdi);
-        bool exeTasindi = false, assetsTasindi = false;
-        try
-        {
-            if (File.Exists(eskiExe)) File.Delete(eskiExe);
-            if (Directory.Exists(eskiAssets)) Directory.Delete(eskiAssets, recursive: true);
-
-            // Çalışan exe silinemez ama yeniden adlandırılabilir.
-            File.Move(exe, eskiExe);
-            exeTasindi = true;
-            // assets bütünüyle değişir: yeni zip'te olmayan dosyalar da böylece gider; hata olursa geri taşınır.
-            if (Directory.Exists(assets))
-            {
-                Directory.Move(assets, eskiAssets);
-                assetsTasindi = true;
-            }
-
-            foreach (string kaynak in Directory.EnumerateFiles(kok, "*", SearchOption.AllDirectories))
-            {
-                string goreli = Path.GetRelativePath(kok, kaynak);
-                if (Korunan(goreli)) continue;
-                string hedef = string.Equals(goreli, "AionMeter.exe", StringComparison.OrdinalIgnoreCase)
-                    ? exe
-                    : Path.Combine(uygKlasor, goreli);
-                string? hedefKlasor = Path.GetDirectoryName(hedef);
-                if (hedefKlasor is not null) Directory.CreateDirectory(hedefKlasor);
-                File.Copy(kaynak, hedef, overwrite: true);
-            }
-
-            if (assetsTasindi)
-            {
-                try { Directory.Delete(eskiAssets, recursive: true); } catch { /* açılışta temizlenir */ }
-            }
-            return null;
-        }
-        catch (Exception ex)
-        {
-            // Geri al (elden geldiğince): eski exe ve assets yerine konur.
-            if (assetsTasindi)
-            {
-                try
-                {
-                    if (Directory.Exists(assets)) Directory.Delete(assets, recursive: true);
-                    Directory.Move(eskiAssets, assets);
-                }
-                catch (Exception ex2) { HataLog.Yaz("Güncelleme geri alma (assets)", ex2); }
-            }
-            if (exeTasindi)
-            {
-                try
-                {
-                    if (File.Exists(exe)) File.Delete(exe);
-                    File.Move(eskiExe, exe);
-                }
-                catch (Exception ex2) { HataLog.Yaz("Güncelleme geri alma (exe)", ex2); }
-            }
-            return ex.GetType().Name + ": " + ex.Message;
-        }
-    }
 
     private static bool Korunan(string goreli)
     {

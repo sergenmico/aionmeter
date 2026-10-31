@@ -10,7 +10,10 @@ internal static class HataLog
     private static string? _sonBaslik;
     private static DateTime _sonZaman;
 
-    public static string Yol => Path.Combine(Ayarlar.Klasor, "hata.log");
+    /// <summary>Ayarlanırsa günlük bu klasöre yazılır (güncelleme kurucusu geçici klasörden çalışırken uygulama klasörü).</summary>
+    public static string? Klasor;
+
+    public static string Yol => Path.Combine(Klasor ?? Ayarlar.Klasor, "hata.log");
 
     public static void Yaz(string baslik, Exception? ex = null)
     {
