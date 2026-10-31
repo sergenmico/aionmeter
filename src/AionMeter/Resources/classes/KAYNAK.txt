@@ -1,0 +1,3 @@
+Bu klasördeki sınıf ikonları (128x128 PNG) SkeeveAN/Aion-DPS-Meter reposundan
+(Client/assets/classes/icons/) değiştirilmeden kopyalanmıştır. Repo MIT lisanslıdır.
+Exe içine EmbeddedResource olarak gömülür ("sinif.<SınıfAdı>.png").

@@ -1,0 +1,7 @@
+_ref/
+bin/
+obj/
+.vs/
+*.user
+publish/
+CLAUDE.md

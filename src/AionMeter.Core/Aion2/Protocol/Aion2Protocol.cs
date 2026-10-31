@@ -1,0 +1,250 @@
+// Kaynak: SkeeveAN/Aion-DPS-Meter (MIT), Client/Aion2/Protocol/Aion2Protocol.cs. Değiştirildi.
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace AionDPS.Aion2.Protocol;
+
+/// <summary>
+/// How a game frame is delimited on the wire. "fixed" (default): a length prefix of
+/// <see cref="LengthSize"/> bytes at <see cref="LengthOffset"/>. "varint": a LEB128 length at the
+/// start of the frame; the frame is <c>length + prefixBytes + LengthBias</c> bytes long in total and
+/// the decoder sees it WITHOUT the prefix (opcode at <see cref="OpcodeOffset"/> of the body).
+/// Aion 2 (verified against a real capture, 2026-09-30) is varint with bias -4.
+/// </summary>
+public sealed record FrameLayout(
+    int LengthOffset,
+    int LengthSize,
+    bool LittleEndian,
+    bool LengthIncludesHeader,
+    int HeaderSize,
+    int OpcodeOffset,
+    int OpcodeSize,
+    int MaxFrameLength,
+    string LengthEncoding = "fixed",
+    int LengthBias = 0,
+    bool OpcodeBigEndian = false)
+{
+    public bool IsVarint => string.Equals(LengthEncoding, "varint", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Where one value sits inside a frame. <see cref="Size"/> 1/2/4/8 for integers; strings
+/// are UTF-16LE with a 2-byte character count at <see cref="Offset"/> unless <see cref="Encoding"/> says otherwise.</summary>
+public sealed record FieldSpec(int Offset, int Size, bool Signed = false, string? Encoding = null, string? Mask = null);
+
+public enum OpcodeFamily
+{
+    Unknown,
+    Damage,
+    Dot,
+    Heal,
+    HpUpdate,
+    Nickname,
+    /// <summary>Party roster frame: lists every member's name (no combat id).</summary>
+    Roster,
+    /// <summary>The local player's own character record: combat id, name, class, level, equipment.</summary>
+    Character,
+    /// <summary>The local player's full equipment at login: every slot with its item and enchant level.</summary>
+    Equipment,
+    /// <summary>The local player's skill list at login: skill id with total and base level.</summary>
+    Skills,
+    /// <summary>One skill of the local player with its level, sent at login and when a preset or a level changes (0x1338, layout in docs/protocol/skill-frames.md section 3): the level of a skill after the player changed it.</summary>
+    SkillEntry,
+    /// <summary>The same for a skill's variant (0x0F38).</summary>
+    SkillVariant,
+    /// <summary>A variant skill taken away (0x1038).</summary>
+    SkillRemoved,
+    /// <summary>The local player's activated Daevanion nodes, per board.</summary>
+    Daevanion,
+    /// <summary>The local player's species knowledge (Cognia, Fera, Natura, Varia, Specia) at login: level,
+    /// progress and the analysed effects of each.</summary>
+    Species,
+    /// <summary>The game announces progress for pets of the local player: <c>opcode | n | n x (pet id u32, gained u32)</c>.</summary>
+    PetProgress,
+    /// <summary>A pet reached a new level: <c>opcode | 00 00 | pet id u32 | new level u32 | ...</c>.</summary>
+    PetLevel,
+    /// <summary>A pet was added to the collection: <c>opcode | 2 bytes | pet id u32 | level u32 | ...</c>.</summary>
+    PetAdded,
+    /// <summary>An inventory change of the local player (item id and the new quantity); only pet souls are read.</summary>
+    InventoryChange,
+    /// <summary>The local player marked a monster (tab or click): <c>opcode | entity id (varint) | 00 00</c>, followed by a second frame (0x3438) with the same id. Seen in recordings where the mark was moved between known monsters.</summary>
+    TargetSelect,
+    /// <summary>A position frame of an entity (<c>opcode | entity id (varint) | 03 | x f32 | y f32 ...</c>, sent at skills, hits and corrections); only the local player's is kept for the pet map.</summary>
+    LocalPosition,
+    /// <summary>The titles the local player wears (slot 1..3 with the title id), sent at login and on a change.</summary>
+    Titles,
+    /// <summary>One worn title changed (0x8156): <c>opcode | slot (u8) | title id (u32)</c>; the game sends it together with the 0x8056 and 0x94e2 frames of the same change.</summary>
+    TitleChange,
+    /// <summary>The local player's base attributes and Lord values: <c>opcode | 00 00 | varint n | n x (u16 id, i32 value) | 8 bytes</c> (0x4936).</summary>
+    Attributes,
+    /// <summary>The local player's skills that have specialisation variants: the five-variant ones are the
+    /// stigmas (login).</summary>
+    Stigmas,
+    /// <summary>The local player's skill bar (the three macro pages) at login: which skills sit on it.</summary>
+    SkillBar,
+    /// <summary>One skill's specialisation slots re-sent on a change (0x0739): <c>opcode | skill id (u32) | slot count (u8) | per slot: number (u8), choice id (u32)</c>; same records as the login list.</summary>
+    SpecSlots,
+    /// <summary>The active skill preset (0x92e2): pairs of (category, preset number); category 2 is the one the skill window follows. Sent first in the burst of frames a preset change causes, and at login.</summary>
+    PresetSwitch,
+    /// <summary>Another player's character window ("inspect"): name, class, level, gear score, legion and the
+    /// full equipment with enchant levels. Sent when the local player opens that player's profile.</summary>
+    Inspect,
+    /// <summary>"Player seen" frame: skill and combat id, then <c>18 05</c>, name and guild.</summary>
+    Appearance,
+    /// <summary>Frames that list players with the game's permanent character id: <c>server id (u16) | character id (u32) | 00 00 | server id | length-prefixed name</c>
+    /// (0x0360, 0x74e2, 0x82e2). Unlike the combat id, which is handed out anew whenever a player comes into view, the character id of a player stays
+    /// the same (checked on 241 players in 66 recordings of 2026-10-05 to 13: no id with two names, no name with two ids).</summary>
+    PlayerList,
+    Session,
+    Kill,
+    Avoid,
+    NpcSpawn,
+    /// <summary>"A monster disappears": entity id (varint), a zero byte and a reason byte - 3 after the monster died,
+    /// 7 when it vanished alive (an aborted instance). Seen on the recordings of 2026-10-07.</summary>
+    NpcRemove,
+    /// <summary>"An environment object appears" (gather sources, chests, the Hidden Cube): entity id (varint), a type byte, 00, the env object id (u32) and the
+    /// place as three floats x, y, z. Seen on the recordings of 2026-10-05 to 11 (34 Hidden Cube sightings, all on a candidate place of MapData.dat).</summary>
+    EnvSpawn,
+    /// <summary>"An environment object disappears": entity id (varint), 04 03 00.</summary>
+    EnvRemove,
+    /// <summary>"A player starts opening an environment object": object entity, actor entity, 01 (0x3836).</summary>
+    EnvOpenStart,
+    Zone,
+}
+
+/// <summary>
+/// The Aion 2 wire layout as DATA (assets/aion2/protocol/opcodes.json), not code: every patch
+/// shifts opcodes, and a shifted opcode must be a one-line data fix that ships without a rebuild.
+/// <see cref="IsCalibrated"/> is false until a real capture has been used to fill the tables - the
+/// packet source then reports that instead of decoding nonsense. Field offsets are relative to
+/// the frame start (header included).
+/// </summary>
+public sealed class Aion2Protocol
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
+    private readonly Dictionary<int, OpcodeFamily> _families = new();
+    private readonly Dictionary<OpcodeFamily, IReadOnlyDictionary<string, FieldSpec>> _fields = new();
+
+    public bool IsCalibrated { get; private init; }
+    public string GameVersion { get; private init; } = "";
+    public IReadOnlyList<int> ServerPorts { get; private init; } = Array.Empty<int>();
+
+    /// <summary>"varint-v1" = the damage frame is parsed by <see cref="Aion2FrameDecoder"/>'s
+    /// built-in varint layout (target id varint, 2 flag bytes, actor id varint, skill id u32, ...);
+    /// anything else uses the fixed offsets in <c>fields.damage</c>.</summary>
+    public string DamageLayout { get; private init; } = "";
+
+    /// <summary>"varint-v1" = nickname frames are opcode | combat id (varint) | a few bytes | a
+    /// length-prefixed name, found by scanning (see Aion2FrameDecoder.DecodeVarintNickname).</summary>
+    public string NicknameLayout { get; private init; } = "";
+
+    /// <summary>"varint-v1" = the damage-over-time tick frame is parsed by
+    /// <see cref="Aion2FrameDecoder"/>'s built-in layout (target varint, flag byte, actor varint,
+    /// stack varint, effect id u32, then optional fields named by the flags); anything else uses
+    /// the fixed offsets in <c>fields.dot</c>.</summary>
+    public string DotLayout { get; private init; } = "";
+
+    /// <summary>"varint-v1" = the hit-point frame is parsed by <see cref="Aion2FrameDecoder"/>'s
+    /// built-in layout (entity varint, format byte, then groups of kind + u32 / kind + u64 values).</summary>
+    public string HpLayout { get; private init; } = "";
+
+    /// <summary>Opcode of the "bundle" frame: a 4-byte little-endian uncompressed size followed by
+    /// an LZ4 block that holds further complete frames. Null = this protocol has no bundles.</summary>
+    public int? BundleOpcode { get; private init; }
+
+    /// <summary>Opcodes known to occur often; only used to recognise a real frame start when a
+    /// capture begins in the middle of a connection (see TcpReassembler). Empty = no check.</summary>
+    public IReadOnlySet<int> SyncOpcodes { get; private init; } = new HashSet<int>();
+    public FrameLayout FrameLayout { get; private init; } = new(0, 2, true, true, 4, 2, 2, 65535);
+
+    public static string DefaultPath => AssetPaths.Of("protocol", "opcodes.json"); // Değiştirildi
+
+    /// <summary>Loads the shipped description; an unreadable or missing file yields an
+    /// uncalibrated protocol rather than an exception, so the meter still starts.</summary>
+    public static Aion2Protocol Load(string? path = null)
+    {
+        try
+        {
+            return FromJson(File.ReadAllText(path ?? DefaultPath));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return new Aion2Protocol();
+        }
+    }
+
+    public static Aion2Protocol FromJson(string json)
+    {
+        var doc = JsonSerializer.Deserialize<ProtocolDocument>(json, JsonOptions) ?? new ProtocolDocument();
+        var protocol = new Aion2Protocol
+        {
+            IsCalibrated = doc.Calibrated,
+            GameVersion = doc.GameVersion ?? "",
+            ServerPorts = doc.ServerPorts ?? Array.Empty<int>(),
+            DamageLayout = doc.DamageLayout ?? "",
+            NicknameLayout = doc.NicknameLayout ?? "",
+            DotLayout = doc.DotLayout ?? "",
+            HpLayout = doc.HpLayout ?? "",
+            BundleOpcode = doc.BundleOpcode,
+            SyncOpcodes = new HashSet<int>(doc.SyncOpcodes ?? Array.Empty<int>()),
+            FrameLayout = doc.Frame ?? new FrameLayout(0, 2, true, true, 4, 2, 2, 65535),
+        };
+
+        foreach ((string familyName, int[] opcodes) in doc.Opcodes ?? new Dictionary<string, int[]>())
+        {
+            if (!Enum.TryParse(familyName, ignoreCase: true, out OpcodeFamily family))
+            {
+                continue;
+            }
+
+            foreach (int opcode in opcodes)
+            {
+                protocol._families[opcode] = family;
+            }
+        }
+
+        foreach ((string familyName, Dictionary<string, FieldSpec> fields) in doc.Fields ?? new Dictionary<string, Dictionary<string, FieldSpec>>())
+        {
+            if (Enum.TryParse(familyName, ignoreCase: true, out OpcodeFamily family))
+            {
+                protocol._fields[family] = fields;
+            }
+        }
+
+        return protocol;
+    }
+
+    public OpcodeFamily FamilyOf(int opcode) => _families.GetValueOrDefault(opcode, OpcodeFamily.Unknown);
+
+    // Shared for every family without fields: the decoder asks for the fields of each frame that reaches it, most of them unknown ones.
+    private static readonly IReadOnlyDictionary<string, FieldSpec> NoFields = new Dictionary<string, FieldSpec>();
+
+    public IReadOnlyDictionary<string, FieldSpec> FieldsOf(OpcodeFamily family) =>
+        _fields.GetValueOrDefault(family) ?? NoFields;
+
+    public IEnumerable<OpcodeFamily> KnownFamilies => _families.Values.Distinct();
+
+    private sealed class ProtocolDocument
+    {
+        public bool Calibrated { get; set; }
+        public string? GameVersion { get; set; }
+        public int[]? ServerPorts { get; set; }
+        public string? DamageLayout { get; set; }
+        public string? NicknameLayout { get; set; }
+        public string? DotLayout { get; set; }
+        public string? HpLayout { get; set; }
+        public int? BundleOpcode { get; set; }
+        public int[]? SyncOpcodes { get; set; }
+        public FrameLayout? Frame { get; set; }
+        public Dictionary<string, int[]>? Opcodes { get; set; }
+        public Dictionary<string, Dictionary<string, FieldSpec>>? Fields { get; set; }
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? Extra { get; set; }
+    }
+}
