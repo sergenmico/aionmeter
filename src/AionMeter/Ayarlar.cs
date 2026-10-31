@@ -22,6 +22,7 @@ internal sealed class Ayarlar
     public int Opaklik = 90;       // yüzde, 30..100
     public bool IlkAcilis = true;  // dosya yoksa true
     public bool? SadeceOyunda;     // null = ayarlanmamış (normalde açık, --demo'da kapalı)
+    public bool OtomatikGuncelleme = true;
 
     public static string Klasor { get; } = KlasorBul();
     public static string Dosya => Path.Combine(Klasor, "ayarlar.ini");
@@ -72,6 +73,7 @@ internal sealed class Ayarlar
                     case "Opaklik" when sayi: a.Opaklik = Math.Clamp(n, 30, 100); break;
                     case "Kilitli": a.Kilitli = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                     case "SadeceOyundayken": a.SadeceOyunda = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
+                    case "OtomatikGuncelleme": a.OtomatikGuncelleme = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                 }
             }
         }
@@ -95,6 +97,7 @@ internal sealed class Ayarlar
                 "Yukseklik=" + Yukseklik.ToString(inv) + Environment.NewLine +
                 "Opaklik=" + Opaklik.ToString(inv) + Environment.NewLine +
                 "Kilitli=" + (Kilitli ? "1" : "0") + Environment.NewLine +
+                "OtomatikGuncelleme=" + (OtomatikGuncelleme ? "1" : "0") + Environment.NewLine +
                 (SadeceOyunda is bool so ? "SadeceOyundayken=" + (so ? "1" : "0") + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";

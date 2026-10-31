@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
     <RootNamespace>AionMeter</RootNamespace>
     <AssemblyName>AionMeter</AssemblyName>
+    <!-- Sürüm: release etiketi v<Version>. Güncelleyici bunu AssemblyInformationalVersion'dan okur. -->
+    <Version>0.2.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>

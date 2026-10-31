@@ -6,13 +6,14 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _sadeceOyunda;
+    private readonly ToolStripMenuItem _kilit, _goster, _sadeceOyunda, _otoGuncelleme;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
 
     public ContextMenuStrip Menu { get; }
 
-    public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sadeceOyundaDegistir, Action sifirla, Action detayim, Action cikis)
+    public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sadeceOyundaDegistir, Action sifirla, Action detayim,
+                 Action otoGuncellemeDegistir, Action cikis)
     {
         Menu = new ContextMenuStrip { ShowImageMargin = false };
         _kilit = new ToolStripMenuItem("Kilitle", null, (_, _) => kilitDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" };
@@ -20,9 +21,10 @@ internal sealed class Tepsi : IDisposable
         var sifir = new ToolStripMenuItem("Sıfırla", null, (_, _) => sifirla()) { ShortcutKeyDisplayString = "Ctrl+Alt+R" };
         var detay = new ToolStripMenuItem("Detayım (Ctrl+Alt+D)", null, (_, _) => detayim());
         _sadeceOyunda = new ToolStripMenuItem("Sadece oyun öndeyken göster", null, (_, _) => sadeceOyundaDegistir());
+        _otoGuncelleme = new ToolStripMenuItem("Otomatik güncelleme", null, (_, _) => otoGuncellemeDegistir());
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
         Menu.ShowCheckMargin = true;
-        Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), _sadeceOyunda, new ToolStripSeparator(), cik });
+        Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), _sadeceOyunda, _otoGuncelleme, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon
@@ -35,9 +37,10 @@ internal sealed class Tepsi : IDisposable
         _simge.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) gosterDegistir(); };
     }
 
-    public void Guncelle(bool kilitli, bool gorunur, bool sadeceOyunda)
+    public void Guncelle(bool kilitli, bool gorunur, bool sadeceOyunda, bool otoGuncelleme)
     {
         _sadeceOyunda.Checked = sadeceOyunda;
+        _otoGuncelleme.Checked = otoGuncelleme;
         _kilit.Text = kilitli ? "Kilidi Aç" : "Kilitle";
         _goster.Text = gorunur ? "Gizle" : "Göster";
         _simge.Text = kilitli ? "AionMeter (kilitli)" : "AionMeter";

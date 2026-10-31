@@ -201,7 +201,7 @@ internal sealed class OverlayForm : Form
     {
         base.OnLoad(e);
 
-        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Detayim, Close);
+        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Detayim, OtoGuncellemeDegistir, Close);
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -216,6 +216,10 @@ internal sealed class OverlayForm : Form
             string liste = string.Join(", ", alinamayan);
             HataLog.Yaz("Kısayol kaydedilemedi: " + liste);
             _tepsi.Bildir("Şu kısayollar başka bir program tarafından kullanılıyor: " + liste + ". Tepsi menüsünü kullanın.");
+        }
+        else if (AcilisBildirimi is not null)
+        {
+            _tepsi.Bildir(AcilisBildirimi); // ör. "AionMeter v0.2.1 sürümüne güncellendi"
         }
         else if (_ayar.IlkAcilis)
         {
@@ -272,7 +276,18 @@ internal sealed class OverlayForm : Form
         if (pid != (uint)Environment.ProcessId) menu.Close(ToolStripDropDownCloseReason.AppFocusChange);
     }
 
-    private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _sadeceOyunda);
+    private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _sadeceOyunda, _ayar.OtomatikGuncelleme);
+
+    /// <summary>Açılışta tepsi balonunda gösterilecek tek seferlik mesaj (Program ayarlar).</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public string? AcilisBildirimi { get; init; }
+
+    private void OtoGuncellemeDegistir()
+    {
+        _ayar.OtomatikGuncelleme = !_ayar.OtomatikGuncelleme;
+        _ayar.Kaydet();
+        TepsiGuncelle();
+    }
 
     private void SadeceOyundaDegistir()
     {

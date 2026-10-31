@@ -14,6 +14,7 @@ Gösterdikleri:
 3. Meter'ı **oyuna girmeden önce** aç (yoksa isimler ilk bölge değişimine kadar `Oyuncu #…` görünebilir).
 
 .NET kurmaya gerek yok, exe'nin içinde.
+Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 
 ## Kısayollar
 | Tuş | İş |
