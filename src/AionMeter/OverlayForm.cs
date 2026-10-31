@@ -11,6 +11,8 @@ namespace AionMeter;
 internal sealed class OverlayForm : Form
 {
     private const int MaxSatir = 12;
+    private const int UstSayisi = 5; // kalabalıkta (> 5 oyuncu) gösterilen ilk sıra sayısı
+    private static readonly string[] SiraMetni = { "1", "2", "3", "4", "5" };
     private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4;
 
     // Renkler
@@ -45,6 +47,8 @@ internal sealed class OverlayForm : Form
     private readonly Pen _kalemKilitli = new(Color.FromArgb(44, 48, 58));
     private readonly Pen _kalemSecili = new(Color.FromArgb(120, 170, 240));
     private readonly SolidBrush _fircaRozet = new(Color.FromArgb(58, 64, 80));
+    private readonly SolidBrush _fircaSabitSatir = new(Color.FromArgb(32, 36, 46));
+    private readonly Pen _kalemAyirac = new(Color.FromArgb(64, 70, 86));
     private int _satirlarUst;
 
     private const TextFormatFlags Temel = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
@@ -56,7 +60,7 @@ internal sealed class OverlayForm : Form
     // Çizim modeli (anlık görüntü değişince Tick içinde hazırlanır; OnPaint sadece çizer)
     private sealed class SatirModel
     {
-        public string Ad = "", Cp = "", Toplam = "", Dps = "", Dps2 = "", Pay = "";
+        public string Ad = "", Cp = "", Toplam = "", Dps = "", Dps2 = "", Pay = "", Sira = "";
         public string? Sinif;
         public long Id, ToplamSayi;
         public float Oran;
@@ -73,7 +77,11 @@ internal sealed class OverlayForm : Form
 
     // Ölçülen sütun genişlikleri (fiziksel px). Bir dövüş boyunca sadece büyür; pencere titremesin.
     private int _adW, _cpW, _toplamW, _dpsW, _dps2W, _payW, _icerikW;
-    private int _sureW, _partiW, _bossYuzdeW, _bossEtiketW, _sonucW;
+    private int _sureW, _partiW, _bossYuzdeW, _bossEtiketW, _sonucW, _siraW, _oyuncuSayisiW;
+
+    // Kalabalık düzen (> 5 oyuncu): en üstte kendi satırın (#sıra rozetiyle) + ayırıcı, sonra 1..5.
+    private bool _kalabalik, _sabitUst;
+    private string _oyuncuSayisi = "";
 
     // Boss modu: boss takip ediliyorsa satırdaki ana sayı Boss DPS'tir, genel DPS ikincil.
     private bool _bossModu, _sonuc;
@@ -399,14 +407,29 @@ internal sealed class OverlayForm : Form
         }
         else
         {
-            int n = Math.Min(oyuncular.Count, MaxSatir);
+            // ≤ 5 oyuncu: hepsi, sıra numarasız. > 5: [kendi satırın #sıra] + ayırıcı + 1..5.
+            // Katkı % ve toplamlar HER ZAMAN tüm listeden hesaplanır.
+            bool kalabalik = oyuncular.Count > UstSayisi;
+            if (kalabalik != _kalabalik) GenislikleriSifirla();
+            _kalabalik = kalabalik;
+            int ustN = kalabalik ? UstSayisi : Math.Min(oyuncular.Count, MaxSatir);
             long enCok = 1, partiToplam = 0;
-            for (int i = 0; i < oyuncular.Count; i++) partiToplam += Math.Max(0, oyuncular[i].Total);
-            for (int i = 0; i < n; i++) if (oyuncular[i].Total > enCok) enCok = oyuncular[i].Total;
-            for (int i = 0; i < n; i++)
+            int yerelSira = -1;
+            for (int i = 0; i < oyuncular.Count; i++)
             {
-                var p = oyuncular[i];
-                var m = _satirlar[i];
+                partiToplam += Math.Max(0, oyuncular[i].Total);
+                if (oyuncular[i].Total > enCok) enCok = oyuncular[i].Total;
+                if (yerelSira < 0 && oyuncular[i].IsLocal) yerelSira = i;
+            }
+            int n = 0;
+            _sabitUst = kalabalik && yerelSira >= 0;
+            if (_sabitUst) SatirDoldur(_satirlar[n++], oyuncular[yerelSira], "#" + (yerelSira + 1).ToString(Bicim.Tr));
+            int ustBas = n;
+            for (int i = 0; i < ustN; i++) SatirDoldur(_satirlar[n++], oyuncular[i], kalabalik ? SiraMetni[i] : "");
+
+            void SatirDoldur(SatirModel m, PlayerDamage p, string sira)
+            {
+                m.Sira = sira;
                 m.Id = p.Id;
                 m.ToplamSayi = Math.Max(0, p.Total);
                 m.Pay = Bicim.Oran(m.ToplamSayi, partiToplam);
@@ -420,11 +443,12 @@ internal sealed class OverlayForm : Form
                 m.Yerel = p.IsLocal;
             }
             // Motor toplam hasara göre sıralı verir; sadece eşitlikleri Id ile kararlı hale getir (satırlar zıplamasın).
-            for (int i = 1; i < n; i++)
+            // Sabit üst satır (kendi satırın) bu sıralamaya girmez.
+            for (int i = ustBas + 1; i < n; i++)
             {
                 var m = _satirlar[i];
                 int j = i - 1;
-                while (j >= 0 && _satirlar[j].ToplamSayi == m.ToplamSayi && _satirlar[j].Id > m.Id)
+                while (j >= ustBas && _satirlar[j].ToplamSayi == m.ToplamSayi && _satirlar[j].Id > m.Id)
                 {
                     _satirlar[j + 1] = _satirlar[j];
                     j--;
@@ -440,9 +464,11 @@ internal sealed class OverlayForm : Form
             double d = bossModu ? oyuncular[i].BossDps : oyuncular[i].Dps;
             if (d > 0 && !double.IsNaN(d) && !double.IsInfinity(d)) partiDps += d;
         }
+        bool cok = oyuncular.Count > UstSayisi;
         _partiDps = s.State == EngineState.Connected && _satirSayisi > 0
-            ? (bossModu ? "Parti boss " : "Parti ") + Bicim.Dps(partiDps)
+            ? (cok ? (bossModu ? "Toplam boss " : "Toplam ") : (bossModu ? "Parti boss " : "Parti ")) + Bicim.Dps(partiDps)
             : "";
+        _oyuncuSayisi = s.State == EngineState.Connected && cok ? "· " + oyuncular.Count.ToString(Bicim.Tr) + " oyuncu" : "";
         _bilgiSayisi = 0;
 
         if (_bossGoster && s.Boss is { } b)
@@ -516,13 +542,14 @@ internal sealed class OverlayForm : Form
     private int IkonW => P(18);
     private int Bosluk => P(8);
     private int RowH => P(20);
+    private int Ayirac => P(7); // sabit üst satırın altındaki boşluk + çizgi
 
     private static int Olc(string metin, Font font) =>
         metin.Length == 0 ? 0 : TextRenderer.MeasureText(metin, font, Size.Empty, Temel).Width;
 
     private void GenislikleriSifirla()
     {
-        _adW = _cpW = _toplamW = _dpsW = _dps2W = _payW = _icerikW = 0;
+        _adW = _cpW = _toplamW = _dpsW = _dps2W = _payW = _icerikW = _siraW = 0;
     }
 
     /// <summary>Metinleri ölçer, pencerenin içeriğe göre gereken genişliğini hesaplar (Tick içinde; OnPaint'te değil).</summary>
@@ -544,6 +571,7 @@ internal sealed class OverlayForm : Form
             _toplamW = Math.Max(_toplamW, Olc(m.Toplam, _yaziKucuk));
             _dpsW = Math.Max(_dpsW, Olc(m.Dps, _yaziDps));
             _dps2W = Math.Max(_dps2W, Olc(m.Dps2, _yaziKucuk));
+            if (m.Sira.Length > 0) _siraW = Math.Max(_siraW, Olc(m.Sira, _yaziKucuk) + P(5));
             _payW = Math.Max(_payW, Olc(m.Pay, _yaziKucuk));
         }
         if (_satirSayisi > 0)
@@ -551,7 +579,7 @@ internal sealed class OverlayForm : Form
             _bossEtiketW = _bossModu ? Olc(BossEtiketi, _yaziKucuk) : 0;
             int sag = (_bossModu ? _bossEtiketW + P(3) : 0) + _dpsW + Bosluk + (_dps2W > 0 ? _dps2W + Bosluk : 0) +
                       _toplamW + Bosluk + _payW + P(5);
-            gerek = Math.Max(gerek, 2 * pad + P(2) + IkonW + P(4) + _adW + Bosluk + _cpW + Bosluk + sag);
+            gerek = Math.Max(gerek, 2 * pad + P(2) + _siraW + IkonW + P(4) + _adW + Bosluk + _cpW + Bosluk + sag);
         }
         _sureW = Olc(_sure, _yaziKucuk);
         _sonucW = Olc(SonucEtiketi, _yaziKucuk) + P(8);
@@ -571,8 +599,10 @@ internal sealed class OverlayForm : Form
             gerek = Math.Max(gerek, 2 * pad + bilgi);
         }
         _partiW = Olc(_partiDps, _yaziKalin);
+        _oyuncuSayisiW = Olc(_oyuncuSayisi, _yaziKucuk);
         int altSure = _bossGoster ? 0 : _sureW + Bosluk;
-        gerek = Math.Max(gerek, 2 * pad + altSure + _partiW + P(10) + Olc(_ipucu, _yaziKucuk));
+        int sayi = _oyuncuSayisiW > 0 ? P(6) + _oyuncuSayisiW : 0;
+        gerek = Math.Max(gerek, 2 * pad + altSure + _partiW + sayi + P(10) + Olc(_ipucu, _yaziKucuk));
 
         _icerikW = Math.Max(_icerikW, gerek);
     }
@@ -596,6 +626,7 @@ internal sealed class OverlayForm : Form
         int h = P(6);
         if (_bossGoster) h += P(17) + P(15) + P(16) + P(4);
         h += (_durum != null ? 1 : _satirSayisi) * RowH;
+        if (_durum == null && _sabitUst) h += Ayirac;
         h += P(3) + P(16) + P(4);
         return h;
     }
@@ -728,12 +759,21 @@ internal sealed class OverlayForm : Form
             for (int i = 0; i < _satirSayisi; i++)
             {
                 var m = _satirlar[i];
+                bool sabitSatir = _sabitUst && i == 0;
+                if (sabitSatir) g.FillRectangle(_fircaSabitSatir, x0, y, gen, rowH);
                 int pay = (int)(gen * m.Oran);
                 if (pay > 0) g.FillRectangle(m.Yerel ? _fircaPayYerel : _fircaPay, x0, y + 1, pay, rowH - 2);
                 if (_detay is { Visible: true } && _detay.OyuncuId == m.Id)
                     g.DrawRectangle(_kalemSecili, x0, y + 1, gen - 1, rowH - 3);
 
                 int x = x0 + P(2);
+                if (_siraW > 0)
+                {
+                    // Sıra: sabit satırda "#14" (vurgulu), ilk 5'te küçük ve soluk "1..5"
+                    TextRenderer.DrawText(g, m.Sira, sabitSatir ? _yaziKalin : _yaziKucuk, new Rectangle(x, y, _siraW - P(5), rowH),
+                        sabitSatir ? RenkYerel : RenkCokSoluk, Sag);
+                    x += _siraW;
+                }
                 g.DrawImage(_ikonlar.Al(m.Sinif), x, y + (rowH - ikon) / 2, ikon, ikon);
                 x += ikon + P(4);
                 TextRenderer.DrawText(g, m.Ad, m.Yerel ? _yaziKalin : _yazi, new Rectangle(x, y, _adW, rowH),
@@ -750,6 +790,12 @@ internal sealed class OverlayForm : Form
                 TextRenderer.DrawText(g, m.Toplam, _yaziKucuk, new Rectangle(toplamX, y, _toplamW, rowH), RenkSoluk, Sag);
                 TextRenderer.DrawText(g, m.Pay, _yaziKucuk, new Rectangle(payX, y, _payW, rowH), RenkCokSoluk, Sag);
                 y += rowH;
+                if (sabitSatir)
+                {
+                    int cy = y + Ayirac / 2;
+                    g.DrawLine(_kalemAyirac, x0, cy, x1, cy);
+                    y += Ayirac;
+                }
             }
         }
 
@@ -764,7 +810,10 @@ internal sealed class OverlayForm : Form
         }
         if (_partiDps.Length > 0)
             TextRenderer.DrawText(g, _partiDps, _yaziKalin, new Rectangle(x2, y, Math.Min(_partiW, x1 - x2), altH), RenkParti, Sol);
-        int ipucuX = x2 + _partiW + P(10);
+        int sayiX = x2 + _partiW + P(6);
+        if (_oyuncuSayisiW > 0 && sayiX < x1)
+            TextRenderer.DrawText(g, _oyuncuSayisi, _yaziKucuk, new Rectangle(sayiX, y, Math.Min(_oyuncuSayisiW, x1 - sayiX), altH), RenkSoluk, Sol);
+        int ipucuX = x2 + _partiW + (_oyuncuSayisiW > 0 ? P(6) + _oyuncuSayisiW : 0) + P(10);
         if (ipucuX < x1 - P(20))
             TextRenderer.DrawText(g, _ipucu, _yaziKucuk, new Rectangle(ipucuX, y, x1 - ipucuX, altH), RenkSoluk,
                 Sag | TextFormatFlags.EndEllipsis);
@@ -848,7 +897,16 @@ internal sealed class OverlayForm : Form
     private int SatirIndeksi(int y)
     {
         if (_durum != null || _satirSayisi == 0 || y < _satirlarUst) return -1;
-        int i = (y - _satirlarUst) / RowH;
+        int yy = y - _satirlarUst;
+        if (_sabitUst)
+        {
+            if (yy < RowH) return 0;          // sabit kendi satırın
+            yy -= RowH + Ayirac;
+            if (yy < 0) return -1;            // ayırıcı
+            int k = 1 + yy / RowH;
+            return k < _satirSayisi ? k : -1;
+        }
+        int i = yy / RowH;
         return i >= 0 && i < _satirSayisi ? i : -1;
     }
 
@@ -1104,6 +1162,7 @@ internal sealed class OverlayForm : Form
             _fircaPay.Dispose(); _fircaPayYerel.Dispose(); _fircaBossArka.Dispose();
             _fircaBossCan.Dispose(); _fircaBossOldu.Dispose();
             _kalemKilitsiz.Dispose(); _kalemKilitli.Dispose(); _kalemSecili.Dispose(); _fircaRozet.Dispose();
+            _fircaSabitSatir.Dispose(); _kalemAyirac.Dispose();
         }
         base.Dispose(disposing);
     }

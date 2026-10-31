@@ -186,5 +186,58 @@ bool FightRules()
         }
     }
 
+    // e) Dünya boss'u: 12 yabancı + yerel oyuncu boss'a vuruyor -> 13 oyuncu, hasara göre azalan, yerel dahil.
+    {
+        var (engine, dir) = New();
+        using (engine)
+        {
+            dir.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, t0));
+            dir.HitPoints.Note(boss, t0.AddSeconds(-10), 50_000_000);
+            engine.InjectHit(Hit(t0.AddSeconds(-9), boss, 5_500));
+            for (int i = 0; i < 12; i++)
+            {
+                int stranger = 2000 + i;
+                dir.Register(stranger, "Yabanci" + i);
+                dir.NoteClass(stranger, "Ranger");
+                engine.InjectHit(new DamageEvent(t0.AddSeconds(-8), stranger, boss, 1_000L * (i + 1), false, SkillId: 13010000));
+            }
+
+            dir.HitPoints.Note(boss, t0.AddSeconds(-7), 49_000_000);
+            MeterSnapshot snap = engine.Snapshot();
+            bool sorted = snap.Players.Zip(snap.Players.Skip(1)).All(pair => pair.First.Total >= pair.Second.Total);
+            all &= Check($"dünya boss'u, 12 yabancı + yerel -> {snap.Players.Count} oyuncu", snap.Players.Count == 13 && sorted && snap.Players.Any(p => p.IsLocal && p.Total == 5_500), snap);
+        }
+    }
+
+    // f) 5 kişilik parti, boss'a yalnız parti vuruyor (bir yabancı başka bir canavara vuruyor) -> tam 5 oyuncu.
+    {
+        var (engine, dir) = New();
+        using (engine)
+        {
+            dir.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, t0));
+            string[] members = { "Ben", "Uye1", "Uye2", "Uye3", "Uye4" };
+            for (int i = 1; i < members.Length; i++)
+            {
+                dir.Register(600 + i, members[i]);
+                dir.NoteClass(600 + i, "Cleric");
+            }
+
+            dir.NoteParty(members, t0);
+            dir.Register(777, "Yabanci");
+            dir.NoteClass(777, "Sorcerer");
+            dir.HitPoints.Note(boss, t0.AddSeconds(-10), 5_000_000);
+            engine.InjectHit(Hit(t0.AddSeconds(-9), boss, 10_000));
+            for (int i = 1; i < members.Length; i++)
+            {
+                engine.InjectHit(new DamageEvent(t0.AddSeconds(-8), 600 + i, boss, 2_000L * i, false, SkillId: 17010000));
+            }
+
+            engine.InjectHit(new DamageEvent(t0.AddSeconds(-8), 777, trash, 99_999, false, SkillId: 16010000));
+            dir.HitPoints.Note(boss, t0.AddSeconds(-7), 4_900_000);
+            MeterSnapshot snap = engine.Snapshot();
+            all &= Check($"5 kişilik parti -> {snap.Players.Count} oyuncu", snap.Players.Count == 5 && snap.Players.All(p => members.Contains(p.Name)), snap);
+        }
+    }
+
     return all;
 }

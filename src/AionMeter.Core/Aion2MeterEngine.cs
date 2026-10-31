@@ -35,8 +35,11 @@ public sealed class Aion2MeterEngine : IMeterEngine
     /// <summary>Boss bu oranın üstündeyse tam canda sayılır (sıfırlanma / wipe).</summary>
     private const double FullHpShare = 0.995;
 
-    /// <summary>Bir dövüşte en çok bu kadar farklı kaynak tutulur (kalabalıkta yabancılar için RAM sınırı); parti/yerel her zaman tutulur.</summary>
-    private const int MaxSources = 2000;
+    /// <summary>Bir dövüşte en çok bu kadar farklı kaynak tutulur (kalabalık için RAM sınırı); doluysa en az hasarlı yabancı atılır. Parti/yerel her zaman tutulur.</summary>
+    private const int MaxSources = 300;
+
+    /// <summary>Tam detay (beceriler, saniyelik kovalar, vuruş sayaçları) yalnız hasarda ilk bu kadar yabancı + yerel + parti için tutulur.</summary>
+    private const int MaxDetailedStrangers = 30;
 
     /// <summary>Roster yokken "aynı hedefe vuranlar" sözde partisinden en çok bu kadar kişi gösterilir (en çok hasar yapanlar).</summary>
     private const int MaxPseudoParty = 12;
@@ -67,6 +70,11 @@ public sealed class Aion2MeterEngine : IMeterEngine
     private DateTime? _fightStart;
     private DateTime? _lastPartyHit;
     private int _fightEpoch;
+
+    // Detay kümesi: yabancılardan detay tutanların sayısı ve ilk 30'a girme eşiği (saniyede bir yeniden hesaplanır).
+    private int _detailedStrangers;
+    private long _detailThreshold = long.MaxValue;
+    private long _detailCheckedAt = -1_000_000;
 
     // Dövüş boss'u: partinin hasar verdiği boss adaylarından en çok hasar alanı; ölene, ayrılana ya da sıfırlanana kadar değişmez.
     private int? _fightBoss;
@@ -99,11 +107,9 @@ public sealed class Aion2MeterEngine : IMeterEngine
         public DateTime First;
         public DateTime Last;
         public bool SharesTarget; // yerel oyuncunun vurduğu bir hedefe vurdu (roster yokken parti tahmini)
-        public long Hits, Crits, Doubles, Perfects, Backs, Parries, MaxHit;
-        public readonly Dictionary<int, SkillAgg> Skills = new();
+        public bool Party;        // yerel oyuncu ya da parti üyesi olarak vurdu (atılmaz, detayı hep tutulur)
         public readonly Dictionary<int, (long Amount, DateTime Last)> BossDamage = new(); // boss hedefi -> bu oyuncunun ona hasarı
-        public List<long>? Buckets; // dövüş başından itibaren kova başına hasar (yalnız parti tarafı)
-        public int BucketSeconds = 1;
+        public AggDetail? Detail;  // yalnız ilk 30 yabancı + yerel + parti
 
         public void AddBossDamage(int target, long amount, DateTime at, int? fightBoss)
         {
@@ -129,6 +135,33 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
             BossDamage[target] = (known.Amount + amount, at > known.Last ? at : known.Last);
         }
+
+        /// <summary>Kimlik birleşmesi: <paramref name="other"/>'ın her şeyi buna eklenir.</summary>
+        public void Absorb(Aggregate other, int? fightBoss)
+        {
+            Total += other.Total;
+            First = other.First < First ? other.First : First;
+            Last = other.Last > Last ? other.Last : Last;
+            SharesTarget |= other.SharesTarget;
+            Party |= other.Party;
+            foreach ((int boss, (long amount, DateTime last)) in other.BossDamage)
+            {
+                AddBossDamage(boss, amount, last, fightBoss);
+            }
+
+            if (other.Detail is { } theirs)
+            {
+                (Detail ??= new AggDetail()).Absorb(theirs);
+            }
+        }
+    }
+
+    private sealed class AggDetail
+    {
+        public long Hits, Crits, Doubles, Perfects, Backs, Parries, MaxHit;
+        public readonly Dictionary<int, SkillAgg> Skills = new();
+        public List<long>? Buckets; // dövüş başından itibaren kova başına hasar
+        public int BucketSeconds = 1;
 
         public void AddToBucket(long secondFromStart, long amount)
         {
@@ -160,13 +193,8 @@ public sealed class Aion2MeterEngine : IMeterEngine
             Buckets[(int)index] += amount;
         }
 
-        /// <summary>Kimlik birleşmesi: <paramref name="other"/>'ın her şeyi buna eklenir.</summary>
-        public void Absorb(Aggregate other, int? fightBoss)
+        public void Absorb(AggDetail other)
         {
-            Total += other.Total;
-            First = other.First < First ? other.First : First;
-            Last = other.Last > Last ? other.Last : Last;
-            SharesTarget |= other.SharesTarget;
             Hits += other.Hits;
             Crits += other.Crits;
             Doubles += other.Doubles;
@@ -187,11 +215,6 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 {
                     Skills[skillId] = s;
                 }
-            }
-
-            foreach ((int boss, (long amount, DateTime last)) in other.BossDamage)
-            {
-                AddBossDamage(boss, amount, last, fightBoss);
             }
 
             if (other.Buckets is { } theirs)
@@ -352,6 +375,8 @@ public sealed class Aion2MeterEngine : IMeterEngine
         _bySource.Clear();
         _localTargets.Clear();
         _bossDamage.Clear();
+        _detailedStrangers = 0;
+        _detailThreshold = long.MaxValue;
         _fightStart = null;
         _lastPartyHit = null;
         _fightOver = false;
@@ -473,13 +498,15 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
             if (!_bySource.TryGetValue(id, out Aggregate? agg))
             {
-                if (_bySource.Count >= MaxSources && !party)
+                if (_bySource.Count >= MaxSources && !party && !EvictWeakestStranger(ev.Amount))
                 {
-                    return;
+                    return; // kalabalık: bu vuruş en zayıf yabancıdan da küçük
                 }
 
                 _bySource[id] = agg = new Aggregate { First = ev.Timestamp, Last = ev.Timestamp };
             }
+
+            agg.Party |= party;
 
             agg.Total += ev.Amount;
             if (ev.Timestamp < agg.First)
@@ -493,39 +520,48 @@ public sealed class Aion2MeterEngine : IMeterEngine
             }
 
             agg.SharesTarget |= sharesTarget;
-
-            // Vuruş sayaçları: DoT tikleri hasara eklenir ama vuruş/kritik sayılmaz (upstream DamageEvent.IsTick).
-            SkillAgg? skill = null;
-            if (agg.Skills.TryGetValue(ev.SkillId, out SkillAgg? known) || agg.Skills.Count < MaxSkillsPerPlayer)
+            RefreshDetailSet();
+            if (agg.Detail is null && (agg.Party || _detailedStrangers < MaxDetailedStrangers || agg.Total >= _detailThreshold))
             {
-                skill = known ?? (agg.Skills[ev.SkillId] = new SkillAgg());
-                skill.Total += ev.Amount;
-            }
-
-            if (!ev.IsTick)
-            {
-                agg.Hits++;
-                agg.MaxHit = Math.Max(agg.MaxHit, ev.Amount);
-                if (ev.IsCritical) { agg.Crits++; }
-                if (ev.Kinds is { } kinds)
+                agg.Detail = new AggDetail(); // ilk 30'a sonradan giren o andan itibaren detay toplar
+                if (!agg.Party)
                 {
-                    if ((kinds & HitKinds.Double) != 0) { agg.Doubles++; }
-                    if ((kinds & HitKinds.Perfect) != 0) { agg.Perfects++; }
-                    if ((kinds & HitKinds.Back) != 0) { agg.Backs++; }
-                    if ((kinds & HitKinds.Parry) != 0) { agg.Parries++; }
-                }
-
-                if (skill is not null)
-                {
-                    skill.Hits++;
-                    skill.MaxHit = Math.Max(skill.MaxHit, ev.Amount);
-                    if (ev.IsCritical) { skill.Crits++; }
+                    _detailedStrangers++;
                 }
             }
 
-            if (partyHit)
+            if (agg.Detail is { } det)
             {
-                agg.AddToBucket((long)(ev.Timestamp - fightStart).TotalSeconds, ev.Amount);
+                // Vuruş sayaçları: DoT tikleri hasara eklenir ama vuruş/kritik sayılmaz (upstream DamageEvent.IsTick).
+                SkillAgg? skill = null;
+                if (det.Skills.TryGetValue(ev.SkillId, out SkillAgg? known) || det.Skills.Count < MaxSkillsPerPlayer)
+                {
+                    skill = known ?? (det.Skills[ev.SkillId] = new SkillAgg());
+                    skill.Total += ev.Amount;
+                }
+
+                if (!ev.IsTick)
+                {
+                    det.Hits++;
+                    det.MaxHit = Math.Max(det.MaxHit, ev.Amount);
+                    if (ev.IsCritical) { det.Crits++; }
+                    if (ev.Kinds is { } kinds)
+                    {
+                        if ((kinds & HitKinds.Double) != 0) { det.Doubles++; }
+                        if ((kinds & HitKinds.Perfect) != 0) { det.Perfects++; }
+                        if ((kinds & HitKinds.Back) != 0) { det.Backs++; }
+                        if ((kinds & HitKinds.Parry) != 0) { det.Parries++; }
+                    }
+
+                    if (skill is not null)
+                    {
+                        skill.Hits++;
+                        skill.MaxHit = Math.Max(skill.MaxHit, ev.Amount);
+                        if (ev.IsCritical) { skill.Crits++; }
+                    }
+                }
+
+                det.AddToBucket((long)(ev.Timestamp - fightStart).TotalSeconds, ev.Amount);
             }
 
             if (!IsBoss(dir, target))
@@ -554,6 +590,73 @@ public sealed class Aion2MeterEngine : IMeterEngine
             UpdateFightBoss(dir, ev.Timestamp);
         }
     }
+
+    // Called under _gate. Dolu tabloda yeni bir yabancı için en az hasarlı yabancı atılır; yalnız yeni vuruş ondan büyükse (sürekli giriş-çıkış olmasın).
+    private bool EvictWeakestStranger(long incoming)
+    {
+        int? weakest = null;
+        long weakestTotal = long.MaxValue;
+        foreach ((int id, Aggregate agg) in _bySource)
+        {
+            if (!agg.Party && agg.Total < weakestTotal)
+            {
+                weakest = id;
+                weakestTotal = agg.Total;
+            }
+        }
+
+        if (weakest is not int drop || weakestTotal >= incoming)
+        {
+            return false;
+        }
+
+        if (_bySource[drop].Detail is not null)
+        {
+            _detailedStrangers--;
+        }
+
+        _bySource.Remove(drop);
+        return true;
+    }
+
+    // Called under _gate. Saniyede bir: yabancılardan hasarda ilk 30'un eşiği bulunur, ilk 30 dışındakilerin detayı atılır.
+    private void RefreshDetailSet()
+    {
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _detailCheckedAt < 1000)
+        {
+            return;
+        }
+
+        _detailCheckedAt = nowMs;
+        _strangerTotals.Clear();
+        foreach (Aggregate agg in _bySource.Values)
+        {
+            if (!agg.Party)
+            {
+                _strangerTotals.Add(agg.Total);
+            }
+        }
+
+        if (_strangerTotals.Count <= MaxDetailedStrangers)
+        {
+            _detailThreshold = long.MaxValue; // herkes zaten sığıyor (sayaç sınırı yeter)
+            return;
+        }
+
+        _strangerTotals.Sort();
+        _detailThreshold = _strangerTotals[^MaxDetailedStrangers];
+        foreach (Aggregate agg in _bySource.Values)
+        {
+            if (!agg.Party && agg.Detail is not null && agg.Total < _detailThreshold)
+            {
+                agg.Detail = null;
+                _detailedStrangers--;
+            }
+        }
+    }
+
+    private readonly List<long> _strangerTotals = new();
 
     // Called under _gate. Dövüş boss'u ölene, ayrılana ya da sıfırlanana kadar kalır; yoksa / gittiyse partinin en çok hasar verdiği aday olur.
     private void UpdateFightBoss(Aion2EntityDirectory dir, DateTime at)
@@ -668,11 +771,12 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 return new PlayerDetail(row.Id, row.Name, row.ClassName, row.CombatPower, 0, 0, TimeSpan.Zero, new HitStats(0, 0, 0, 0, 0, 0, 0), Array.Empty<SkillDamage>());
             }
 
-            stats = new HitStats(agg.Hits, agg.Crits, agg.Doubles, agg.Perfects, agg.Backs, agg.Parries, agg.MaxHit);
-            skills = agg.Skills.Select(kv => (kv.Key, kv.Value.Total, kv.Value.Hits, kv.Value.Crits, kv.Value.MaxHit)).ToList();
             active = agg.Last - agg.First;
-            buckets = agg.Buckets?.ToArray();
-            bucketSeconds = agg.BucketSeconds;
+            AggDetail? det = agg.Detail; // kalabalıkta ilk 30 dışındaki yabancının detayı yok: yalnız toplam
+            stats = det is null ? new HitStats(0, 0, 0, 0, 0, 0, 0) : new HitStats(det.Hits, det.Crits, det.Doubles, det.Perfects, det.Backs, det.Parries, det.MaxHit);
+            skills = det is null ? new() : det.Skills.Select(kv => (kv.Key, kv.Value.Total, kv.Value.Hits, kv.Value.Crits, kv.Value.MaxHit)).ToList();
+            buckets = det?.Buckets?.ToArray();
+            bucketSeconds = det?.BucketSeconds ?? 1;
         }
 
         var list = skills
@@ -708,7 +812,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
         into.Absorb(moved, _fightBoss);
     }
 
-    private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage);
+    private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss);
 
     public MeterSnapshot Snapshot()
     {
@@ -744,7 +848,8 @@ public sealed class Aion2MeterEngine : IMeterEngine
             var rows = new List<Row>(_bySource.Count);
             foreach ((int id, Aggregate agg) in _bySource)
             {
-                rows.Add(new Row(id, agg.Total, agg.SharesTarget, bossId is int b ? agg.BossDamage.GetValueOrDefault(b).Amount : 0));
+                rows.Add(new Row(id, agg.Total, agg.SharesTarget, bossId is int b ? agg.BossDamage.GetValueOrDefault(b).Amount : 0,
+                    _fightBoss is int f && agg.BossDamage.TryGetValue(f, out var onFightBoss) && onFightBoss.Amount > 0));
             }
 
             TimeSpan sinceHit = _lastPartyHit is { } lastHit ? now - lastHit : TimeSpan.Zero;
@@ -795,7 +900,8 @@ public sealed class Aion2MeterEngine : IMeterEngine
             }
 
             bool local = IsLocal(dir, row.Id);
-            if (!local && !dir.IsPartyMemberId(row.Id))
+            // Dövüş boss'una hasar veren her bilinen oyuncu listede (dünya boss'u, 20 kişilik etkinlik); 5 kişilik zindanda bunlar zaten partidir.
+            if (!local && !dir.IsPartyMemberId(row.Id) && !row.HitFightBoss)
             {
                 if (!rosterKnown && row.SharesTarget)
                 {
@@ -845,11 +951,12 @@ public sealed class Aion2MeterEngine : IMeterEngine
             byId[localId] = new PlayerDamage(localId, DisplayName(localName, localId), 0, 0, true, dir.ClassOf(localId), dir.CombatPowerOf(localName));
         }
 
-        return byId.Values
-            .OrderByDescending(p => p.Total)
-            .ThenByDescending(p => p.CombatPower ?? -1)
-            .ThenBy(p => p.Name, StringComparer.Ordinal)
-            .ToList();
+        var list = new List<PlayerDamage>(byId.Values);
+        list.Sort(static (a, b) =>
+            a.Total != b.Total ? b.Total.CompareTo(a.Total)
+            : (a.CombatPower ?? -1) != (b.CombatPower ?? -1) ? (b.CombatPower ?? -1).CompareTo(a.CombatPower ?? -1)
+            : string.CompareOrdinal(a.Name, b.Name));
+        return list;
     }
 
     private static PlayerDamage Player(Aion2EntityDirectory dir, Row row, bool local, double seconds)

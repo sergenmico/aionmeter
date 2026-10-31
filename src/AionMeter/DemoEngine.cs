@@ -24,6 +24,24 @@ internal sealed class DemoEngine : IMeterEngine
         public readonly List<long> Kovalar = new();    // saniye başına hasar (DPS grafiği)
     }
 
+    // Dövüşler sırayla: zindan bossu (5 kişilik parti) ↔ dünya bossu (parti + ~20 yabancı).
+    private const string DunyaBossuAdi = "Frostfang Colossus";
+    private const long DunyaBossuCani = 42_000_000;
+    private const int DunyaBossuOfkesi = 600;
+    private static readonly string[] YabanciAdlari =
+    {
+        "Aldric", "Brynna", "Caelum", "Darvos", "Elowen", "Fenrik", "Gwyndra", "Halvar", "Isolde", "Joran",
+        "Kyrra", "Lucan", "Maelis", "Norric", "Oriel", "Perrin", "Quilla", "Rhydian", "Sylva", "Tarquin",
+    };
+    private static readonly string[] Siniflar =
+        { "Gladiator", "Templar", "Ranger", "Assassin", "Sorcerer", "Spiritmaster", "Cleric", "Chanter" };
+    // Yerel oyuncu (82.000) ~8. sırada kalsın: 6 yabancı ondan güçlü, kalanlar zayıf.
+    private static readonly double[] YabanciDpsleri =
+    {
+        140_000, 128_000, 118_000, 110_000, 101_000, 92_000, 79_000, 76_000, 72_000, 68_000,
+        64_000, 60_000, 57_000, 53_000, 49_000, 45_000, 41_000, 37_000, 34_000, 30_000,
+    };
+
     private static readonly string[] BossAdlari = { "Stone Golem King", "Crimson Drake Ragnar", "Shadow Priestess Ilyana" };
     private static readonly long[] BossCanlari = { 7_200_000, 9_600_000, 12_500_000 };
     // Öfke süresi (sn): ilk ikisi rahat yetişir; üçüncüsü kısa, "geç" ve "ÖFKEDE" durumları görünsün.
@@ -42,10 +60,15 @@ internal sealed class DemoEngine : IMeterEngine
         new() { Id = 5, Ad = "Lunea", TemelDps = 55_000, Yerel = false, Sinif = "Cleric", Cp = 534_870 },
     };
 
+    private readonly Oyuncu[] _herkes;   // parti + yabancılar (dünya bossu evresi)
+    private Oyuncu[] _aktif;             // şu anki dövüşte listede olanlar
+    private int _dovusNo = -1, _zindanSira = -1;
+    private string _bossAd = "";
+    private int _bossOfke;
+
     private bool _dovusVar;
     private double _sonZaman, _dovusBaslangic, _olumZamani;
     private bool _bossOldu;
-    private int _bossSira = -1;
     private long _bossId, _bossMax, _bossCan;
     private bool _kapali;
 
@@ -68,6 +91,12 @@ internal sealed class DemoEngine : IMeterEngine
                                    (16050000, "Ashy Call"), (16060000, "Siphon") },
         ["Assassin"] = new[] { (13010000, "Quick Slice"), (13030000, "Breaking Slice"), (13040000, "Swift Slice"), (13050000, "Flash Slice"),
                                (13060000, "Ambush"), (13070000, "Shadowstrike"), (13020000, "Throw Shadowblade") },
+        ["Templar"] = new[] { (12010000, "Vicious Strike"), (12020000, "Decisive Strike"), (12030000, "Desperate Strike"),
+                              (12060000, "Punishing Strike"), (12100000, "Shield Smite"), (12040000, "Pummel") },
+        ["Ranger"] = new[] { (14010000, "Deadshot"), (14020000, "Snipe"), (14030000, "Rapid Fire"), (14040000, "Spiral Arrow"),
+                             (14050000, "Drill Dart"), (14080000, "Burst Arrow") },
+        ["Chanter"] = new[] { (18020000, "Resonance Crush"), (18030000, "Bolt Crush"), (18040000, "Incandescent Blow"),
+                              (18050000, "Bursting Blow"), (18070000, "Crushing Blow"), (18080000, "Wave Blow") },
         ["Cleric"] = new[] { (17010000, "Earth's Retribution"), (17020000, "Thunder and Lightning"), (17030000, "Discharge"),
                              (17040000, "Judgment Thunder"), (17060000, "Bolt"), (17070000, "Chain of Torment") },
     };
@@ -78,6 +107,21 @@ internal sealed class DemoEngine : IMeterEngine
 
     public DemoEngine(string? assetsDir = null)
     {
+        var rnd = new Random(42);
+        var yabancilar = new Oyuncu[YabanciAdlari.Length];
+        for (int i = 0; i < yabancilar.Length; i++)
+        {
+            yabancilar[i] = new Oyuncu
+            {
+                Id = 100 + i, Ad = YabanciAdlari[i], TemelDps = YabanciDpsleri[i], Yerel = false,
+                Sinif = Siniflar[(i * 3 + 1) % Siniflar.Length], Cp = 300_000 + rnd.Next(0, 1_000_001),
+            };
+        }
+        _herkes = new Oyuncu[_oyuncular.Length + yabancilar.Length];
+        _oyuncular.CopyTo(_herkes, 0);
+        yabancilar.CopyTo(_herkes, _oyuncular.Length);
+        _aktif = _oyuncular;
+
         var gerekenAd = new HashSet<string>();
         var gerekenIkon = new HashSet<string>();
         foreach (var liste in SinifBeceriKimlikleri.Values)
@@ -132,7 +176,7 @@ internal sealed class DemoEngine : IMeterEngine
         {
             if (_kapali || !_dovusVar) return null;
             Oyuncu? o = null;
-            foreach (var x in _oyuncular) if (x.Id == playerId) { o = x; break; }
+            foreach (var x in _aktif) if (x.Id == playerId) { o = x; break; }
             if (o is null) return null;
 
             double t = _saat.Elapsed.TotalSeconds;
@@ -172,7 +216,7 @@ internal sealed class DemoEngine : IMeterEngine
     {
         lock (_kilit)
         {
-            if (_dovusVar) YeniDovus(_saat.Elapsed.TotalSeconds);
+            if (_dovusVar) YeniDovus(_saat.Elapsed.TotalSeconds, sonrakiBoss: false); // aynı boss/evre baştan
         }
     }
 
@@ -193,8 +237,8 @@ internal sealed class DemoEngine : IMeterEngine
             var sure = TimeSpan.FromSeconds(Math.Max(0, bitis - _dovusBaslangic));
             double sn = Math.Max(1.0, sure.TotalSeconds);
 
-            var liste = new List<PlayerDamage>(_oyuncular.Length);
-            foreach (var o in _oyuncular)
+            var liste = new List<PlayerDamage>(_aktif.Length);
+            foreach (var o in _aktif)
             {
                 long toplam = (long)o.Toplam;
                 liste.Add(new PlayerDamage(o.Id, o.Ad, toplam, toplam / sn, o.Yerel, o.Sinif, o.Cp, o.BossToplam / sn));
@@ -203,27 +247,42 @@ internal sealed class DemoEngine : IMeterEngine
 
             // Kalan süre tahmini: kalan can ÷ partinin bossa ortalama DPS'i (ilk 3 sn tahmin yok)
             double bossaToplam = 0;
-            foreach (var o in _oyuncular) bossaToplam += o.BossToplam;
+            foreach (var o in _aktif) bossaToplam += o.BossToplam;
             TimeSpan? ttk = null;
             if (!_bossOldu && sure.TotalSeconds >= 3 && bossaToplam > 0)
                 ttk = TimeSpan.FromSeconds(_bossCan / (bossaToplam / sure.TotalSeconds));
-            var ofke = TimeSpan.FromSeconds(BossOfkeleri[_bossSira] - sure.TotalSeconds);
-            var boss = new BossHp(_bossId, BossAdlari[_bossSira], _bossCan, _bossMax, _bossOldu, ttk, ofke);
+            var ofke = TimeSpan.FromSeconds(_bossOfke - sure.TotalSeconds);
+            var boss = new BossHp(_bossId, _bossAd, _bossCan, _bossMax, _bossOldu, ttk, ofke);
             return new MeterSnapshot(EngineState.Connected, null, liste, boss, sure, FightOver: _bossOldu);
         }
     }
 
-    private void YeniDovus(double t)
+    private void YeniDovus(double t, bool sonrakiBoss = true)
     {
         _dovusVar = true;
         _dovusBaslangic = t;
         _sonZaman = t;
         _bossOldu = false;
-        _bossSira = (_bossSira + 1) % BossAdlari.Length;
-        _bossId = 1000 + _bossSira;
-        _bossMax = BossCanlari[_bossSira];
+        if (sonrakiBoss) _dovusNo++;
+        if (!sonrakiBoss && _bossAd.Length > 0) { /* evre ve boss aynı kalır */ }
+        else if (_dovusNo % 2 == 1)
+        {
+            _aktif = _herkes;
+            _bossAd = DunyaBossuAdi;
+            _bossMax = DunyaBossuCani;
+            _bossOfke = DunyaBossuOfkesi;
+        }
+        else
+        {
+            _aktif = _oyuncular;
+            _zindanSira = (_zindanSira + 1) % BossAdlari.Length;
+            _bossAd = BossAdlari[_zindanSira];
+            _bossMax = BossCanlari[_zindanSira];
+            _bossOfke = BossOfkeleri[_zindanSira];
+        }
+        _bossId = 1000 + _dovusNo;
         _bossCan = _bossMax;
-        foreach (var o in _oyuncular)
+        foreach (var o in _herkes)
         {
             o.Toplam = 0;
             o.BossToplam = 0;
@@ -243,7 +302,7 @@ internal sealed class DemoEngine : IMeterEngine
             return;
         }
 
-        foreach (var o in _oyuncular)
+        foreach (var o in _aktif)
         {
             if (_bossCan <= 0) break;
             if (t - _dovusBaslangic < o.SessizSure) continue;
