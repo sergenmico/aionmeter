@@ -109,7 +109,15 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
 
     private string CumleCevir(string cumle, List<string> korunan, ref bool modelCalisti, CancellationToken ct)
     {
+        cumle = _sozluk.OcrIyelikDuzelt(cumle);
         if (_sozluk.SabitCeviri(cumle) is { } sabit) return sabit;
+        if (_sozluk.StatSatiri(cumle) is { } statSatiri) return statSatiri;
+        if (AdSatiriMi(cumle))
+        {
+            // Eşya / stat / beceri / görev adı ya da kısa etiket ("Ruinous Devourer (Greaves)", "Soul Binding Rate"):
+            // oyunun İngilizce adıyla kalır (kullanıcı kararı; model bunları yarım çeviriyor ya da sözcük düşürüyor).
+            return cumle; // korunan terim listesine eklenmez: paneldeki vurgu sınırı (12) stat satırlarıyla dolmasın
+        }
         var h = _sozluk.Hazirla(cumle);
         foreach (var t in h.OyunTerimleri) if (!korunan.Contains(t)) korunan.Add(t);
         if (!HarfVarRegex().IsMatch(h.ModelGirdisi.Replace("Zx", ""))) return cumle; // sadece sayı/terim: çevrilecek bir şey yok
@@ -196,6 +204,42 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
     }
 
     internal string? ProfilBitir() => _model?.ProfilBitir();
+
+    private static readonly HashSet<string> AdBaglaclari = new(StringComparer.Ordinal)
+    {
+        "of", "the", "and", "to", "in", "on", "at", "for", "a", "an", "with", "from", "by", "or", "vs",
+    };
+
+    /// <summary>
+    /// Ad satırı mı: en çok 6 sözcük, cümle sonu noktalaması yok, ilk sözcük fiil değil ("Click to Equip", "Obtained from ..."
+    /// cümledir), harfli her sözcük büyük harfle başlıyor (ilk sözcük dışında küçük bağlaçlara izin var).
+    /// Sayı/işaret parçaları serbest ("Critical Hit Resist +45").
+    /// </summary>
+    internal static bool AdSatiriMi(string cumle)
+    {
+        string t = cumle.Trim();
+        if (t.Length == 0) return false;
+        char son = t[^1];
+        if ((son is '.' or '!' or '?' or ':' or ';' or ',') && !t.EndsWith("...", StringComparison.Ordinal) && !t.EndsWith('…'))
+            return false;
+        var sozcukler = BoslukRegex().Split(t);
+        int harfli = 0;
+        for (int i = 0; i < sozcukler.Length; i++)
+        {
+            string w = sozcukler[i].TrimStart('(', '[', '"', '\'', '+', '-', '@', '#');
+            int ilkHarf = -1;
+            for (int j = 0; j < w.Length; j++) if (char.IsLetter(w[j])) { ilkHarf = j; break; }
+            if (ilkHarf < 0) continue; // sayı / işaret
+            if (ilkHarf > 0 && char.IsDigit(w[0])) continue; // "12s", "40x" gibi birimli sayılar
+            harfli++;
+            if (harfli == 1 && TurkceDuzelt.FiilMi(w.TrimEnd('.', ',', ':', ';', '!', '?'))) return false; // "Click to Equip", "Increases ..."
+            if (harfli > 6) return false;
+            if (char.IsUpper(w[ilkHarf])) continue;
+            if (harfli > 1 && AdBaglaclari.Contains(w)) continue;
+            return false;
+        }
+        return harfli > 0;
+    }
 
     [GeneratedRegex(@"\s+")] private static partial Regex BoslukRegex();
     [GeneratedRegex(@"(?<=[.!?])\s+(?=[""'(\[]?[A-Z0-9])")] private static partial Regex CumleSonuRegex();

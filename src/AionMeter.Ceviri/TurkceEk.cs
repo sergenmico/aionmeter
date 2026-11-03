@@ -41,6 +41,68 @@ internal static class TurkceEk
         return ilk + Uyumla(kalan, ilkUnlu == default ? sonUnlu : ilkUnlu);
     }
 
+    /// <summary>
+    /// TÜRKÇE bir ada (stat adının Türkçesi: "Hasar Artışı", "Kritik Vuruş", "Savunma") ek ekler, kesme işaretsiz.
+    /// Çok sözcüklü ve ı/i/u/ü ile biten adlar isim tamlamasıdır: ekten önce "n" gelir (Hasar Artışını, Hasar Artışına).
+    /// Ünsüz yumuşaması: ç → c, çok heceli sözcükte k → ğ (Direnç → Direnci, Kritik → Kritiği). Döndürülen: ad + ek.
+    /// </summary>
+    public static string TurkceAdaEkle(string ad, string ek) => AdaEkle(ad, ek, iyelikli: false);
+
+    /// <param name="iyelikli">Ad zaten 3. tekil iyelik ekli (Savunması): tamlama gibi "n" kaynaştırmasıyla ek alır.</param>
+    private static string AdaEkle(string ad, string ek, bool iyelikli)
+    {
+        if (ek.Length == 0) return ad;
+        string son = ad.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? ad;
+        string k = son.ToLower(System.Globalization.CultureInfo.GetCultureInfo("tr-TR"));
+        if (k.Length == 0) return ad + ek;
+        char sonUnlu = k.LastOrDefault(c => Unluler.Contains(c));
+        if (sonUnlu == default) sonUnlu = 'e';
+        bool unluBiter = Unluler.Contains(k[^1]);
+        bool sertBiter = "fstkçşhp".Contains(k[^1]);
+        bool tamlama = iyelikli || (ad.Contains(' ') && "ıiuü".Contains(k[^1]) && !TamlamaOlmayan.Contains(k)); // Fiziksel Saldırı → Saldırıyı
+        string Iki() => On(sonUnlu) ? "e" : "a";
+        string Dort() => On(sonUnlu) ? (Yuvarlak(sonUnlu) ? "ü" : "i") : (Yuvarlak(sonUnlu) ? "u" : "ı");
+        string Govde(bool unluyleBaslar)
+        {
+            if (!unluyleBaslar || unluBiter) return ad;
+            int heceler = k.Count(c => Unluler.Contains(c));
+            if (k[^1] == 'ç') return ad[..^1] + "c";
+            if (k[^1] == 'k' && heceler >= 2) return ad[..^1] + "ğ";
+            return ad;
+        }
+
+        string ilk, kalan;
+        // Tamlamaya çoğul eki ("Hasar Artışları") ses değişimi ister; çoğul atlanır, gerisi işlenir.
+        if (Esle(ek, out kalan, "lar", "ler"))
+            return tamlama ? AdaEkle(ad, kalan, iyelikli) : ad + "l" + Iki() + "r" + Uyumla(kalan, Iki()[0]);
+        // 2. çoğul iyelik (Savunmanız, Hasar Artışınız): iyelik + hâl dalından önce ("ınız" ≠ "ı" + "nız").
+        if (Esle(ek, out kalan, "ınız", "iniz", "unuz", "ünüz", "nız", "niz", "nuz", "nüz"))
+            return Govde(!unluBiter) + (unluBiter ? "" : Dort()) + "n" + Dort() + "z" + Uyumla(kalan, Dort()[0]);
+        // 3. tekil iyelik + hâl ("hedefin Savunmasını"): model eki "ını / ına / ında / ından / ının / ıyla" diye kurar.
+        // Önce iyelikli ad yapılır (Savunma → Savunması, İsabet → İsabeti, tamlama aynen), sonra hâl eki "n" ile eklenir.
+        if (ek.Length >= 3 && "ıiuü".Contains(ek[0]) && (ek[1] == 'n' || (ek[1] == 'y' && ek[2] == 'l')))
+        {
+            string iyelik = tamlama ? ad : unluBiter ? ad + "s" + Dort() : Govde(true) + Dort();
+            return AdaEkle(iyelik, ek[1..], iyelikli: true);
+        }
+        if (Esle(ek, out kalan, "yla", "yle", "la", "le")) ilk = (unluBiter ? "y" : "") + "l" + Iki();
+        else if (Esle(ek, out kalan, "ndan", "nden", "dan", "den", "tan", "ten")) ilk = (tamlama ? "n" : "") + (sertBiter ? "t" : "d") + Iki() + "n";
+        else if (Esle(ek, out kalan, "nda", "nde", "da", "de", "ta", "te")) ilk = (tamlama ? "n" : "") + (sertBiter ? "t" : "d") + Iki();
+        else if (Esle(ek, out kalan, "nın", "nin", "nun", "nün", "ın", "in", "un", "ün")) ilk = (unluBiter ? "n" : "") + Dort() + "n";
+        else if (Esle(ek, out kalan, "sı", "si", "su", "sü")) ilk = tamlama ? "" : (unluBiter ? "s" : "") + Dort();
+        else if (Esle(ek, out kalan, "nı", "ni", "nu", "nü", "yı", "yi", "yu", "yü", "ı", "i", "u", "ü"))
+            ilk = (tamlama ? "n" : unluBiter ? "y" : "") + Dort();
+        else if (Esle(ek, out kalan, "na", "ne", "ya", "ye", "a", "e")) ilk = (tamlama ? "n" : unluBiter ? "y" : "") + Iki();
+        else return ad + Uyumla(ek, sonUnlu);
+
+        string govde = Govde(ilk.Length > 0 && Unluler.Contains(ilk[0]));
+        char ilkUnlu = ilk.LastOrDefault(c => Unluler.Contains(c));
+        return govde + ilk + Uyumla(kalan, ilkUnlu == default ? sonUnlu : ilkUnlu);
+    }
+
+    /// <summary>ı/i/u/ü ile biten ama iyelik eki taşımayan sözcükler (son sözcük bunlardan biriyse tamlama sayılmaz).</summary>
+    private static readonly HashSet<string> TamlamaOlmayan = new(StringComparer.Ordinal) { "saldırı", "bilgi" };
+
     private static bool Esle(string ek, out string kalan, params string[] bicimler)
     {
         foreach (var b in bicimler)

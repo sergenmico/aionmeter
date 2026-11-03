@@ -29,6 +29,7 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Alt` + üstüne gel | Eşya/craft/beceri açıklamasını çevirir (model indirildikten sonra) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
+Overlay küçük ekranda büyük kalıyorsa tepsi menüsünden **Boyut** ile küçült (%70–%125).
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (tepsi menüsünden kapatılabilir).
 Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da tepsi menüsünden "Çeviri modelini indir").
 

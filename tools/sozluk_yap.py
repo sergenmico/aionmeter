@@ -47,6 +47,47 @@ istatistik = ["Magic Attack", "Physical Attack", "Physical Defense", "Magic Defe
 buyukHarf = ["Socket", "Enchant", "Attack", "Defense", "Critical", "Parry", "Block", "Power", "Health", "Agility", "Knowledge", "Will", "Cast",
     "Sword", "Mace", "Staff", "Orb", "Bow", "Shield", "Cloth", "Leather", "Chain", "Plate", "Pistol", "Cannon", "Harp",
     "Penetration", "Resistance", "Resist", "Perfect", "Amulet", "Regeneration", "Fortitude"]
+# Stat adları: kullanıcı kararı (3 Kasım), TÜRKÇE yazılır ("bilmeyen için sorun olur"); beceri/eşya/yer adları İngilizce kalır.
+# Cümlede sadece Türkçesi ("Hasar Artışını %10 artırır"), stat satırında "Hasar Artışı (Damage Boost) +120".
+# Türkçe adlar ek almaya uygun seçildi: çok sözcüklü ve ı/i/u/ü ile bitenler isim tamlamasıdır (Hasar Artışı → Hasar Artışını).
+statlar = {
+ # temel
+ "Attack": "Saldırı", "Defense": "Savunma", "Accuracy": "İsabet", "Evasion": "Kaçınma", "Parry": "Savuşturma",
+ "Block": "Blok", "Penetration": "Delme", "Resistance": "Direnç", "Resist": "Direnç", "Regeneration": "Yenilenme",
+ "Critical": "Kritik", "Crit": "Kritik", "Power": "Güç", "Health": "Sağlık", "Agility": "Çeviklik",
+ "Knowledge": "Bilgi", "Will": "İrade", "Concentration": "Konsantrasyon",
+ # saldırı / savunma
+ "Magic Attack": "Büyü Saldırısı", "Physical Attack": "Fiziksel Saldırı", "Physical Defense": "Fiziksel Savunma",
+ "Magic Defense": "Büyü Savunması", "Magic Accuracy": "Büyü İsabeti", "Magic Boost": "Büyü Gücü Artışı",
+ "Magic Resist": "Büyü Direnci", "Magic Resistance": "Büyü Direnci", "Back Defense": "Arka Savunma",
+ "Additional Damage": "Ek Hasar", "Additional Defense": "Ek Savunma", "Ignore Defense": "Savunma Yok Sayma",
+ "Final Damage": "Son Hasar", "Combat Power": "Savaş Gücü",
+ # kritik / mükemmel / çoklu vuruş
+ "Critical Strike": "Kritik Vuruş", "Critical Hit": "Kritik Vuruş", "Critical Damage": "Kritik Hasar",
+ "Critical Hit Chance": "Kritik Vuruş Şansı", "Critical Damage Boost": "Kritik Hasar Artışı",
+ "Critical Hit Resist": "Kritik Vuruş Direnci", "Critical Strike Resist": "Kritik Vuruş Direnci",
+ "Critical Damage Resist": "Kritik Hasar Direnci", "Perfect Chance": "Mükemmel Vuruş Şansı",
+ "Perfect Resist": "Mükemmel Vuruş Direnci", "Multi-Hit": "Çoklu Vuruş", "Multi-Hit Chance": "Çoklu Vuruş Şansı",
+ "Multi-Hit Resist": "Çoklu Vuruş Direnci", "Backstab Damage": "Arkadan Vuruş Hasarı",
+ # hasar artış / azaltma
+ "Damage Boost": "Hasar Artışı", "Damage Bonus": "Hasar Bonusu", "Damage Reduction": "Hasar Azaltma",
+ "Damage Amplification": "Hasar Güçlendirme", "Weapon Damage": "Silah Hasarı", "Weapon Damage Boost": "Silah Hasarı Artışı",
+ "Power Shard Damage Bonus": "Power Shard Hasar Bonusu", "Boss Damage": "Boss Hasarı",
+ "PvE Damage": "PvE Hasarı", "PvP Damage": "PvP Hasarı", "PvE Defense": "PvE Savunması", "PvP Defense": "PvP Savunması",
+ "PvP Attack": "PvP Saldırısı", "PvE Attack": "PvE Saldırısı",
+ # delme
+ "Block Penetration": "Blok Delme", "Parry Penetration": "Savuşturma Delme", "Defense Penetration": "Savunma Delme",
+ "Armor Penetration": "Zırh Delme",
+ # hız / süre
+ "Attack Speed": "Saldırı Hızı", "Casting Speed": "Büyü Hızı", "Movement Speed": "Hareket Hızı",
+ "Cooldown": "Bekleme Süresi", "Cooldown Reduction": "Bekleme Süresi Azaltma", "Cast Time": "Hazırlanma Süresi",
+ # iyileştirme / direnç
+ "Healing Boost": "İyileştirme Artışı", "Healing Power": "İyileştirme Gücü", "Healing Received": "Alınan İyileştirme",
+ "Stun Resist": "Sersemletme Direnci", "Status Resist": "Durum Direnci", "Status Effect Resist": "Durum Etkisi Direnci",
+ "Accuracy Bonus": "İsabet Bonusu", "Evasion Bonus": "Kaçınma Bonusu", "Soul Binding Rate": "Ruh Bağlama Oranı",
+}
+istatistik = [t for t in istatistik if t not in statlar]
+buyukHarf = [t for t in buyukHarf if t not in statlar]
 koru = list(dict.fromkeys(cekirdek + istatistik + secilen))
 # Beceri adları çalışma anında skills/skill_names.json'dan okunur. Tek kelimelik ve sıradan İngilizce sözcük olanlar atlanır:
 beceriler = json.load(open(kok + '/assets/aion2/skills/skill_names.json', encoding='utf-8'))
@@ -67,12 +108,14 @@ cikti = {
   "koru: her zaman korunan terimler (büyük/küçük harf duyarlı, uzun olan önce). Yer/boss adları zones.json ve boss_npcs.json'dan.",
   "koruBuyukHarf: sıradan İngilizce sözcük olan terimler; sadece cümle ortasında Büyük Harfle yazılınca ya da satırın tamamıysa korunur.",
   "beceriDosyasi: beceri adları (ilk kullanımda okunur). Çok kelimeli adlar aynen, tek kelimelik adlar koruBuyukHarf kuralıyla korunur; 'yaygin' listesindekiler atlanır.",
-  "terimler: SADECE satırın tamamı bu terimse ya da 'terim + sayı' ise kullanılır ('Required Level: 25' -> 'Gereken Seviye: 25')."
+  "terimler: SADECE satırın tamamı bu terimse ya da 'terim + sayı' ise kullanılır ('Required Level: 25' -> 'Gereken Seviye: 25').",
+  "statlar: stat adları Türkçe yazılır (cümlede sadece Türkçe, stat satırında 'Türkçe (İngilizce)'); tek sözcüklüler sadece Büyük Harfle cümle ortasında."
  ],
- "koru": koru, "koruBuyukHarf": buyukHarf, "beceriDosyasi": "../skills/skill_names.json", "yaygin": yaygin, "terimler": terimler}
+ "koru": koru, "koruBuyukHarf": buyukHarf, "beceriDosyasi": "../skills/skill_names.json", "yaygin": yaygin, "terimler": terimler,
+ "statlar": statlar}
 import os
 os.makedirs(kok + '/assets/aion2/ceviri', exist_ok=True)
 with open(kok + '/assets/aion2/ceviri/sozluk.json', 'w', encoding='utf-8', newline='\n') as f:
     json.dump(cikti, f, ensure_ascii=False, indent=1)
-print('koru', len(koru), 'buyukHarf', len(buyukHarf), 'yaygin', len(yaygin), 'terimler', len(terimler), 'atilan', len(atilan))
+print('statlar', len(statlar), 'koru', len(koru), 'buyukHarf', len(buyukHarf), 'yaygin', len(yaygin), 'terimler', len(terimler), 'atilan', len(atilan))
 print('ATILAN:', atilan)

@@ -22,17 +22,17 @@ namespace AionMeter.Ceviri;
 /// </summary>
 internal static partial class TurkceDuzelt
 {
-    public const string Surum = "d3"; // kurallar değişince artır (önbellek geçersiz olur)
+    public const string Surum = "d9"; // kurallar değişince artır (önbellek geçersiz olur)
     private static readonly CultureInfo Tr = CultureInfo.GetCultureInfo("tr-TR");
 
     public static string Once(string ingilizce) =>
-        AcquireRegex().Replace(ingilizce, m =>
+        GearRegex().Replace(AcquireRegex().Replace(ingilizce, m =>
         {
             string kok = m.Value[0] == 'A' ? "Obtain" : "obtain";
             return m.Groups[1].Value switch { "d" => kok + "ed", "s" => kok + "s", _ => kok };
-        });
+        }), m => m.Value[0] == 'G' ? "Equipment" : "equipment"); // oyunda "gear" = ekipman (model "dişli" diyor)
 
-    private static readonly HashSet<string> EmirFiilleri = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> EmirFiilleri = new(StringComparer.OrdinalIgnoreCase)
     {
         "defeat", "kill", "slay", "hunt", "destroy", "collect", "gather", "bring", "deliver", "take", "give", "find", "search",
         "speak", "talk", "report", "return", "go", "travel", "head", "visit", "meet", "hold", "defend", "protect", "help",
@@ -43,10 +43,33 @@ internal static partial class TurkceDuzelt
         "deal", "inflict", "reach", "summon", "restore", "socket", "enchant", "upgrade", "combine", "trade", "join", "be",
     };
 
+    /// <summary>Açıklama satırlarını başlatan, emir listesinde olmayan fiiller ("Increases Attack by 10%", "Dropped by ...").</summary>
+    private static readonly HashSet<string> EkFiiller = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "increase", "decrease", "reduce", "grant", "drop", "can", "cannot", "click", "right-click", "left-click", "double-click",
+        "press", "require", "allow", "apply", "remove", "boost", "consume", "absorb", "heal", "gain", "lose", "receive", "cast",
+        "stun", "transform", "teleport", "add", "contain", "unlock", "craft", "trade", "exchange", "earn", "unlocks", "may",
+    };
+
+    /// <summary>Sözcük bir fiil ya da çekimi mi (-s/-es/-ed/-d/-ing)? Ad satırı / ad dizisi ayrımı için.</summary>
+    internal static bool FiilMi(string sozcuk)
+    {
+        string w = sozcuk.ToLowerInvariant();
+        bool Var(string k) => k.Length >= 2 && (EmirFiilleri.Contains(k) || EkFiiller.Contains(k));
+        if (Var(w)) return true;
+        if (w.EndsWith("ies") && Var(w[..^3] + "y")) return true;
+        if (w.EndsWith("es") && Var(w[..^2])) return true;
+        if (w.EndsWith('s') && Var(w[..^1])) return true;
+        if (w.EndsWith("ied") && Var(w[..^3] + "y")) return true;
+        if (w.EndsWith("ed") && (Var(w[..^2]) || Var(w[..^1]) || (w.Length > 4 && w[^3] == w[^4] && Var(w[..^3])))) return true; // dropped
+        if (w.EndsWith("ing") && (Var(w[..^3]) || Var(w[..^3] + "e"))) return true;
+        return false;
+    }
+
     private static readonly Dictionary<string, string> OzelEmir = new(StringComparer.Ordinal)
     {
         ["edin"] = "et", ["gidin"] = "git", ["yiyin"] = "ye", ["deyin"] = "de", ["olun"] = "ol", ["alın"] = "al",
-        ["takın"] = "tak", ["atın"] = "at", ["açın"] = "aç", ["yenin"] = "yen", ["edinin"] = "edin", ["dinlenin"] = "dinlen",
+        ["takın"] = "tak", ["atın"] = "at", ["kullanın"] = "kullan", ["açın"] = "aç", ["yenin"] = "yen", ["edinin"] = "edin", ["dinlenin"] = "dinlen",
     };
 
     /// <summary>"-yIn" ile biten ama emir olmayan sözcükler (ilgi eki ya da kök).</summary>
@@ -146,6 +169,7 @@ internal static partial class TurkceDuzelt
     }
 
     [GeneratedRegex(@"\b[Aa]cquire(d|s)?\b")] private static partial Regex AcquireRegex();
+    [GeneratedRegex(@"\b[Gg]ear\b")] private static partial Regex GearRegex();
     [GeneratedRegex(@"\b(we|us|our|ours|ourselves)\b", RegexOptions.IgnoreCase)] private static partial Regex BizRegex();
     [GeneratedRegex(@"\b(you|your|yours|yourself)\b", RegexOptions.IgnoreCase)] private static partial Regex SenRegex();
     [GeneratedRegex(@"\p{L}+(?:['’]\p{L}+)?")] private static partial Regex SozcukRegex();

@@ -31,7 +31,7 @@ internal interface ICeviriMotoru : IDisposable
     Task<CeviriCiktisi> CevirAsync(string ingilizce, CancellationToken ct);
 
     /// <summary>İmleç çevresi görüntüsünde açıklama kutusunu bulur (görüntüye göre koordinat).</summary>
-    Rectangle? TooltipBul(Bitmap imlecCevresi, Point imlecGoreli);
+    IReadOnlyList<Rectangle> TooltipAdaylari(Bitmap imlecCevresi, Point imlecGoreli, int azamiUzaklik);
 
     /// <summary>Düşük RAM modu. Model yüklüyse bırakılır; sonraki çeviride yeni modda yüklenir.</summary>
     void DusukRamAyarla(bool dusukRam);
@@ -84,8 +84,8 @@ internal sealed class CeviriMotoruAdaptoru : ICeviriMotoru
         return new CeviriCiktisi(c.Ingilizce, c.Turkce, c.KorunanTerimler, c.OnbellektenGeldi, c.Sure);
     }
 
-    public Rectangle? TooltipBul(Bitmap imlecCevresi, Point imlecGoreli) =>
-        AionMeter.Ceviri.TooltipBulucu.Bul(imlecCevresi, imlecGoreli);
+    public IReadOnlyList<Rectangle> TooltipAdaylari(Bitmap imlecCevresi, Point imlecGoreli, int azamiUzaklik) =>
+        AionMeter.Ceviri.TooltipBulucu.Adaylar(imlecCevresi, imlecGoreli, azamiUzaklik);
 
     private AionMeter.Ceviri.CevrimdisiCevirmen Cevirmen()
     {
@@ -201,15 +201,43 @@ internal sealed class SahteCeviriMotoru : ICeviriMotoru
 
     public void DusukRamAyarla(bool dusukRam) { }
 
-    public Rectangle? TooltipBul(Bitmap imlecCevresi, Point imlecGoreli)
+    public IReadOnlyList<Rectangle> TooltipAdaylari(Bitmap imlecCevresi, Point imlecGoreli, int azamiUzaklik)
     {
-        if (!SahteKutu) return null;
+        if (!SahteKutu) return [];
         var r = new Rectangle(imlecGoreli.X + 16, imlecGoreli.Y + 16, 300, 150);
         r.Intersect(new Rectangle(0, 0, imlecCevresi.Width, imlecCevresi.Height));
-        return r.IsEmpty ? null : r;
+        return r.IsEmpty ? [] : [r];
     }
 
     public void Dispose() { }
+}
+
+/// <summary>1/4 ölçekli gri görüntü (önceki duruşla karşılaştırma için).</summary>
+internal sealed record KucukGri(byte[] Piksel, int Genislik, int Yukseklik)
+{
+    /// <summary>
+    /// Görüntü koordinatındaki r bölgesinde iki küçük görüntü belirgin farklı mı (yazı değişti / kutu yeni)?
+    /// haric: iki görüntüden birinde maskelenmiş (siyaha boyanmış) kendi pencerelerimiz; karşılaştırılmaz.
+    /// </summary>
+    public bool Farkli(KucukGri diger, Rectangle r, IReadOnlyList<Rectangle> haric)
+    {
+        if (diger.Genislik != Genislik || diger.Yukseklik != Yukseklik) return true;
+        int a = EkranAraclari.KucukAdim;
+        int x0 = Math.Max(0, r.Left / a), y0 = Math.Max(0, r.Top / a);
+        int x1 = Math.Min(Genislik, r.Right / a), y1 = Math.Min(Yukseklik, r.Bottom / a);
+        int toplam = 0, degisen = 0;
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++)
+            {
+                bool atla = false;
+                foreach (var h in haric)
+                    if (h.Contains(x * a, y * a)) { atla = true; break; }
+                if (atla) continue;
+                toplam++;
+                if (Math.Abs(Piksel[y * Genislik + x] - diger.Piksel[y * Genislik + x]) > 24) degisen++;
+            }
+        return toplam > 0 && degisen >= Math.Max(8, toplam / 50); // ≥ %2
+    }
 }
 
 /// <summary>Ekran görüntüsü ve küçük özet (değişim algılama) yardımcıları.</summary>
@@ -218,23 +246,12 @@ internal static class EkranAraclari
     public const int OzetG = 32, OzetY = 24;
 
     /// <summary>
-    /// Ekran alanını yakalar. Windows 11'de önce Windows.Graphics.Capture (tam ekran oyunlarda da çalışır, görünmez);
-    /// Windows 10'da önce GDI, görüntü tamamen siyahsa (tam ekran oyun) Windows.Graphics.Capture. Hepsi olmazsa GDI sonucu.
+    /// Ekran alanını GDI ile yakalar (masaüstü kopyası; oyuna hiç dokunmaz).
+    /// Windows.Graphics.Capture BİLEREK kullanılmaz: tam ekran (exclusive) AION 2'de yakalama oturumu açılınca oyun
+    /// D3D12 "PresentInternal failed (80004004)" ile çöktü (3 Kasım, saniyesine kadar eşleşti). Tam ekranda GDI siyah
+    /// görürse çağıran kullanıcıya kenarlıksız pencere modunu önerir (bkz. Siyah).
     /// </summary>
     public static Bitmap Yakala(Rectangle ekranAlani)
-    {
-        if (EkranYakalayici.Kenarsiz && EkranYakalayici.Yakala(ekranAlani) is Bitmap wgc) return wgc;
-        var gdi = GdiYakala(ekranAlani);
-        if (!EkranYakalayici.Kenarsiz && EkranYakalayici.Destekleniyor && Siyah(gdi) &&
-            EkranYakalayici.Yakala(ekranAlani) is Bitmap yedek)
-        {
-            gdi.Dispose();
-            return yedek;
-        }
-        return gdi;
-    }
-
-    private static Bitmap GdiYakala(Rectangle ekranAlani)
     {
         var bmp = new Bitmap(Math.Max(1, ekranAlani.Width), Math.Max(1, ekranAlani.Height), PixelFormat.Format32bppPArgb);
         using var g = Graphics.FromImage(bmp);
@@ -242,18 +259,22 @@ internal static class EkranAraclari
         return bmp;
     }
 
-    /// <summary>Görüntü (seyrek örneklemeyle) tamamen siyah mı? GDI tam ekran DirectX oyununda böyle döner.</summary>
-    private static bool Siyah(Bitmap bmp)
+    /// <summary>
+    /// Görüntünün r bölgesi (seyrek örneklemeyle) tamamen siyah mı? GDI, tam ekran (exclusive) DirectX oyununda böyle döner.
+    /// </summary>
+    public static bool Siyah(Bitmap bmp, Rectangle r)
     {
-        var veri = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+        r.Intersect(new Rectangle(0, 0, bmp.Width, bmp.Height));
+        if (r.Width <= 0 || r.Height <= 0) return false;
+        var veri = bmp.LockBits(r, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
         try
         {
-            int adimX = Math.Max(1, bmp.Width / 64), adimY = Math.Max(1, bmp.Height / 64);
-            var satir = new byte[bmp.Width * 4];
-            for (int y = 0; y < bmp.Height; y += adimY)
+            int adimX = Math.Max(1, r.Width / 64), adimY = Math.Max(1, r.Height / 64);
+            var satir = new byte[r.Width * 4];
+            for (int y = 0; y < r.Height; y += adimY)
             {
                 System.Runtime.InteropServices.Marshal.Copy(veri.Scan0 + y * veri.Stride, satir, 0, satir.Length);
-                for (int x = 0; x < bmp.Width; x += adimX)
+                for (int x = 0; x < r.Width; x += adimX)
                 {
                     int j = x * 4;
                     if (satir[j] > 8 || satir[j + 1] > 8 || satir[j + 2] > 8) return false;
@@ -265,6 +286,34 @@ internal static class EkranAraclari
         {
             bmp.UnlockBits(veri);
         }
+    }
+
+    public const int KucukAdim = 4;
+
+    /// <summary>Görüntünün 1/4 ölçekli gri kopyası (nokta örnekleme; 1920×1080 → 480×270 = ~127 KB).</summary>
+    public static KucukGri KucukGriAl(Bitmap bmp)
+    {
+        int kw = Math.Max(1, bmp.Width / KucukAdim), kh = Math.Max(1, bmp.Height / KucukAdim);
+        var g = new byte[kw * kh];
+        var veri = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+        try
+        {
+            var satir = new byte[bmp.Width * 4];
+            for (int y = 0; y < kh; y++)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(veri.Scan0 + y * KucukAdim * veri.Stride, satir, 0, satir.Length);
+                for (int x = 0; x < kw; x++)
+                {
+                    int j = x * KucukAdim * 4;
+                    g[y * kw + x] = (byte)((satir[j] * 29 + satir[j + 1] * 150 + satir[j + 2] * 77) >> 8);
+                }
+            }
+        }
+        finally
+        {
+            bmp.UnlockBits(veri);
+        }
+        return new KucukGri(g, kw, kh);
     }
 
     /// <summary>Kendi pencerelerimizi görüntüde siyaha boyar (tooltip sanılmasınlar, özeti oynatmasınlar).</summary>

@@ -5,7 +5,7 @@ namespace AionMeter;
 
 /// <summary>
 /// ayarlar.ini: exe klasörüne yazılır; yazılamıyorsa %AppData%\aionmeter kullanılır.
-/// Konum fiziksel piksel, genişlik 96 DPI'deki mantıksal piksel olarak saklanır.
+/// Konum fiziksel piksel, genişlik 96 DPI ve %100 Boyut'taki mantıksal piksel olarak saklanır.
 /// </summary>
 internal sealed class Ayarlar
 {
@@ -25,6 +25,8 @@ internal sealed class Ayarlar
     public bool OtomatikGuncelleme = true;
     public bool AltCeviri = true;  // Alt ile açıklama çevirisi (model indirildiyse çalışır)
     public bool CevirmenDusukRam;  // false: hızlı (~1 GB yüklüyken), true: ~660 MB ama ~5× yavaş
+    public int Boyut = 100;        // overlay + detay paneli boyutu, yüzde (Windows ölçeğinin üstüne). Küçük ekranlı dizüstüler için
+    public static readonly int[] BoyutSecenekleri = { 70, 80, 90, 100, 110, 125 };
 
     public static string Klasor { get; } = KlasorBul();
     public static string Dosya => Path.Combine(Klasor, "ayarlar.ini");
@@ -77,6 +79,7 @@ internal sealed class Ayarlar
                     case "SadeceOyundayken": a.SadeceOyunda = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                     case "OtomatikGuncelleme": a.OtomatikGuncelleme = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                     case "AltCeviri": a.AltCeviri = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
+                    case "Boyut" when sayi: a.Boyut = Math.Clamp(n, 50, 150); break;
                     case "CevirmenDusukRam": a.CevirmenDusukRam = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                 }
             }
@@ -94,12 +97,13 @@ internal sealed class Ayarlar
         {
             var inv = CultureInfo.InvariantCulture;
             string metin =
-                "; AionMeter ayarları. Konum fiziksel piksel, Genislik 96 DPI'de piksel, Opaklik yüzde (30-100)." + Environment.NewLine +
+                "; AionMeter ayarları. Konum fiziksel piksel, Genislik 96 DPI ve %100 boyutta piksel, Opaklik ve Boyut yüzde." + Environment.NewLine +
                 "X=" + X.ToString(inv) + Environment.NewLine +
                 "Y=" + Y.ToString(inv) + Environment.NewLine +
                 "Genislik=" + Genislik.ToString(inv) + Environment.NewLine +
                 "Yukseklik=" + Yukseklik.ToString(inv) + Environment.NewLine +
                 "Opaklik=" + Opaklik.ToString(inv) + Environment.NewLine +
+                "Boyut=" + Boyut.ToString(inv) + Environment.NewLine +
                 "Kilitli=" + (Kilitli ? "1" : "0") + Environment.NewLine +
                 "OtomatikGuncelleme=" + (OtomatikGuncelleme ? "1" : "0") + Environment.NewLine +
                 "AltCeviri=" + (AltCeviri ? "1" : "0") + Environment.NewLine +

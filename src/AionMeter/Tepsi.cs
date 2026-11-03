@@ -6,7 +6,7 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _sadeceOyunda, _otoGuncelleme, _altCeviri, _modelIndir, _dusukRam;
+    private readonly ToolStripMenuItem _kilit, _goster, _sadeceOyunda, _otoGuncelleme, _altCeviri, _modelIndir, _dusukRam, _boyut;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
 
@@ -14,7 +14,7 @@ internal sealed class Tepsi : IDisposable
 
     public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sadeceOyundaDegistir, Action sifirla, Action detayim,
                  Action otoGuncellemeDegistir, Action bolgeCevir, Action altCeviriDegistir, Action modeliIndir,
-                 Action dusukRamDegistir, Action cikis)
+                 Action dusukRamDegistir, Action<int> boyutSec, Action cikis)
     {
         Menu = new ContextMenuStrip { ShowImageMargin = false };
         _kilit = new ToolStripMenuItem("Kilitle", null, (_, _) => kilitDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" };
@@ -27,10 +27,16 @@ internal sealed class Tepsi : IDisposable
         _altCeviri = new ToolStripMenuItem("Alt ile açıklama çevirisi", null, (_, _) => altCeviriDegistir());
         _modelIndir = new ToolStripMenuItem("Çeviri modelini indir", null, (_, _) => modeliIndir());
         _dusukRam = new ToolStripMenuItem("Düşük RAM modu (çevirmen)", null, (_, _) => dusukRamDegistir());
+        _boyut = new ToolStripMenuItem("Boyut");
+        foreach (int yuzde in Ayarlar.BoyutSecenekleri)
+        {
+            int y = yuzde;
+            _boyut.DropDownItems.Add(new ToolStripMenuItem("%" + y.ToString(Bicim.Tr), null, (_, _) => boyutSec(y)) { Tag = y });
+        }
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
         Menu.ShowCheckMargin = true;
         Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), bolge, _altCeviri, _dusukRam, _modelIndir,
-            new ToolStripSeparator(), _sadeceOyunda, _otoGuncelleme, new ToolStripSeparator(), cik });
+            new ToolStripSeparator(), _boyut, _sadeceOyunda, _otoGuncelleme, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon
@@ -44,8 +50,10 @@ internal sealed class Tepsi : IDisposable
     }
 
     public void Guncelle(bool kilitli, bool gorunur, bool sadeceOyunda, bool otoGuncelleme, bool altCeviri, bool modelHazir,
-                         bool dusukRam, bool modelIndiriliyor)
+                         bool dusukRam, bool modelIndiriliyor, int boyut)
     {
+        foreach (ToolStripItem o in _boyut.DropDownItems)
+            if (o is ToolStripMenuItem m) m.Checked = m.Tag is int y && y == boyut;
         _dusukRam.Checked = dusukRam;
         _altCeviri.Checked = altCeviri;
         _modelIndir.Text = modelIndiriliyor ? "Çeviri modeli indiriliyor…" : modelHazir ? "Çeviri modeli hazır" : "Çeviri modelini indir";

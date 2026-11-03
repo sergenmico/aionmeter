@@ -11,6 +11,9 @@ namespace AionMeter.Ceviri;
 /// 3) <c>beceriDosyasi</c>: beceri adları (skill_names.json), İLK KULLANIMDA okunur. Çok kelimeli adlar aynen korunur;
 ///    tek kelimelik adlar 2. kuralla; <c>yaygin</c> listesindeki sıradan sözcükler (Dash, Rest...) hiç korunmaz.
 /// 4) <c>terimler</c>: düz arayüz sözcükleri için sabit karşılık; sadece satırın TAMAMI terimse (ya da terim + sayı).
+/// 5) <c>statlar</c>: stat adları ("Damage Boost" → "Hasar Artışı"; kullanıcı kararı: statlar Türkçe, beceri/eşya/yer adları
+///    İngilizce). Cümlede yer tutucuyla korunur ve geri konurken TÜRKÇESİ yazılır (ek kesmesiz: "Hasar Artışını").
+///    Sadece stat(lar) + sayılardan oluşan satır modele gitmez: "Hasar Artışı (Damage Boost) +120".
 /// Korunan terim çeviriden önce yer tutucuya ("ZxA") çevrilir, sonra geri konur ve Türkçe eki uydurulur.
 /// {0}, %d ve sayılar doğrulanır: çeviride kaybolursa o cümle İngilizce gösterilir (bozuk çeviri yerine).
 /// </summary>
@@ -23,16 +26,20 @@ public sealed partial class OyunSozlugu
         public string? beceriDosyasi { get; set; }
         public List<string>? yaygin { get; set; }
         public Dictionary<string, string>? terimler { get; set; }
+        public Dictionary<string, string>? statlar { get; set; }
     }
 
     /// <summary>Çeviriye hazırlanmış cümle (iç kullanım).</summary>
     /// <param name="Degerler">Yer tutucu sırasıyla geri konacak değerler (oyun terimleri + {0}/%d).</param>
     /// <param name="OyunTerimleri">Sadece oyun terimleri (kullanıcıya "korunan" diye gösterilir).</param>
     /// <param name="Sayilar">Çeviride aynen bulunması gereken sayılar.</param>
-    internal sealed record Hazirlik(string ModelGirdisi, IReadOnlyList<string> Degerler, IReadOnlyList<string> OyunTerimleri, IReadOnlyList<string> Sayilar);
+    /// <param name="Turkce">Degerler ile aynı sırada: değer Türkçe bir stat adı mı (ek kesmesiz, Türkçe kurallarla eklenir).</param>
+    internal sealed record Hazirlik(string ModelGirdisi, IReadOnlyList<string> Degerler, IReadOnlyList<string> OyunTerimleri,
+        IReadOnlyList<string> Sayilar, IReadOnlyList<bool> Turkce);
 
     private readonly Lazy<TerimEslestirici> _eslestirici;
     private readonly Dictionary<string, string> _terimler; // anahtar büyük/küçük harf duyarsız
+    private readonly Dictionary<string, string> _statlar = new(StringComparer.Ordinal); // İngilizce stat adı → Türkçe
     private static readonly string YerTutucuOnEki = "Zx";
 
     /// <summary>Korunan terim sayısı (beceri adları dahil; ilk erişimde beceri dosyasını okur).</summary>
@@ -41,16 +48,23 @@ public sealed partial class OyunSozlugu
     /// <summary>Sözlük içeriğinin özeti: değişince eski önbellek kayıtları geçersiz sayılır.</summary>
     internal string Imza { get; }
 
-    public OyunSozlugu(IEnumerable<string> koru, IReadOnlyDictionary<string, string>? terimler = null)
-        : this(koru, [], null, [], terimler, "") { }
+    public OyunSozlugu(IEnumerable<string> koru, IReadOnlyDictionary<string, string>? terimler = null,
+        IReadOnlyDictionary<string, string>? statlar = null)
+        : this(koru, [], null, [], terimler, statlar, "") { }
 
     private OyunSozlugu(IEnumerable<string> koru, IEnumerable<string> koruBuyukHarf, string? beceriDosyasi,
-        IEnumerable<string> yaygin, IReadOnlyDictionary<string, string>? terimler, string imza)
+        IEnumerable<string> yaygin, IReadOnlyDictionary<string, string>? terimler, IReadOnlyDictionary<string, string>? statlar,
+        string imza)
     {
         var koruL = koru.ToList(); var buyukL = koruBuyukHarf.ToList(); var yayginK = yaygin.ToHashSet(StringComparer.Ordinal);
+        foreach (var (en, tr) in statlar ?? new Dictionary<string, string>())
+            if (!string.IsNullOrWhiteSpace(en) && !string.IsNullOrWhiteSpace(tr)) _statlar[en.Trim()] = tr.Trim();
         _eslestirici = new Lazy<TerimEslestirici>(() =>
         {
             var e = new TerimEslestirici();
+            // Statlar önce: tek sözcüklüler (Attack, Evasion) sıradan İngilizce sözcük olduğundan sadece Büyük Harfle cümle ortasında.
+            foreach (var t in _statlar.Keys)
+                e.Ekle(t, t.Contains(' ') ? TerimEslestirici.Kural.Her : TerimEslestirici.Kural.BuyukHarfOrtada);
             foreach (var t in koruL) if (!string.IsNullOrWhiteSpace(t)) e.Ekle(t, TerimEslestirici.Kural.Her);
             foreach (var t in buyukL) if (!string.IsNullOrWhiteSpace(t)) e.Ekle(t, TerimEslestirici.Kural.BuyukHarfOrtada);
             if (beceriDosyasi != null && File.Exists(beceriDosyasi)) BecerileriEkle(e, beceriDosyasi, yayginK);
@@ -73,7 +87,7 @@ public sealed partial class OyunSozlugu
         string? beceri = d.beceriDosyasi == null ? null
             : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(jsonYolu))!, d.beceriDosyasi));
         string imza = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json)))[..16];
-        return new OyunSozlugu(d.koru ?? [], d.koruBuyukHarf ?? [], beceri, d.yaygin ?? [], d.terimler, imza);
+        return new OyunSozlugu(d.koru ?? [], d.koruBuyukHarf ?? [], beceri, d.yaygin ?? [], d.terimler, d.statlar, imza);
     }
 
     /// <summary>
@@ -107,6 +121,50 @@ public sealed partial class OyunSozlugu
 
     private static string Normal(string s) => BoslukRegex().Replace(s.Trim(), " ");
 
+    /// <summary>
+    /// Satır sadece stat adlarından ve sayı/işaretlerden oluşuyorsa ("Critical Hit Resist +45", "Damage Boost 3.2%")
+    /// her stat "Türkçe (İngilizce)" yazılır, satırın gerisi aynen kalır; model çalışmaz. Değilse null.
+    /// </summary>
+    public string? StatSatiri(string satir)
+    {
+        if (_statlar.Count == 0) return null;
+        var bulunan = _eslestirici.Value.Bul(satir);
+        if (!bulunan.Any(e => _statlar.ContainsKey(e.Ad)))
+        {
+            // Satır başındaki tek sözcüklü stat ("Cooldown: 12s") eşleştiricide sadece satırın tamamıysa korunur: burada bakılır.
+            string t = satir.TrimStart();
+            string? bas = _statlar.Keys.Where(k => t.StartsWith(k, StringComparison.Ordinal) &&
+                                                   (t.Length == k.Length || !char.IsLetterOrDigit(t[k.Length])))
+                                       .MaxBy(k => k.Length);
+            if (bas is null) return null;
+            bulunan = [new TerimEslestirici.Eslesme(satir.Length - t.Length, bas.Length, bas)];
+        }
+        var sb = new System.Text.StringBuilder(satir.Length + 32);
+        int son = 0;
+        foreach (var e in bulunan)
+        {
+            string ara = satir[son..e.Bas];
+            if (HarfKaldi(ara) || !_statlar.TryGetValue(e.Ad, out var tr)) return null; // stat dışı sözcük var: cümle
+            sb.Append(ara).Append(tr).Append(" (").Append(e.Ad).Append(')');
+            son = e.Bas + e.Uzunluk;
+        }
+        string kuyruk = satir[son..];
+        if (HarfKaldi(kuyruk)) return null;
+        return sb.Append(kuyruk).ToString();
+    }
+
+    /// <summary>
+    /// Sayılar ("12s", "1m 30s"), kısa parantezler ("(Max 30)", "(PvP)") ve birim/etiketler (sec, HP, Max, Lv) çıkarılınca
+    /// harf kalıyor mu? Kalıyorsa satır stat satırı değil, cümledir.
+    /// </summary>
+    private static bool HarfKaldi(string s)
+    {
+        s = SayiBirimRegex().Replace(s, "");
+        s = KisaParantezRegex().Replace(s, "");
+        s = StatEtiketRegex().Replace(s, "");
+        return s.Any(char.IsLetter);
+    }
+
     /// <summary>Satırın tamamı sabit terimse (ya da "terim: +12%" biçimindeyse) Türkçesini döner, yoksa null.</summary>
     public string? SabitCeviri(string satir)
     {
@@ -121,15 +179,121 @@ public sealed partial class OyunSozlugu
         return null;
     }
 
+    /// <summary>
+    /// OCR iyelik kesmesini "l"/"I" okur: "Balaur's" → "Balaurls". Kök bir oyun terimiyse kesmeyi geri koyar
+    /// (sıradan sözcüklere dokunmaz: "Pearls", "Girls" aynen kalır).
+    /// </summary>
+    internal string OcrIyelikDuzelt(string cumle) =>
+        OcrIyelikRegex().Replace(cumle, m =>
+        {
+            string kok = m.Groups[1].Value;
+            foreach (var e in _eslestirici.Value.Bul(kok))
+                if (e.Bas == 0 && e.Uzunluk == kok.Length) return kok + "'s";
+            return m.Value;
+        });
+
+    [GeneratedRegex(@"\b(\p{Lu}\p{L}{3,})[lI]s\b")] private static partial Regex OcrIyelikRegex();
+
+    /// <summary>
+    /// Sözlükte olmayan eşya/görev adları: cümle ORTASINDA büyük harfle başlayan, art arda en az iki sözcük
+    /// ("... a Balaur's Wrathful Mind.", "... with Battle Enhance Scroll") ad sayılır ve korunur. Cümle başı sayılmaz
+    /// ("Used to craft" gibi). Sözlük eşleşmeleriyle çakışanlar atlanır; liste konuma göre sıralı kalır.
+    /// </summary>
+    /// <summary>
+    /// Tek sözcüklü stat fiil olarak kullanılmış mı ("When you Parry an attack", "You will Attack the enemy")?
+    /// Öncesinde özne/kip sözcüğü ya da ardından tanımlık varsa stat sayılmaz; model fiil olarak çevirir.
+    /// </summary>
+    private bool FiilOlarakStat(string girdi, TerimEslestirici.Eslesme e)
+    {
+        if (!_statlar.ContainsKey(e.Ad) || e.Ad.Contains(' ')) return false;
+        var once = OncekiSozcukRegex().Match(girdi[..e.Bas]);
+        if (once.Success && FiilOncesi.Contains(once.Groups[1].Value)) return true;
+        var sonra = SonrakiSozcukRegex().Match(girdi[(e.Bas + e.Uzunluk)..]);
+        return sonra.Success && sonra.Groups[1].Value is "a" or "an" or "the";
+    }
+
+    private static readonly HashSet<string> FiilOncesi = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "you", "to", "will", "can", "cannot", "may", "must", "should", "would", "could", "i", "we", "they",
+    };
+
+    [GeneratedRegex(@"\([^()]{0,15}\)")] private static partial Regex KisaParantezRegex();
+    [GeneratedRegex(@"\b(?:sec|secs|seconds?|min|mins|minutes?|Max|Min|HP|MP|DP|PvP|PvE|Lv|Lvl)\b")] private static partial Regex StatEtiketRegex();
+    [GeneratedRegex(@"(\p{L}+)\s+$")] private static partial Regex OncekiSozcukRegex();
+    [GeneratedRegex(@"^\s+(\p{L}+)")] private static partial Regex SonrakiSozcukRegex();
+
+    private void AdDizileriniEkle(string girdi, List<TerimEslestirici.Eslesme> bulunan)
+    {
+        foreach (Match m in AdDizisiRegex().Matches(girdi))
+        {
+            int bas = m.Index, uzunluk = m.Length;
+            int once = bas - 1;
+            while (once >= 0 && char.IsWhiteSpace(girdi[once])) once--;
+            // Cümle başı: satır başı ya da harf/rakam/virgül/kesme dışında bir işaretten sonra (". ", "• ", "» ", "1) ").
+            bool cumleBasi = once < 0 || !(char.IsLetterOrDigit(girdi[once]) || girdi[once] is ',' or '\'' or '’');
+            // Cümle başındaki sözcük (büyük harfi addan değil), baştaki fiil ("Grants Wrathful Mind") ve zamir/işlev sözcüğü
+            // ("If You Die, You Lose It") ada katılmaz; düşürülür, kalan en az iki sözcük yeniden denenir.
+            string parca = m.Value;
+            int kaydir = 0;
+            bool gecerli = true;
+            while (true)
+            {
+                string ilk = AdDizisiIlkSozcukRegex().Match(parca).Value;
+                if (!(cumleBasi || TurkceDuzelt.FiilMi(ilk) || AdOlamazIlk.Contains(ilk))) break;
+                cumleBasi = false;
+                var kalan = AdDizisiRegex().Match(parca, ilk.Length);
+                if (!kalan.Success) { gecerli = false; break; }
+                kaydir += kalan.Index;
+                parca = kalan.Value;
+            }
+            if (!gecerli) continue;
+            bas = m.Index + kaydir;
+            uzunluk = parca.Length;
+            var cakisan = bulunan.Where(e => e.Bas < bas + uzunluk && bas < e.Bas + e.Uzunluk).ToList();
+            if (cakisan.Count > 0)
+            {
+                // Adın içindeki stat ("Greater Attack Scroll", "Blessed Health Potion"): ad daha uzunsa ve çakışanların hepsi
+                // içindeki statlarsa ad kazanır (eşya adı İngilizce, bütün kalır). Aksi halde sözlük eşleşmesi kalır.
+                bool adKazanir = cakisan.All(e => _statlar.ContainsKey(e.Ad) && e.Bas >= bas && e.Bas + e.Uzunluk <= bas + uzunluk &&
+                                                  e.Uzunluk < uzunluk);
+                if (!adKazanir) continue;
+                foreach (var e in cakisan) bulunan.Remove(e);
+            }
+            bulunan.Add(new TerimEslestirici.Eslesme(bas, uzunluk, girdi.Substring(bas, uzunluk)));
+        }
+        bulunan.Sort((a, b) => a.Bas.CompareTo(b.Bas));
+    }
+
+    [GeneratedRegex(@"\d[\d.,]*\p{L}{0,3}\b")] private static partial Regex SayiBirimRegex();
+
+    /// <summary>Ad başlatamayan zamir/işlev sözcükleri (büyük harfle yazılmış cümle parçaları: "You Lose It").</summary>
+    private static readonly HashSet<string> AdOlamazIlk = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "I", "You", "Your", "We", "Our", "It", "Its", "They", "Their", "He", "His", "She", "Her", "This", "That", "These", "Those",
+        "If", "When", "Then", "And", "Or", "But", "Not", "No", "All", "Each", "Every", "Any", "Some", "There", "Here", "Is", "Are",
+        "Was", "Be", "Do", "Does", "To", "For", "With", "From", "By", "On", "In", "At", "Of", "The", "A", "An",
+    };
+
+    [GeneratedRegex(@"\b\p{Lu}\p{Ll}+(?:\s+(?:of\s+|the\s+)?\p{Lu}\p{Ll}+)+\b")] private static partial Regex AdDizisiRegex();
+    [GeneratedRegex(@"^\p{L}+")] private static partial Regex AdDizisiIlkSozcukRegex();
+
     internal Hazirlik Hazirla(string cumle)
     {
         var degerler = new List<string>();
+        var turkce = new List<bool>();
         var oyunTerimleri = new List<string>();
-        int Ekle(string d) { int i = degerler.IndexOf(d); if (i < 0) { degerler.Add(d); i = degerler.Count - 1; } return i; }
+        int Ekle(string d, bool tr = false)
+        {
+            int i = degerler.IndexOf(d);
+            if (i < 0) { degerler.Add(d); turkce.Add(tr); i = degerler.Count - 1; }
+            return i;
+        }
 
         // {0}, %d gibi biçim yer tutucuları: model "{" karakterini tanımıyor, yer tutucuyla korunur.
         string girdi = BicimRegex().Replace(cumle, m => YerTutucu(Ekle(m.Value)));
         var bulunan = _eslestirici.Value.Bul(girdi);
+        bulunan.RemoveAll(e => FiilOlarakStat(girdi, e));
+        AdDizileriniEkle(girdi, bulunan);
         if (bulunan.Count > 0)
         {
             var sb = new System.Text.StringBuilder(girdi.Length);
@@ -137,15 +301,17 @@ public sealed partial class OyunSozlugu
             foreach (var e in bulunan)
             {
                 sb.Append(girdi, son, e.Bas - son);
-                if (!oyunTerimleri.Contains(e.Ad)) oyunTerimleri.Add(e.Ad);
-                sb.Append(YerTutucu(Ekle(e.Ad)));
+                bool stat = _statlar.TryGetValue(e.Ad, out var statTr);
+                string deger = stat ? statTr! : e.Ad;
+                if (!oyunTerimleri.Contains(deger)) oyunTerimleri.Add(deger);
+                sb.Append(YerTutucu(Ekle(deger, stat)));
                 son = e.Bas + e.Uzunluk;
             }
             sb.Append(girdi, son, girdi.Length - son);
             girdi = sb.ToString();
         }
         var sayilar = SayiRegex().Matches(cumle).Select(m => m.Value).ToList();
-        return new Hazirlik(girdi, degerler, oyunTerimleri, sayilar);
+        return new Hazirlik(girdi, degerler, oyunTerimleri, sayilar, turkce);
     }
 
     /// <summary>
@@ -162,10 +328,12 @@ public sealed partial class OyunSozlugu
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!desen.IsMatch(ceviri)) return null;
             string deger = h.Degerler[i];
+            bool turkceDeger = h.Turkce[i];
             ceviri = desen.Replace(ceviri, m =>
             {
                 var ek = m.Groups["ek"];
                 if (!ek.Success) return deger;
+                if (turkceDeger) return ek.Value == "s" ? deger : TurkceEk.TurkceAdaEkle(deger, ek.Value.ToLowerInvariant());
                 if (ek.Value == "s") return deger + "s"; // model çoğulu çevirmeden bıraktı
                 string yeniEk = char.IsLetter(deger[^1]) ? TurkceEk.Uydur(deger, ek.Value.ToLowerInvariant()) : ek.Value;
                 return deger + "'" + yeniEk;

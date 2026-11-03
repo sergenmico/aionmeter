@@ -136,6 +136,101 @@ Bolum("Türkçe düzeltme testleri");
         string? c = tSoz.Tamamla(g, hz); bool ok = c == b; if (!ok) hata++;
         Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Tamamla: {g} → {c}");
     }
+    // Ad satırı (eşya/stat/görev adı İngilizce kalır) ↔ cümle (çevrilir). Oyun içi önbellek kayıtlarından ve denetimden.
+    foreach (var (g, ad) in new[]
+             {
+                 ("Ruinous Devourer (Greaves)", true), ("Soul Binding Rate", true), ("Back Defense", true), ("Wrathful Mind", true),
+                 ("Critical Hit Resist +45", true), ("Evasion Bon...", true), ("Unique Crafting Material", true), ("Battle Enhance Scroll", true),
+                 ("Obtained from Ancient Ruins", false), ("Dropped by Balaur Commander", false), ("Right-Click to Use", false),
+                 ("Click to Equip", false), ("Go to Sanctum", false), ("Talk to Kaisinel", false), ("Speak with Lord Kaisinel", false),
+                 ("Hunt Krall Warriors", false), ("Defeat 10 Balaur", false), ("Collect 5 Ancient Coins", false),
+                 ("Increases Attack Speed by 10%", false), ("Cannot Be Traded", false), ("Use", false), ("Wanted: immortal Gi", false),
+                 ("Recover stolen supplies from the bandits.", false), ("Deals 1,200 damage", false),
+             })
+    {
+        bool c = CevrimdisiCevirmen.AdSatiriMi(g), ok = c == ad; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Ad satırı: {g} → {c}");
+    }
+    var adSoz = new OyunSozlugu(["Balaur", "Sanctum", "Bow"]);
+    foreach (var (g, b) in new[]
+             {
+                 ("Materialized form of a Balaur's Wrathful Mind.", "Wrathful Mind"),
+                 ("Can be enhanced with Battle Enhance Scroll obtained from Monolith Resonance.", "Battle Enhance Scroll|Monolith Resonance"),
+                 ("• Grants Wrathful Mind for 30s.", "Wrathful Mind"),
+                 ("Use Battle Enhance Scroll to enhance it.", "Battle Enhance Scroll"),
+                 ("Press Alt Key to Show Cursor.", "Key to Show Cursor"[..0]), // ad yok: "Alt Key" tek başına cümle ortası ad; aşağıda ayrı
+                 ("If You Die, You Lose It.", ""),
+             })
+    {
+        var h = adSoz.Hazirla(g);
+        string c = string.Join("|", h.OyunTerimleri.Where(t => t != "Balaur" && t != "Sanctum"));
+        bool ok = g.StartsWith("Press") ? !c.Contains("Show Cursor") : c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Ad dizisi: {g} → [{c}]");
+    }
+    foreach (var (g, b) in new[] { ("a Balaurls Wrathful Mind", "a Balaur's Wrathful Mind"), ("BalaurIs gate", "Balaur's gate"),
+                                   ("Pearls and Bowls", "Pearls and Bowls"), ("Skills and Spells", "Skills and Spells") })
+    {
+        string c = adSoz.OcrIyelikDuzelt(g); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] OCR iyelik: {g} → {c}");
+    }
+    // Statlar Türkçe (kullanıcı kararı): stat satırı "Türkçe (İngilizce)", cümlede Türkçe ad + Türkçe ek.
+    var statSoz = new OyunSozlugu([], null, new Dictionary<string, string>
+    {
+        ["Damage Boost"] = "Hasar Artışı", ["Critical Hit Resist"] = "Kritik Vuruş Direnci", ["Cooldown"] = "Bekleme Süresi",
+        ["Attack"] = "Saldırı", ["Physical Attack"] = "Fiziksel Saldırı",
+    });
+    foreach (var (g, b) in new[]
+             {
+                 ("Damage Boost +120", "Hasar Artışı (Damage Boost) +120"),
+                 ("Critical Hit Resist +45", "Kritik Vuruş Direnci (Critical Hit Resist) +45"),
+                 ("Cooldown: 12s", "Bekleme Süresi (Cooldown): 12s"),
+                 ("Increases Damage Boost by 10%.", null),
+             })
+    {
+        string? c = statSoz.StatSatiri(g); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Stat satırı: {g} → {c ?? "(cümle)"}");
+    }
+    var hs = statSoz.Hazirla("Increases Damage Boost and Physical Attack by 10%.");
+    foreach (var (g, b) in new[] { ("ZxA'yı ve ZxB'yı %10 artırır.", "Hasar Artışını ve Fiziksel Saldırıyı %10 artırır."),
+                                   ("ZxA'nın ZxB'na %10", "Hasar Artışının Fiziksel Saldırıya %10"), ("ZxAnız ve ZxB %10", "Hasar Artışınız ve Fiziksel Saldırı %10") })
+    {
+        string? c = statSoz.Tamamla(g, hs); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Stat eki: {g} → {c}");
+    }
+    // Türkçe stat adına ek (denetimde bulunan bozuk biçimler dahil).
+    foreach (var (ad, ek, b) in new[]
+             {
+                 ("Savunma", "ını", "Savunmasını"), ("Fiziksel Saldırı", "ına", "Fiziksel Saldırısına"), ("Hasar Artışı", "ında", "Hasar Artışında"),
+                 ("Bekleme Süresi", "ından", "Bekleme Süresinden"), ("Savunma", "ınız", "Savunmanız"), ("Hasar Artışı", "ınız", "Hasar Artışınız"),
+                 ("Savunma", "ıyla", "Savunmasıyla"), ("Hasar Artışı", "ıyla", "Hasar Artışıyla"), ("Hasar Artışı", "lar", "Hasar Artışı"),
+                 ("Hasar Artışı", "larını", "Hasar Artışını"), ("İsabet", "ini", "İsabetini"), ("Kritik", "i", "Kritiği"), ("Direnç", "i", "Direnci"),
+                 ("Blok", "u", "Bloku"), ("Kaçınma", "yı", "Kaçınmayı"), ("Hasar Artışı", "ı", "Hasar Artışını"), ("Fiziksel Saldırı", "ı", "Fiziksel Saldırıyı"),
+             })
+    {
+        string c = TurkceEk.TurkceAdaEkle(ad, ek); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Türkçe ek: {ad} + {ek} → {c}");
+    }
+    var statSoz2 = new OyunSozlugu([], null, new Dictionary<string, string>
+    {
+        ["Attack"] = "Saldırı", ["Health"] = "Sağlık", ["Parry"] = "Savuşturma", ["Defense"] = "Savunma", ["Cooldown"] = "Bekleme Süresi",
+        ["Evasion Bonus"] = "Kaçınma Bonusu",
+    });
+    foreach (var (g, b) in new[]
+             {
+                 ("Obtain a Greater Attack Scroll from the merchant.", "Greater Attack Scroll"),
+                 ("Drink a Blessed Health Potion.", "Blessed Health Potion"),
+                 ("When you Parry an attack, deal damage.", ""),
+                 ("Increases Attack and Defense by 10%.", "Saldırı|Savunma"),
+             })
+    {
+        string c = string.Join("|", statSoz2.Hazirla(g).OyunTerimleri); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Stat/ad ayrımı: {g} → [{c}]");
+    }
+    foreach (var (g, b) in new[] { ("Evasion Bonus 15 (Max 30)", "Kaçınma Bonusu (Evasion Bonus) 15 (Max 30)"), ("Cooldown 10 sec", "Bekleme Süresi (Cooldown) 10 sec") })
+    {
+        string? c = statSoz2.StatSatiri(g); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Stat satırı: {g} → {c ?? "(cümle)"}");
+    }
     Console.WriteLine($"Kural testleri: {(hata == 0 ? "hepsi geçti" : hata + " hata")}");
 }
 

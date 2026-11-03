@@ -28,10 +28,23 @@ public static class TooltipBulucu
     internal static List<string>? Tani;
     internal static (bool[] Maske, int Bw, int Bh) TaniMaske;
 
-    public static Rectangle? Bul(Bitmap imlecCevresi, Point imlecGoreli)
+    public static Rectangle? Bul(Bitmap imlecCevresi, Point imlecGoreli) => Bul(imlecCevresi, imlecGoreli, AzamiUzaklik);
+
+    /// <param name="azamiUzaklik">İmleçten bundan uzak paneller kabul edilmez (px).</param>
+    public static Rectangle? Bul(Bitmap imlecCevresi, Point imlecGoreli, int azamiUzaklik)
+    {
+        var l = Adaylar(imlecCevresi, imlecGoreli, azamiUzaklik);
+        return l.Count > 0 ? l[0] : null;
+    }
+
+    /// <summary>
+    /// Tüm aday paneller, en iyiden kötüye (imlece yakın önce; imleci içerenler cezalı). Çağıran kendi kabul kurallarını
+    /// sırayla uygular: tek aday döndürmek, imleci içeren yakın bir pencerenin (çanta) uzaktaki asıl kutuyu gizlemesine yol açıyordu.
+    /// </summary>
+    public static List<Rectangle> Adaylar(Bitmap imlecCevresi, Point imlecGoreli, int azamiUzaklik)
     {
         int w = imlecCevresi.Width, h = imlecCevresi.Height;
-        if (w < EnKucukGenislik || h < EnKucukYukseklik) return null;
+        if (w < EnKucukGenislik || h < EnKucukYukseklik) return [];
         var y = Parlaklik(imlecCevresi);
 
         int bw = w / B, bh = h / B;
@@ -76,14 +89,16 @@ public static class TooltipBulucu
             if ((double)kutu.Width * kutu.Height > 0.6 * w * h) { Tani?.Add($"{kutu} çok büyük"); continue; }
             if (!YaziVar(y, w, kutu)) { Tani?.Add($"{kutu} yazı yok"); continue; }
             double uzak = Uzaklik(kutu, imlecGoreli);
-            if (uzak > AzamiUzaklik) { Tani?.Add($"{kutu} uzak {uzak:F0}"); continue; }
+            if (uzak > azamiUzaklik) { Tani?.Add($"{kutu} uzak {uzak:F0}"); continue; }
             // İmlecin İÇİNDE olduğu panel (ör. çanta penceresi) genelde tooltip değildir: ceza.
             double ceza = kutu.Contains(imlecGoreli) ? 60 : 0;
             adaylar.Add((kutu, -(uzak + ceza)));
             Tani?.Add($"{kutu} aday puan {-(uzak + ceza):F0}");
         }
-        if (adaylar.Count == 0) return null;
-        return Incelt(y, w, h, adaylar.MaxBy(a => a.Puan).Kutu);
+        adaylar.Sort((a, b) => b.Puan.CompareTo(a.Puan));
+        var sonuc = new List<Rectangle>(adaylar.Count);
+        foreach (var a in adaylar) sonuc.Add(Incelt(y, w, h, a.Kutu));
+        return sonuc;
 
         void Dene(int j, int k)
         {
@@ -313,7 +328,8 @@ public static class TooltipBulucu
     private static byte[] Parlaklik(Bitmap bmp)
     {
         int w = bmp.Width, h = bmp.Height;
-        Bitmap kaynak = bmp.PixelFormat == PixelFormat.Format32bppArgb || bmp.PixelFormat == PixelFormat.Format32bppRgb
+        // PArgb: ekran görüntüleri opaktır, baytlar Argb ile aynı (kopya gerekmez; tam ekranda 8–33 MB tasarruf).
+        Bitmap kaynak = bmp.PixelFormat is PixelFormat.Format32bppArgb or PixelFormat.Format32bppRgb or PixelFormat.Format32bppPArgb
             ? bmp : bmp.Clone(new Rectangle(0, 0, w, h), PixelFormat.Format32bppArgb);
         try
         {

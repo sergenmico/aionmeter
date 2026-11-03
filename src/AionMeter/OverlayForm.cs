@@ -114,7 +114,8 @@ internal sealed class OverlayForm : Form
     private readonly OnPlanIzleyici _onPlan = new();
     private readonly Cevirmen.CevirmenDenetleyici _cevirmen;
     private bool _kullaniciGizledi, _sadeceOyunda, _gorunur = true;
-    private float _olcek = 1f;
+    private float _olcek = 1f;    // DPI × kullanıcı boyutu (overlay ve detay paneli çizimi)
+    private float _dpiOlcek = 1f; // sadece DPI (çevirmen: piksel mesafeleri, panel yazıları)
 
     // Sürükleme / genişlik
     private bool _surukle, _kenardan, _tasindi;
@@ -148,7 +149,7 @@ internal sealed class OverlayForm : Form
 
         _zamanlayici = new System.Windows.Forms.Timer { Interval = 500 }; // 2 Hz
         _zamanlayici.Tick += (_, _) => Tick();
-        _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _olcek, BizimPencereler, m => _tepsi?.Bildir(m));
+        _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _dpiOlcek, BizimPencereler, m => _tepsi?.Bildir(m));
         _cevirmen.DurumDegisti += () =>
         {
             TepsiGuncelle();
@@ -217,7 +218,7 @@ internal sealed class OverlayForm : Form
         base.OnLoad(e);
 
         _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Detayim, OtoGuncellemeDegistir,
-            _cevirmen.BolgeCevir, _cevirmen.AltCeviriDegistir, _cevirmen.ModeliIndir, _cevirmen.DusukRamDegistir, Close);
+            _cevirmen.BolgeCevir, _cevirmen.AltCeviriDegistir, _cevirmen.ModeliIndir, _cevirmen.DusukRamDegistir, BoyutSec, Close);
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -294,7 +295,19 @@ internal sealed class OverlayForm : Form
     }
 
     private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _sadeceOyunda, _ayar.OtomatikGuncelleme,
-        _ayar.AltCeviri, _cevirmen.ModelHazir, _ayar.CevirmenDusukRam, _cevirmen.ModelIndiriliyor);
+        _ayar.AltCeviri, _cevirmen.ModelHazir, _ayar.CevirmenDusukRam, _cevirmen.ModelIndiriliyor, _ayar.Boyut);
+
+    /// <summary>Tepsi "Boyut": overlay ve detay paneli bu yüzdeyle çizilir (Windows ölçeğinin üstüne).</summary>
+    private void BoyutSec(int yuzde)
+    {
+        if (_ayar.Boyut == yuzde) return;
+        _ayar.Boyut = yuzde;
+        _ayar.Kaydet();
+        OlcekAyarla();
+        BoyutAyarla();
+        Invalidate();
+        TepsiGuncelle();
+    }
 
     /// <summary>Çevirmen için: bizim görünür pencerelerimiz (maskelenir, üstündeyken Alt sayaca aittir).</summary>
     private IEnumerable<Rectangle> BizimPencereler()
@@ -626,7 +639,8 @@ internal sealed class OverlayForm : Form
 
     private void OlcekAyarla()
     {
-        _olcek = Math.Max(1f, DeviceDpi / 96f);
+        _dpiOlcek = Math.Max(1f, DeviceDpi / 96f);
+        _olcek = _dpiOlcek * _ayar.Boyut / 100f;
         _yazi?.Dispose(); _yaziKalin?.Dispose(); _yaziDps?.Dispose(); _yaziKucuk?.Dispose();
         _yazi = new Font("Segoe UI", 12f * _olcek, FontStyle.Regular, GraphicsUnit.Pixel);
         _yaziKalin = new Font("Segoe UI", 12f * _olcek, FontStyle.Bold, GraphicsUnit.Pixel);
