@@ -17,7 +17,10 @@ internal sealed class CevirmenDenetleyici : IDisposable
     private const int DurmaMs = 400;          // imleç bu kadar durunca bakılır
     private const int DurmaToleransi = 3;     // px: bu kadar kıpırdama "durma" sayılır
     private const int HareketEsigi = 24;      // px: panel/iş bundan fazla kayınca kapanır
-    private const int OzetEsigi = 4;          // 0..255: imleç çevresi "aynı" sayılır
+    private const int HucreEsigi = 16;        // 0..255: bir özet hücresi "değişti" sayılır
+    private const int DegisenHucreEnAz = 6;   // 32×24 özette bu kadar hücre değiştiyse yeni bir şey açıldı (900×700'de ~6 hücre ≈ 160×90 px)
+    private const int YakinKutuPx = 80;       // imleci içermeyen kutunun en yakın kenarı bu kadar yakınsa (DPI ölçekli) açıklama sayılır
+    private const int TekrarSureMs = 10_000;  // aynı kutu bu süre içinde çevrildiyse ve paneli açıksa tekrar işlenmez
     private const int KaybolmaEsigi = 12;     // 0..255: açıklama kutusu kayboldu sayılır
     private const int KaybolmaKontrolTik = 20; // 50 ms × 20 = 1 sn'de bir
 
@@ -35,19 +38,54 @@ internal sealed class CevirmenDenetleyici : IDisposable
     private CancellationTokenSource? _bolgeIptal;
     private bool _bolgeSuruyor;
 
+    // Model indirme (Ctrl+Alt+T ve tepsi aynı anda iki pencere açmasın)
+    private bool _modelIndiriliyor;
+
     // Alt ile açıklama
     private CeviriPaneli? _aciklamaPaneli;
     private CancellationTokenSource? _aciklamaIptal;
-    private bool _altAktif, _buDurusIslendi, _isleniyor, _sonOzetVar, _sonDurustaKutuVardi;
+    private bool _altAktif, _buDurusIslendi, _isleniyor, _incelemeSuruyor;
     private Point _durma, _tetik;
     private long _durmaBas;
     private int _sayac;
     private Rectangle _kutuEkran;
+    private Task<Taban?>? _tabanGorevi;      // bu duruşun başındaki görüntü (arka planda alınır)
+    // Son çevrilen kutu (tekrar önleme)
+    private Rectangle _sonKutuEkran;
+    private readonly byte[] _sonKutuOzet = new byte[EkranAraclari.OzetG * EkranAraclari.OzetY];
+    private long _sonCeviriMs = long.MinValue;
+    private const int OzetBoyu = EkranAraclari.OzetG * EkranAraclari.OzetY;
+    // Sadece UI iş parçacığında (KutuKayboldumu) kullanılan tamponlar; arka plan işleri kendi tamponlarını kullanır.
     private readonly Bitmap _kucuk = new(EkranAraclari.OzetG, EkranAraclari.OzetY, PixelFormat.Format32bppArgb);
-    private readonly byte[] _tampon = new byte[EkranAraclari.OzetG * EkranAraclari.OzetY * 4];
-    private readonly byte[] _ozet = new byte[EkranAraclari.OzetG * EkranAraclari.OzetY];
-    private readonly byte[] _sonOzet = new byte[EkranAraclari.OzetG * EkranAraclari.OzetY];
-    private readonly byte[] _kutuOzet = new byte[EkranAraclari.OzetG * EkranAraclari.OzetY];
+    private readonly byte[] _tampon = new byte[OzetBoyu * 4];
+    private readonly byte[] _ozet = new byte[OzetBoyu];
+    private readonly byte[] _kutuOzet = new byte[OzetBoyu];
+
+    /// <summary>Duruşun başında (t0) yakalanan imleç çevresi: maskelenmiş görüntü + özet.</summary>
+    private sealed class Taban(Bitmap goruntu, Rectangle alan, byte[] ozet) : IDisposable
+    {
+        public Bitmap Goruntu { get; } = goruntu;
+        public Rectangle Alan { get; } = alan;
+        public byte[] Ozet { get; } = ozet;
+        public void Dispose() => Goruntu.Dispose();
+    }
+
+    /// <summary>Yeni beliren açıklama kutusu: ekran konumu, kırpılmış görüntüsü ve özeti.</summary>
+    private sealed record Bulgu(Rectangle KutuEkran, Bitmap Parca, byte[] KutuOzet);
+
+    /// <summary>Arka plan işleri için özet tamponları (her çağrıda küçük, kısa ömürlü).</summary>
+    private sealed class OzetAraci : IDisposable
+    {
+        public readonly Bitmap Kucuk = new(EkranAraclari.OzetG, EkranAraclari.OzetY, PixelFormat.Format32bppArgb);
+        public readonly byte[] Tampon = new byte[OzetBoyu * 4];
+        public byte[] Ozet(Bitmap b, Rectangle r)
+        {
+            var o = new byte[OzetBoyu];
+            EkranAraclari.Ozet(b, r, Kucuk, Tampon, o);
+            return o;
+        }
+        public void Dispose() => Kucuk.Dispose();
+    }
 
     /// <summary>Tepsi menüsü / Alt zamanlayıcısı yeniden değerlendirilsin.</summary>
     public event Action? DurumDegisti;
@@ -108,17 +146,36 @@ internal sealed class CevirmenDenetleyici : IDisposable
         DurumDegisti?.Invoke();
     }
 
+    /// <summary>Tepsi menüsü için: model penceresi açık/indiriyor.</summary>
+    public bool ModelIndiriliyor => _modelIndiriliyor;
+
     public void ModeliIndir()
     {
+        if (_modelIndiriliyor) return; // ikinci pencere açılmasın
         if (ModelHazir)
         {
             _bildir("Çeviri modeli zaten hazır.");
             return;
         }
-        if (ModelIndirmeFormu.Sor(Motor, Native.GetForegroundWindow()))
-        {
-            _modelHazir = true;
+        if (ModeliSor(Native.GetForegroundWindow()))
             _bildir("Çeviri modeli hazır. Ctrl+Alt+T ile bölge çevirebilir, oyunda Alt basılıyken açıklamaların üstüne gelebilirsin.");
+    }
+
+    /// <summary>Tek giriş noktası: aynı anda tek model penceresi. true = model hazır.</summary>
+    private bool ModeliSor(IntPtr onceki)
+    {
+        if (_modelIndiriliyor) return false;
+        _modelIndiriliyor = true;
+        DurumDegisti?.Invoke(); // tepsi: "Çeviri modeli indiriliyor…" (pasif)
+        try
+        {
+            if (!ModelIndirmeFormu.Sor(Motor, onceki)) return false;
+            _modelHazir = true;
+            return true;
+        }
+        finally
+        {
+            _modelIndiriliyor = false;
             DurumDegisti?.Invoke();
         }
     }
@@ -141,9 +198,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
         {
             if (!ModelHazir)
             {
-                if (!ModelIndirmeFormu.Sor(Motor, onceki)) return;
-                _modelHazir = true;
-                DurumDegisti?.Invoke();
+                if (!ModeliSor(onceki)) return;
                 // Pencere kapandıktan hemen sonra yakalanan ekranda hâlâ görünüyordu (DWM henüz çizmedi): kısa bekle.
                 await Task.Delay(250);
             }
@@ -250,8 +305,11 @@ internal sealed class CevirmenDenetleyici : IDisposable
     // ---------------- 2) Alt ile açıklama çevirisi ----------------
 
     /// <summary>
-    /// Overlay'in Alt zamanlayıcısından (50 ms) çağrılır. aktif = oyun önde + Alt basılı + imleç bizim pencerelerin dışında.
-    /// aktif değilken hiçbir iş yapılmaz (açık panel/iş varsa kapatılır).
+    /// Overlay'in Alt zamanlayıcısından (50 ms) çağrılır. aktif = oyun önde (her tikte bakılır) + sadece Alt basılı
+    /// (Ctrl/Shift/Win/Tab ile değil) + imleç bizim pencerelerin dışında. aktif değilken hiç iş yapılmaz.
+    /// Duruşun başında (t0) imleç çevresi arka planda yakalanır; t0+400 ms'de aynı yer tekrar yakalanıp karşılaştırılır:
+    /// sadece bu arada YENİ beliren (ya da içeriği değişen) bir kutu varsa OCR/çeviri yapılır. Sohbet, görev listesi,
+    /// envanter gibi sabit kutular böylece hiç işlenmez.
     /// </summary>
     public void AltDurumu(bool aktif, Point imlec)
     {
@@ -262,6 +320,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
                 if (_altAktif)
                 {
                     _altAktif = false;
+                    TabaniBirak();
                     AciklamayiKapat();
                 }
                 return;
@@ -295,6 +354,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
                 _durma = imlec;
                 _durmaBas = simdi;
                 _buDurusIslendi = false;
+                TabaniBirak();
                 return;
             }
 
@@ -303,9 +363,24 @@ internal sealed class CevirmenDenetleyici : IDisposable
                 if (!_isleniyor && _aciklamaPaneli is { Visible: true } && ++_sayac % KaybolmaKontrolTik == 0) KutuKayboldumu();
                 return;
             }
+            if (_tabanGorevi is null)
+            {
+                // t0: duruşun ilk tikinde taban görüntü (arka planda).
+                var alan = AlanHesapla(imlec);
+                if (alan.IsEmpty)
+                {
+                    _buDurusIslendi = true;
+                    return;
+                }
+                var maske = MaskeListesi();
+                _tabanGorevi = Task.Run(() => TabanAl(alan, maske));
+                return;
+            }
             if (simdi - _durmaBas < DurmaMs) return;
             _buDurusIslendi = true; // bir duruşta en fazla bir kez
-            _ = DurusuIsleAsync(imlec);
+            var gorev = _tabanGorevi;
+            _tabanGorevi = null;
+            _ = DurusuIsleAsync(imlec, gorev);
         }
         catch (Exception ex)
         {
@@ -315,6 +390,13 @@ internal sealed class CevirmenDenetleyici : IDisposable
 
     private static int Uzaklik(Point a, Point b) => Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
 
+    private static Rectangle AlanHesapla(Point imlec)
+    {
+        var ekran = Screen.FromPoint(imlec).Bounds;
+        var alan = Rectangle.Intersect(new Rectangle(imlec.X - 450, imlec.Y - 350, 900, 700), ekran);
+        return alan.Width < 60 || alan.Height < 40 ? Rectangle.Empty : alan;
+    }
+
     private IEnumerable<Rectangle> TumBizimPencereler()
     {
         foreach (var r in _overlayPencereleri()) yield return r;
@@ -322,51 +404,151 @@ internal sealed class CevirmenDenetleyici : IDisposable
         if (_aciklamaPaneli is { Visible: true }) yield return _aciklamaPaneli.Bounds;
     }
 
-    private async Task DurusuIsleAsync(Point imlec)
+    /// <summary>Arka plana verilecek maske (UI iş parçacığında, anlık kopya).</summary>
+    private List<Rectangle> MaskeListesi()
     {
-        _aciklamaIptal?.Cancel();
-        _aciklamaIptal?.Dispose();
-        var iptal = new CancellationTokenSource();
-        _aciklamaIptal = iptal;
-        _isleniyor = true;
-        _tetik = imlec;
-        Bitmap? kirpim = null, parca = null;
+        var l = new List<Rectangle>(4);
+        foreach (var r in TumBizimPencereler()) l.Add(r);
+        return l;
+    }
+
+    private void TabaniBirak()
+    {
+        var g = _tabanGorevi;
+        _tabanGorevi = null;
+        g?.ContinueWith(t =>
+        {
+            if (t.Status == TaskStatus.RanToCompletion) t.Result?.Dispose();
+        }, TaskScheduler.Default);
+    }
+
+    /// <summary>Arka planda: imleç çevresini yakala, kendi pencerelerimizi maskele, özetle.</summary>
+    private static Taban? TabanAl(Rectangle alan, List<Rectangle> maske)
+    {
         try
         {
-            var ekran = Screen.FromPoint(imlec).Bounds;
-            var alan = Rectangle.Intersect(new Rectangle(imlec.X - 450, imlec.Y - 350, 900, 700), ekran);
-            if (alan.Width < 60 || alan.Height < 40) return;
+            var bmp = EkranAraclari.Yakala(alan);
+            EkranAraclari.Maskele(bmp, alan, maske);
+            using var arac = new OzetAraci();
+            return new Taban(bmp, alan, arac.Ozet(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)));
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Açıklama taban görüntüsü", ex);
+            return null;
+        }
+    }
 
-            kirpim = EkranAraclari.Yakala(alan);
-            EkranAraclari.Maskele(kirpim, alan, TumBizimPencereler()); // kendi pencerelerimiz kutu sanılmasın
-            EkranAraclari.Ozet(kirpim, new Rectangle(0, 0, kirpim.Width, kirpim.Height), _kucuk, _tampon, _ozet);
-            bool ayni = _sonOzetVar && EkranAraclari.Fark(_ozet, _sonOzet) < OzetEsigi;
-            Array.Copy(_ozet, _sonOzet, _ozet.Length);
-            _sonOzetVar = true;
-            // Yeni bir kutu açılmadıysa (görüntü aynı) ve: zaten çevrili gösteriliyor ya da geçen sefer kutu yoktu → iş yok.
-            if (ayni && (_aciklamaPaneli is { Visible: true } || !_sonDurustaKutuVardi)) return;
+    /// <summary>
+    /// Arka planda: t0+400 ms'de aynı yeri yakalar ve imlece en yakın kutuyu bulur. Karar önce MEKÂNSAL:
+    ///  - kutu imleci İÇERİYORSA → yok (içinde gezinilen panel: sohbet, envanter, görev listesi, harita);
+    ///  - imleci içermiyor ve en yakın kenarı ~80 px (DPI ölçekli) içindeyse → açıklama: tabanda zaten olsa bile kabul
+    ///    (AION 2'de açıklama kutusu imleç daha gelirken anında açılır, tabana girer);
+    ///  - daha uzaktaysa → sadece duruştan sonra YENİ belirdiyse kabul (ikincil, zamansal sinyal).
+    /// </summary>
+    private static Bulgu? Incele(ICeviriMotoru motor, Taban taban, Point imlec, List<Rectangle> maske, float olcek)
+    {
+        var alan = taban.Alan;
+        using var simdi = EkranAraclari.Yakala(alan);
+        EkranAraclari.Maskele(simdi, alan, maske);
+        using var arac = new OzetAraci();
+        var tam = new Rectangle(0, 0, simdi.Width, simdi.Height);
 
-            var bulunan = Motor.TooltipBul(kirpim, new Point(imlec.X - alan.X, imlec.Y - alan.Y));
-            _sonDurustaKutuVardi = bulunan.HasValue;
-            if (bulunan is not Rectangle r) return;
-            r.Intersect(new Rectangle(0, 0, kirpim.Width, kirpim.Height));
-            if (r.Width < 40 || r.Height < 16) return;
-            var kutuEkran = new Rectangle(r.X + alan.X, r.Y + alan.Y, r.Width, r.Height);
-            foreach (var b in _overlayPencereleri())
-                if (b.IntersectsWith(kutuEkran)) return;
+        var imlecGoreli = new Point(imlec.X - alan.X, imlec.Y - alan.Y);
+        if (motor.TooltipBul(simdi, imlecGoreli) is not Rectangle r) return null;
+        r.Intersect(tam);
+        if (r.Width < 40 || r.Height < 16) return null;
+        if (r.Contains(imlecGoreli)) return null; // imleç kutunun içinde: açıklama değil, içinde gezinilen panel
 
-            parca = kirpim.Clone(r, PixelFormat.Format32bppPArgb);
-            _kutuEkran = kutuEkran;
-            EkranAraclari.Ozet(kirpim, r, _kucuk, _tampon, _kutuOzet);
-            kirpim.Dispose();
-            kirpim = null;
-            if (iptal.IsCancellationRequested) return;
+        if (KenarUzakligi(r, imlecGoreli) > YakinKutuPx * olcek)
+        {
+            // Uzak kutu: sadece duruştan sonra yeni belirdiyse.
+            if (EkranAraclari.DegisenHucre(arac.Ozet(simdi, tam), taban.Ozet, HucreEsigi) < DegisenHucreEnAz) return null;
+            if (motor.TooltipBul(taban.Goruntu, imlecGoreli) is Rectangle b && KesisimOrani(b, r) > 0.6f &&
+                EkranAraclari.Fark(arac.Ozet(taban.Goruntu, r), arac.Ozet(simdi, r)) < KaybolmaEsigi)
+                return null; // bu kutu duruştan önce de oradaydı
+        }
 
+        var parca = simdi.Clone(r, simdi.PixelFormat);
+        return new Bulgu(new Rectangle(r.X + alan.X, r.Y + alan.Y, r.Width, r.Height), parca, arac.Ozet(simdi, r));
+    }
+
+    /// <summary>Noktanın dikdörtgenin en yakın kenarına uzaklığı (içerideyse 0).</summary>
+    private static float KenarUzakligi(Rectangle r, Point p)
+    {
+        int dx = Math.Max(Math.Max(r.Left - p.X, 0), p.X - (r.Right - 1));
+        int dy = Math.Max(Math.Max(r.Top - p.Y, 0), p.Y - (r.Bottom - 1));
+        return MathF.Sqrt(dx * dx + dy * dy);
+    }
+
+    private static float KesisimOrani(Rectangle a, Rectangle b)
+    {
+        var k = Rectangle.Intersect(a, b);
+        if (k.IsEmpty) return 0f;
+        long ka = (long)k.Width * k.Height;
+        long bi = (long)a.Width * a.Height + (long)b.Width * b.Height - ka;
+        return bi <= 0 ? 0f : (float)ka / bi;
+    }
+
+    private async Task DurusuIsleAsync(Point imlec, Task<Taban?> tabanGorevi)
+    {
+        if (_incelemeSuruyor)
+        {
+            TabaniBirakGorev(tabanGorevi);
+            return;
+        }
+        _incelemeSuruyor = true;
+        Taban? taban = null;
+        Bulgu? bulgu = null;
+        try
+        {
+            taban = await tabanGorevi;
+            if (taban is null) return;
+            var motor = Motor;            // UI iş parçacığında oluşturulur
+            var maske = MaskeListesi();
+            var t = taban;
+            float olcek = _olcek();
+            bulgu = await Task.Run(() => Incele(motor, t, imlec, maske, olcek)); // yakalama + kutu bulma + kırpma arka planda
+            _incelemeSuruyor = false;
+
+            // Bu arada imleç kaydıysa ya da Alt bırakıldıysa sonuç bayat.
+            if (bulgu is null || !_altAktif || Uzaklik(Cursor.Position, imlec) > HareketEsigi) return;
+            foreach (var p in _overlayPencereleri())
+                if (p.IntersectsWith(bulgu.KutuEkran)) return;
+
+            // Tekrar önleme: aynı kutu (örtüşme > 0,8, içerik aynı) son 10 sn'de çevrildi ve paneli hâlâ açık → iş yok.
+            if (_aciklamaPaneli is { Visible: true } && Environment.TickCount64 - _sonCeviriMs < TekrarSureMs &&
+                KesisimOrani(_sonKutuEkran, bulgu.KutuEkran) > 0.8f &&
+                EkranAraclari.Fark(_sonKutuOzet, bulgu.KutuOzet) < KaybolmaEsigi)
+            {
+                _tetik = imlec; // panel bu duruşa aittir: kayma eşiği buradan ölçülsün
+                return;
+            }
+
+            // Yeni kutu KESİN: önceki işi ancak şimdi iptal et (aksi halde panel "Çevriliyor…"da kalırdı).
+            _aciklamaIptal?.Cancel();
+            _aciklamaIptal?.Dispose();
+            var iptal = new CancellationTokenSource();
+            _aciklamaIptal = iptal;
+            _isleniyor = true;
+            _tetik = imlec;
+            _kutuEkran = bulgu.KutuEkran;
+            Array.Copy(bulgu.KutuOzet, _kutuOzet, OzetBoyu);
+            _sonKutuEkran = bulgu.KutuEkran;
+            Array.Copy(bulgu.KutuOzet, _sonKutuOzet, OzetBoyu);
+            _sonCeviriMs = Environment.TickCount64;
             var panel = _aciklamaPaneli ??= new CeviriPaneli(kucuk: true, _olcek());
-            panel.Durum("Çevriliyor…", kutuEkran, yukleniyor: true);
-            var bmp = parca;
-            parca = null; // sahiplik CevirVeGosterAsync'te
-            await CevirVeGosterAsync(bmp, panel, kutuEkran, iptal.Token);
+            panel.Durum("Çevriliyor…", _kutuEkran, yukleniyor: true);
+            var bmp = bulgu.Parca;
+            bulgu = null; // sahiplik CevirVeGosterAsync'te
+            try
+            {
+                await CevirVeGosterAsync(bmp, panel, _kutuEkran, iptal.Token);
+            }
+            finally
+            {
+                if (ReferenceEquals(_aciklamaIptal, iptal)) _isleniyor = false;
+            }
         }
         catch (Exception ex)
         {
@@ -374,10 +556,23 @@ internal sealed class CevirmenDenetleyici : IDisposable
         }
         finally
         {
-            kirpim?.Dispose();
-            parca?.Dispose();
-            if (ReferenceEquals(_aciklamaIptal, iptal)) _isleniyor = false;
+            _incelemeSuruyor = false;
+            taban?.Dispose();
+            bulgu?.Parca.Dispose();
+            YetimYuklemeyiGizle();
         }
+    }
+
+    private static void TabaniBirakGorev(Task<Taban?> g) =>
+        g.ContinueWith(t =>
+        {
+            if (t.Status == TaskStatus.RanToCompletion) t.Result?.Dispose();
+        }, TaskScheduler.Default);
+
+    /// <summary>Panel "Çevriliyor…" durumunda ama ona ait canlı iş yoksa gizle (asılı kalmasın).</summary>
+    private void YetimYuklemeyiGizle()
+    {
+        if (!_isleniyor && _aciklamaPaneli is { Visible: true, Yukleniyor: true }) _aciklamaPaneli.Hide();
     }
 
     /// <summary>Panel açıkken saniyede bir: açıklama kutusu kaybolduysa paneli kapat.</summary>
@@ -410,6 +605,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
         _bolgeIptal?.Cancel();
         _aciklamaIptal?.Cancel();
         _aciklamaIptal?.Dispose();
+        TabaniBirak();
         SonucuKapat();
         _aciklamaPaneli?.Dispose();
         _aciklamaPaneli = null;

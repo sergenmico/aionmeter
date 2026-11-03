@@ -137,20 +137,36 @@ public static class TooltipBulucu
         while (sol < k.Left + B && SutunKoyu(sol) < 0.5) sol++;
         while (sag > k.Right - B && SutunKoyu(sag) < 0.5) sag--;
 
-        // Panel, altındaki sahne tonu değişince (ör. çanta penceresinin üstüne taşınca) blok düzeyinde bölünebilir:
-        // tam kenar boyunca koyu + pürüzsüz kaldıkça dışa doğru büyüt.
-        // Sınır: zemin tonu ±10 içinde kalmalı ve kutu en çok 1,5 katına çıkabilir (karanlık sahneye taşmasın).
+        // Bloklardan bulunan dikdörtgen panelin sadece bir parçası olabilir (sık yazılı gövde, soldaki ikon, ayraç çizgisi
+        // blokları bozar; ör. sadece başlık bandı). Bu yüzden kenarlar satır/sütun düzeyinde DIŞA doğru büyütülür:
+        // çizgi panel zemini gibiyse (bkz. CizgiPanel) kenar oraya taşınır; 3 piksele kadar uymayan çizgi atlanabilir
+        // (ince ayraç çizgisi, ikonun kenarı). Ton farklı ya da sahne gibi pürüzlü çizgide durur.
         int seviye = ZeminSeviyesi(y, w, Rectangle.FromLTRB(sol, ust, sag + 1, alt + 1));
-        int azamiG = (sag - sol + 1) * 3 / 2, azamiY = (alt - ust + 1) * 3 / 2;
-        bool PanelSatiri(int yy) => yy >= 0 && yy < h && alt - ust + 2 <= azamiY && CizgiPanel(Enumerable.Range(sol, sag - sol + 1).Select(x => y[yy * w + x]), seviye);
-        bool PanelSutunu(int xx) => xx >= 0 && xx < w && sag - sol + 2 <= azamiG && CizgiPanel(Enumerable.Range(ust, alt - ust + 1).Select(yy => y[yy * w + xx]), seviye);
-        for (bool degisti = true; degisti;)
+        bool PanelSatiri(int yy) => CizgiPanel(Enumerable.Range(sol, sag - sol + 1).Select(x => y[yy * w + x]), seviye);
+        bool PanelSutunu(int xx) => CizgiPanel(Enumerable.Range(ust, alt - ust + 1).Select(yy => y[yy * w + xx]), seviye);
+        static int Ilerle(int kenar, int yon, int sinir, Func<int, bool> panel)
         {
-            degisti = false;
-            if (PanelSatiri(ust - 1)) { ust--; degisti = true; }
-            if (PanelSatiri(alt + 1)) { alt++; degisti = true; }
-            if (PanelSutunu(sol - 1)) { sol--; degisti = true; }
-            if (PanelSutunu(sag + 1)) { sag++; degisti = true; }
+            while (true)
+            {
+                int bulunan = -1;
+                for (int d = 1; d <= 4; d++)
+                {
+                    int c = kenar + yon * d;
+                    if (c < 0 || c >= sinir) break;
+                    if (panel(c)) { bulunan = c; break; }
+                }
+                if (bulunan < 0) return kenar;
+                kenar = bulunan;
+            }
+        }
+        for (int tur = 0; tur < 4; tur++)
+        {
+            int u = Ilerle(ust, -1, h, PanelSatiri), a = Ilerle(alt, 1, h, PanelSatiri);
+            ust = u; alt = a;
+            int s0 = Ilerle(sol, -1, w, PanelSutunu), s1 = Ilerle(sag, 1, w, PanelSutunu);
+            bool degisti = s0 != sol || s1 != sag;
+            sol = s0; sag = s1;
+            if (!degisti) break;
         }
 
         // Çerçeve: hemen dışındaki 1–3 piksellik çizgi düz renkliyse (düşük sapma) kutuya kat.
@@ -163,24 +179,27 @@ public static class TooltipBulucu
         return Rectangle.FromLTRB(sol, ust, sag + 1, alt + 1);
     }
 
-    /// <summary>Piksel çizgisi panel zemini gibi mi: en az %60'ı koyu ve koyu komşular arası farkın medyanı ≤ 2.</summary>
+    /// <summary>
+    /// Piksel çizgisi panel zemini gibi mi: en az %30'u koyu (gerisi yazı/ikon olabilir), koyu piksellerin en az %75'i
+    /// panel tonunun ±8 yakınında (karanlık sahnede farklı tonlu parçalar elenir) ve koyu komşular arası farkın medyanı ≤ 2.
+    /// </summary>
     private static bool CizgiPanel(IEnumerable<byte> cizgi, int seviye)
     {
         Span<int> fark = stackalloc int[256];
-        Span<int> deger = stackalloc int[KoyuEsik];
-        int n = 0, koyu = 0, cift = 0, onceki = -1;
+        int n = 0, koyu = 0, yakin = 0, cift = 0, onceki = -1;
         foreach (var v in cizgi)
         {
             n++;
             if (v < KoyuEsik)
             {
-                koyu++; deger[v]++;
+                koyu++;
+                if (Math.Abs(v - seviye) <= 8) yakin++;
                 if (onceki >= 0) { fark[Math.Abs(v - onceki)]++; cift++; }
                 onceki = v;
             }
             else onceki = -1;
         }
-        return n > 0 && koyu >= n * 0.6 && cift > 0 && Medyan(fark, cift) <= 2 && Math.Abs(Medyan(deger, koyu) - seviye) <= 10;
+        return n > 0 && koyu >= n * 0.3 && yakin >= koyu * 0.75 && cift > 0 && Medyan(fark, cift) <= 2;
     }
 
     /// <summary>Kutudaki koyu piksellerin medyan parlaklığı.</summary>

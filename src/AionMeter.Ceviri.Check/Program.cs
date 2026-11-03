@@ -43,6 +43,102 @@ Console.WriteLine($"Hazır mı (önce): {ModelIndirici.HazirMi()}");
     Console.WriteLine($"İndirme/doğrulama süresi: {sw.Elapsed.TotalSeconds:F1} sn; hazır mı (sonra): {ModelIndirici.HazirMi()}");
 }
 
+// ---------------- Kural testleri (model gerekmez) ----------------
+Bolum("Türkçe düzeltme testleri");
+{
+    int hata = 0;
+    void Dene(string tr, string en, string beklenen)
+    {
+        string c = TurkceDuzelt.SenBicimi(tr, en);
+        bool ok = c == beklenen;
+        if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] {tr}  →  {c}{(ok ? "" : "   (beklenen: " + beklenen + ")")}");
+    }
+    Console.WriteLine("Değişmemesi gerekenler:");
+    (string Tr, string En)[] degismez =
+    [
+        ("Hazır olsun.", "Get it ready."),
+        ("Köprünün, kulenin ve kalenin anahtarlarını topla.", "Collect the keys of the bridge, the tower and the castle."),
+        ("Ölürsün.", "You will die."),
+        ("Bu senin kılıcın.", "This is your sword."),
+        ("Deniz kenarına git.", "Go to the seaside."),
+        ("Eminiz ki geri dönecekler.", "We are sure they will return."),
+        ("Yalnız gitme.", "Do not go alone."),
+        ("Kalenin kapısını açık tut.", "Keep the castle gate open."),
+        ("Ejderhanın inini bul.", "Find the dragon's lair."),
+        ("Bu, savaşın sonu.", "This is the end of the war."),
+        ("Herkes gelsin.", "Let everyone come."),
+        ("Gölün kıyısında bekle.", "Wait by the shore of the lake."),
+        ("Oyun başladı.", "The game has started."),
+        ("Koyun sürüsünü topla, sonra köyün girişine dön.", "Gather the sheep herd, then return to the village entrance."),
+        ("Ormanın derinliklerine gir ve kurdun inini bul.", "Enter the depths of the forest and find the wolf's den."),
+        ("Görevini tamamladın.", "You completed your quest."),
+        ("Hepiniz buraya gelin!", "All of you, come here!"),
+        ("Yemeğini ye ve uyu.", "Eat your meal and sleep."),
+        ("Kılıcın keskin olsun.", "May your sword be sharp."),
+        ("Bu iksiri iç, sonra kalenin kapısını aç.", "Drink this potion, then open the castle gate."),
+        ("Çantanız dolu, eşyaları satın.", "Your bag is full, sell the items."),
+    ];
+    foreach (var (tr, en) in degismez) Dene(tr, en, tr);
+    Console.WriteLine("Çevrilmesi gerekenler:");
+    Dene("Çantanız dolu.", "Your bag is full.", "Çantan dolu.");
+    Dene("Bu eşyayı alamazsınız.", "You cannot take this item.", "Bu eşyayı alamazsın.");
+    Dene("Seviyeniz yetersiz.", "Your level is too low.", "Seviyen yetersiz.");
+    Dene("İsterseniz bana yardım edebilirsiniz.", "If you want, you can help me.", "İstersen bana yardım edebilirsin.");
+    Dene("HP'niz düşük.", "Your HP is low.", "HP'n düşük.");
+    Dene("Muhafızları toplayın ve kapıyı tutun.", "Gather the guards and hold the gate.", "Muhafızları topla ve kapıyı tut.");
+    Dene("Yemekleri yiyin.", "Eat the food.", "Yemekleri ye.");
+    Dene("Balaur'u yenin ve 3 Abyss Points elde edin.", "Defeat the Balaur and obtain 3 Abyss Points.", "Balaur'u yen ve 3 Abyss Points elde et.");
+    Dene("Sizin için hazırladım.", "I prepared it for you.", "Senin için hazırladım.");
+    Dene("Envanterinizde yer yok.", "There is no room in your inventory.", "Envanterinde yer yok.");
+    Dene("Becerilerinizi seçebilirsiniz.", "You can choose your skills.", "Becerilerini seçebilirsin.");
+    Console.WriteLine("Diğer:");
+    foreach (var (g, b) in new[] { ("You have acquired 3,500 Kinah.", "You have obtained 3,500 Kinah."), ("Acquire 5 shards.", "Obtain 5 shards."),
+                 ("It acquires power.", "It obtains power.") })
+    {
+        string c = TurkceDuzelt.Once(g); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Once: {g} → {c}");
+    }
+    foreach (var (g, b) in new[] { ("wİth İsraphel İn İshalgen", "with Israphel In Ishalgen"), ("Morheİm", "Morheim") })
+    {
+        string c = Ocr.TurkceIDuzelt(g); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] OCR İ: {g} → {c}");
+    }
+    foreach (var (g, b) in new[]
+             {
+                 // düzeltilmeli
+                 ("and reduces its Physical Defense by 2096 for 6 seconds.", "and reduces its Physical Defense by 20% for 6 seconds."),
+                 ("Increases Critical Strike by 1096.", "Increases Critical Strike by 10%."),
+                 ("has a 1596 chance to stun the target", "has a 15% chance to stun the target"),
+                 ("reduces its Physical Defense by 2096", "reduces its Physical Defense by 20%"),
+                 ("Reduces damage taken by 209/6 for 5 seconds.", "Reduces damage taken by 20% for 5 seconds."),
+                 ("Increases attack speed by 5%o for 10 seconds.", "Increases attack speed by 5% for 10 seconds."),
+                 ("Increases healing by 10096 and", "Increases healing by 100% and"),
+                 // dokunulmamalı
+                 ("Restores 1096 HP.", "Restores 1096 HP."),
+                 ("Deals 296 damage to the target.", "Deals 296 damage to the target."),
+                 ("Magic Attack +896", "Magic Attack +896"),
+                 ("Reduces damage by 1096 HP for 5 seconds.", "Reduces damage by 1096 HP for 5 seconds."),
+                 ("Increases Attack by 12,096 for 5 seconds.", "Increases Attack by 12,096 for 5 seconds."),
+                 ("Level 96 required.", "Level 96 required."),
+                 ("In 1996 the gate closed.", "In 1996 the gate closed."),
+                 ("Increases Attack by 2,500.", "Increases Attack by 2,500."),
+                 ("Reduces cooldown by 396 seconds.", "Reduces cooldown by 396 seconds."),
+             })
+    {
+        string c = Ocr.YuzdeDuzelt(g); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] OCR %: {g} → {c}");
+    }
+    var tSoz = new OyunSozlugu(["Daeva", "Divine Heal"]);
+    var hz = tSoz.Hazirla("Daeva Divine Heal");
+    foreach (var (g, b) in new[] { ("ZxAZxB ile", "DaevaDivine Heal ile"), ("ZxA'yı ZxB'ya getir", "Daeva'yı Divine Heal'e getir"), ("ZxA ZxBDivine", "Daeva Divine HealDivine") })
+    {
+        string? c = tSoz.Tamamla(g, hz); bool ok = c == b; if (!ok) hata++;
+        Console.WriteLine($"  [{(ok ? "OK" : "HATA")}] Tamamla: {g} → {c}");
+    }
+    Console.WriteLine($"Kural testleri: {(hata == 0 ? "hepsi geçti" : hata + " hata")}");
+}
+
 // ---------------- Çeviri ----------------
 Bolum("Çeviri");
 var sozluk = OyunSozlugu.Yukle(Path.Combine(depoKoku, "assets", "aion2", "ceviri", "sozluk.json"));
@@ -157,6 +253,14 @@ using (var cevirmen = new CevrimdisiCevirmen(ModelIndirici.VarsayilanKlasor, soz
     Console.WriteLine($"[sıcak] ışın {cevirmen.Isin}: ortalama {sureler.Average():F0} ms, en kötü {sureler.Max():F0} ms, en iyi {sureler.Min():F0} ms ({sureler.Count} cümle)");
     Console.WriteLine($"RAM yüklü (çevirilerden sonra): {Ram()}");
 
+    Console.WriteLine("\nBeceri tooltip'i (OCR paragrafları → panel):");
+    foreach (var p in new[] { "Ruinous Blow", "Deals 1,250 damage to the target and reduces its Physical Defense by 20% for 6 seconds.",
+                 "Cast Time: Instant", "Cooldown: 12s" })
+    {
+        var s = await cevirmen.CevirAsync(p);
+        Console.WriteLine($"  {p}  →  {s.Turkce}   [korunan: {string.Join(", ", s.KorunanTerimler)}]");
+    }
+
     Console.WriteLine("\n'acquired' deneyi (ham model):");
     foreach (var c in new[] { "You have acquired 3,500 Kinah.", "You have obtained 3,500 Kinah." })
         Console.WriteLine($"  {c} → {cevirmen.HamCevir(c, 2)}");
@@ -238,6 +342,23 @@ using (var cevirmen = new CevrimdisiCevirmen(ModelIndirici.VarsayilanKlasor, soz
 onbellek.Dispose();
 using (var tekrar = new CeviriOnbellegi(onbellekYolu))
     Console.WriteLine($"Önbellek dosyası: {new FileInfo(onbellekYolu).Length:N0} bayt, yeniden okunan kayıt: {tekrar.Sayi}");
+Bolum("Kapanış ve eşzamanlılık");
+{
+    var swi = Stopwatch.StartNew();
+    await Task.WhenAll(ModelIndirici.IndirAsync(ModelIndirici.VarsayilanKlasor, null, CancellationToken.None),
+                       ModelIndirici.IndirAsync(ModelIndirici.VarsayilanKlasor, null, CancellationToken.None));
+    Console.WriteLine($"Aynı anda 2 IndirAsync (model hazır): ikisi de bitti, {swi.ElapsedMilliseconds} ms");
+
+    var c2 = new CevrimdisiCevirmen(ModelIndirici.VarsayilanKlasor, sozluk, new CeviriOnbellegi(Path.GetTempFileName()));
+    var gorev = c2.CevirAsync("This sentence is used for the shutdown test while the model loads.");
+    await Task.Delay(300); // model yükleniyor (iptal edilemez)
+    var swd = Stopwatch.StartNew();
+    c2.Dispose();
+    Console.WriteLine($"Yükleme sürerken Dispose(): {swd.ElapsedMilliseconds} ms içinde döndü");
+    try { await gorev; Console.WriteLine("Çeviri tamamlandı (iptal yetişmedi)"); }
+    catch (OperationCanceledException) { Console.WriteLine($"Çeviri iptal edildi ({swd.ElapsedMilliseconds} ms sonra)"); }
+    Console.WriteLine($"Yükleme bitince model bırakıldı mı: {!c2.Yuklu}; {Ram()}");
+}
 Console.WriteLine("BİTTİ");
 return 0;
 
@@ -348,6 +469,89 @@ static async Task TooltipDenetimi(string klasor)
     Console.WriteLine($"Süre: ortalama {sureler.Average():F1} ms, en kötü {sureler.Max():F1} ms (640x480 kesit)");
     if (ocrSayi > 0) Console.WriteLine($"Bulunan kutudan OCR karakter doğruluğu: %{ocrToplam / ocrSayi * 100:F1} ({ocrSayi} kutu)");
     foreach (var h in hatalar) Console.WriteLine("  " + h);
+    await BeceriTooltipDenetimi(klasor);
+}
+
+// Gerçek motorla UI testinde sorun çıkan düzen: altın başlık + açık renk 3 satır gövde (+ çerçeve/ikon, + istatistik satırları).
+static async Task BeceriTooltipDenetimi(string klasor)
+{
+    Bolum("Beceri tooltip'i (altın başlık + gövde; çerçeve/ikon; istatistik satırları)");
+    string[] govde = ["Deals 1,250 damage to the target", "and reduces its Physical Defense", "by 20% for 6 seconds."];
+    string[] stat = ["Cast Time: Instant", "Cooldown: 12s"];
+    var r = new Random(77);
+    int dogru = 0, toplam = 0, tamMetin = 0;
+    foreach (var (ad, cerceve, ikon, statVar, sik) in new[] { ("düz", false, false, false, false), ("çerçeve+ikon", true, true, false, false),
+                 ("çerçeve+ikon+istatistik", true, true, true, false), ("düz+istatistik", false, false, true, false),
+                 ("sık gövde (11pt, 15px)", false, false, false, true), ("sık gövde+ikon+çerçeve", true, true, true, true) })
+        foreach (var sahne in new[] { "aydınlık", "karanlık", "çanta" })
+        {
+            var (bmp, imlec, gk) = BeceriTooltipCiz(r, govde, statVar ? stat : [], cerceve, ikon, sahne, sik);
+            TooltipBulucu.Tani = [];
+            var b = TooltipBulucu.Bul(bmp, imlec);
+            double iou = b is { } bb ? Iou(bb, gk) : 0;
+            toplam++; if (iou >= 0.8) dogru++;
+            string paragraflar = "";
+            if (b is { } kutu)
+            {
+                using var kesit = bmp.Clone(Rectangle.Intersect(kutu, new Rectangle(0, 0, bmp.Width, bmp.Height)), PixelFormat.Format32bppArgb);
+                var satirlar = await Ocr.OkuAsync(kesit);
+                var p = Paragraf.Birlestir(satirlar);
+                paragraflar = string.Join(" | ", p);
+                if (p.Any(x => x.StartsWith("Ruinous Blow")) && p.Any(x => x.Contains("Deals") && x.Contains("seconds"))) tamMetin++;
+            }
+            Console.WriteLine($"  {ad,-24} {sahne,-9} IoU {iou:F2} gerçek={gk} bulunan={b?.ToString() ?? "yok"}");
+            Console.WriteLine($"      paragraflar: {paragraflar}");
+            if (iou < 0.8) Console.WriteLine("      tanı: " + string.Join(" | ", TooltipBulucu.Tani.Take(5)));
+            if (sahne == "aydınlık") bmp.Save(Path.Combine(klasor, $"beceri_tooltip_{new string(ad.Where(char.IsLetterOrDigit).ToArray())}.png"), ImageFormat.Png);
+            bmp.Dispose();
+        }
+    TooltipBulucu.Tani = null;
+    Console.WriteLine($"Beceri tooltip'i: kutu {dogru}/{toplam} doğru (IoU ≥ 0,8); başlık + tam gövde paragrafı: {tamMetin}/{toplam}");
+}
+
+static (Bitmap, Point, Rectangle) BeceriTooltipCiz(Random r, string[] govde, string[] stat, bool cerceve, bool ikon, string sahne, bool sik)
+{
+    const int W = 640, H = 480, kw = 300, kh0 = 150;
+    var bmp = new Bitmap(W, H, PixelFormat.Format32bppArgb);
+    using var g = Graphics.FromImage(bmp);
+    Sahne(g, r, W, H, sahne == "karanlık" ? 0.35 : 1.0);
+    var imlec = new Point(r.Next(140, 260), r.Next(110, 180));
+    if (sahne == "çanta")
+    {
+        var panel = new Rectangle(imlec.X - 120, imlec.Y - 90, 250, 200);
+        using (var pb = new SolidBrush(Color.FromArgb(225, 18, 20, 26))) g.FillRectangle(pb, panel);
+        for (int gy = panel.Top + 8; gy + 36 < panel.Bottom; gy += 42)
+            for (int gx = panel.Left + 8; gx + 36 < panel.Right; gx += 42)
+                using (var ib = new SolidBrush(Color.FromArgb(r.Next(256), r.Next(256), r.Next(256)))) g.FillRectangle(ib, gx, gy, 36, 36);
+    }
+    int kh = kh0 + stat.Length * 20;
+    var kutu = new Rectangle(imlec.X + 24, imlec.Y + 20, kw, kh);
+    g.SmoothingMode = SmoothingMode.AntiAlias;
+    using (var yol = Yuvarlak(kutu, 5))
+    {
+        using var zemin = new SolidBrush(Color.FromArgb(236, 14, 16, 24));
+        g.FillPath(zemin, yol);
+        if (cerceve) using (var p = new Pen(Color.FromArgb(140, 120, 80), 1)) g.DrawPath(p, yol);
+    }
+    int x = kutu.X + 12;
+    if (ikon)
+    {
+        using var ib = new LinearGradientBrush(new Rectangle(kutu.X + 10, kutu.Y + 10, 40, 40), Color.OrangeRed, Color.Gold, 45f);
+        g.FillRectangle(ib, kutu.X + 10, kutu.Y + 10, 40, 40);
+        x = kutu.X + 60;
+    }
+    g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+    using var baslik = new Font("Segoe UI", 12, FontStyle.Bold, GraphicsUnit.Point);
+    using var yazi = new Font("Segoe UI", sik ? 11 : 10, FontStyle.Regular, GraphicsUnit.Point);
+    int aralik = sik ? 15 : 19;
+    using (var b = new SolidBrush(Color.FromArgb(255, 200, 80))) g.DrawString("Ruinous Blow", baslik, b, x, kutu.Y + (ikon ? 18 : 10));
+    float y = kutu.Y + (ikon ? 58 : 40);
+    using (var b = new SolidBrush(Color.FromArgb(225, 225, 220)))
+        foreach (var s in govde) { g.DrawString(s, yazi, b, kutu.X + 12, y); y += aralik; }
+    y += 6;
+    using (var b = new SolidBrush(Color.FromArgb(150, 200, 255)))
+        foreach (var s in stat) { g.DrawString(s, yazi, b, kutu.X + 12, y); y += aralik; }
+    return (bmp, imlec, kutu);
 }
 
 static List<(string Ad, string Gercek, Bitmap Bmp)> OcrOrnekleri()

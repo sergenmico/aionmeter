@@ -12,7 +12,7 @@ namespace AionMeter.Ceviri;
 public sealed record OcrSatir(string Metin, Rectangle Kutu);
 
 /// <summary>Windows'un yerleşik, çevrimdışı OCR'ı (Windows.Media.Ocr). Ek indirme yok; İngilizce OCR dil paketi gerekir.</summary>
-public static class Ocr
+public static partial class Ocr
 {
     private static OcrEngine? _motor;
     private static readonly object _kilit = new();
@@ -72,11 +72,41 @@ public static class Ocr
             // Satır metnini kelimelerden kur: OCR noktalamayı bazen ayrı kelime verir.
             string metin = SatirMetni(satir);
             // İngilizce OCR paketi yoksa Türkçe tanıyıcı küçük "i"yi "İ" okuyor ("wİth"): İngilizce metinde düzelt.
-            if (!ingilizce) metin = metin.Replace('İ', 'i').Replace('ı', 'i');
+            if (!ingilizce) metin = TurkceIDuzelt(metin);
+            metin = YuzdeDuzelt(metin);
             satirlar.Add(new OcrSatir(metin,
                 Rectangle.Round(new RectangleF(x0 / olcek, y0 / olcek, (x1 - x0) / olcek, (y1 - y0) / olcek))));
         }
         return satirlar;
+    }
+
+    /// <summary>
+    /// OCR "%" işaretini sık sık "96" / "9/6" / "%o" / "0/0" okuyor ("by 20%" → "by 2096"). DAR düzeltme: sayı 1–100 ve
+    /// (a) hemen önünde by / increases / reduces / decreases / up to VE hemen ardında for / of / to / and, noktalama ya da
+    /// satır sonu varsa, ya da (b) hemen ardında "chance" varsa → "N%". Diğer durumlara dokunulmaz ("Restores 1096 HP",
+    /// "Deals 296 damage", "+896" gibi gerçek sayılar korunur). Bilinen belirsizlik: gerçekten "by 196 for" yazıyorsa "1%" olur.
+    /// </summary>
+    internal static string YuzdeDuzelt(string metin)
+    {
+        metin = YuzdeOnekRegex().Replace(metin, m => m.Groups["n"].Value + "%");
+        return YuzdeSansRegex().Replace(metin, m => m.Groups["n"].Value + "%");
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<=\b(?:by|increases|reduces|decreases|increase|reduce|up to)\s+)(?<![\d.,])(?<n>100|[1-9]\d?)(?:96|9/6|%o|°/o|0/0)(?![\d%])(?=\s+(?:for|of|to|and)\b|\s*[.,;)]|\s*$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex YuzdeOnekRegex();
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![\d.,])\b(?<n>100|[1-9]\d?)(?:96|9/6|%o|°/o|0/0)(?![\d%])(?=\s+chance\b)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex YuzdeSansRegex();
+
+    /// <summary>Türkçe tanıyıcının "İ"si: sözcük başında büyük "I" (Israphel), içinde küçük "i" (wİth → with); "ı" → "i".</summary>
+    internal static string TurkceIDuzelt(string metin)
+    {
+        var c = metin.ToCharArray();
+        for (int i = 0; i < c.Length; i++)
+        {
+            if (c[i] == 'İ') c[i] = i == 0 || !char.IsLetter(c[i - 1]) ? 'I' : 'i';
+            else if (c[i] == 'ı') c[i] = 'i';
+        }
+        return new string(c);
     }
 
     private static string SatirMetni(OcrLine satir)

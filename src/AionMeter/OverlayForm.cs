@@ -294,7 +294,7 @@ internal sealed class OverlayForm : Form
     }
 
     private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _sadeceOyunda, _ayar.OtomatikGuncelleme,
-        _ayar.AltCeviri, _cevirmen.ModelHazir, _ayar.CevirmenDusukRam);
+        _ayar.AltCeviri, _cevirmen.ModelHazir, _ayar.CevirmenDusukRam, _cevirmen.ModelIndiriliyor);
 
     /// <summary>Çevirmen için: bizim görünür pencerelerimiz (maskelenir, üstündeyken Alt sayaca aittir).</summary>
     private IEnumerable<Rectangle> BizimPencereler()
@@ -1009,13 +1009,19 @@ internal sealed class OverlayForm : Form
                 AltBirakildi();
             }
 
-            _cevirmen.AltDurumu(basili && !bizimUstunde, imlec);
+            // Çevirmen: sadece Alt (Ctrl/Shift/Win/Tab ile birlikte değil: kısayol, Alt+Tab) ve oyun ŞU AN önde (önbellek değil).
+            bool digerTus = TusBasili(Native.VK_CONTROL) || TusBasili(Native.VK_SHIFT) || TusBasili(Native.VK_LWIN) ||
+                            TusBasili(Native.VK_RWIN) || TusBasili(Native.VK_TAB);
+            bool cevirmenAktif = basili && !digerTus && !bizimUstunde && (_demo || _onPlan.OyunOnde());
+            _cevirmen.AltDurumu(cevirmenAktif, imlec);
         }
         catch (Exception ex)
         {
             HataLog.Yaz("Alt izleme", ex);
         }
     }
+
+    private static bool TusBasili(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
 
     private void AltBirakildi()
     {

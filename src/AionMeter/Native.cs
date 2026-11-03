@@ -98,6 +98,7 @@ internal static class Native
     public static extern uint GetCurrentThreadId();
 
     public const int VK_MENU = 0x12; // Alt
+    public const int VK_TAB = 0x09, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
 
     /// <summary>Tuşun anlık durumu (yoklama). Klavye kancası değildir.</summary>
     [DllImport("user32.dll")]

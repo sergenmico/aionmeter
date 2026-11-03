@@ -44,12 +44,12 @@ internal sealed class Tepsi : IDisposable
     }
 
     public void Guncelle(bool kilitli, bool gorunur, bool sadeceOyunda, bool otoGuncelleme, bool altCeviri, bool modelHazir,
-                         bool dusukRam)
+                         bool dusukRam, bool modelIndiriliyor)
     {
         _dusukRam.Checked = dusukRam;
         _altCeviri.Checked = altCeviri;
-        _modelIndir.Text = modelHazir ? "Çeviri modeli hazır" : "Çeviri modelini indir";
-        _modelIndir.Enabled = !modelHazir;
+        _modelIndir.Text = modelIndiriliyor ? "Çeviri modeli indiriliyor…" : modelHazir ? "Çeviri modeli hazır" : "Çeviri modelini indir";
+        _modelIndir.Enabled = !modelHazir && !modelIndiriliyor;
         _sadeceOyunda.Checked = sadeceOyunda;
         _otoGuncelleme.Checked = otoGuncelleme;
         _kilit.Text = kilitli ? "Kilidi Aç" : "Kilitle";

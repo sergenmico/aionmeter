@@ -158,7 +158,7 @@ public sealed partial class OyunSozlugu
         {
             // Model araya boşluk koyabilir ya da harf büyüklüğünü değiştirebilir: esnek eşleştir. Ardından gelen ek yakalanır.
             var yt = YerTutucu(i);
-            var desen = new Regex(string.Join(@"\s?", yt.Select(c => Regex.Escape(c.ToString()))) + @"(?:['’]?(?<ek>\p{Ll}+))?(?![\p{L}\p{N}])",
+            var desen = new Regex(string.Join(@"\s?", yt.Select(c => Regex.Escape(c.ToString()))) + @"(?-i:(?:['’]?(?<ek>\p{Ll}+))?(?![\p{Ll}\p{N}]))",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!desen.IsMatch(ceviri)) return null;
             string deger = h.Degerler[i];

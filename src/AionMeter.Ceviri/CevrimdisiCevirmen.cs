@@ -29,7 +29,8 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
     private readonly SemaphoreSlim _kilit = new(1, 1);
     private readonly Timer _bosZamanlayici;
     private MarianModel? _model;
-    private volatile bool _atildi;
+    private volatile bool _atildi, _bosaltIstegi;
+    private readonly CancellationTokenSource _kapanis = new();
 
     /// <summary>Işın genişliği (1 = açgözlü, en hızlı). Varsayılan 2: ölçümde kalite/hız dengesi.</summary>
     public int Isin { get; set; } = 2;
@@ -62,10 +63,12 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
         var sw = Stopwatch.StartNew();
         if (string.IsNullOrWhiteSpace(ingilizce)) return new(ingilizce ?? "", "", [], true, sw.Elapsed);
 
+        using var bagli = CancellationTokenSource.CreateLinkedTokenSource(ct, _kapanis.Token);
+        ct = bagli.Token;
         await _kilit.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _bosZamanlayici.Change(Timeout.Infinite, Timeout.Infinite);
+            ZamanlayiciKur(Timeout.InfiniteTimeSpan);
             return await Task.Run(() =>
             {
                 var korunan = new List<string>();
@@ -88,9 +91,20 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
         }
         finally
         {
-            if (!_atildi) _bosZamanlayici.Change(BostaBekleme, Timeout.InfiniteTimeSpan);
-            _kilit.Release();
+            try
+            {
+                // Çeviri sürerken Dispose/Bosalt istendiyse modeli şimdi bırak (onlar UI'ı bekletmedi).
+                if (_atildi || _bosaltIstegi) { _bosaltIstegi = false; BellektenAt(); }
+                else ZamanlayiciKur(BostaBekleme);
+            }
+            finally { _kilit.Release(); }
         }
+    }
+
+    private void ZamanlayiciKur(TimeSpan sure)
+    {
+        try { _bosZamanlayici.Change(sure, Timeout.InfiniteTimeSpan); }
+        catch (ObjectDisposedException) { }
     }
 
     private string CumleCevir(string cumle, List<string> korunan, ref bool modelCalisti, CancellationToken ct)
@@ -105,16 +119,23 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
         _model ??= Yukle();
         string ham = _model.Cevir(TurkceDuzelt.Once(h.ModelGirdisi), Isin, ct);
         string? tr = _sozluk.Tamamla(ham, h);
-        if (tr == null) return cumle; // korunan terim/sayı kayboldu: bozuk çeviri yerine İngilizce
+        if (tr == null)
+        {
+            // Korunan terim/sayı kayboldu: bozuk çeviri yerine İngilizce. Bu da önbelleğe girer (her üzerine gelişte
+            // model yeniden çalışmasın); önbellek sözlük/kural sürümüyle etiketli, sürüm değişince temizlenir.
+            _onbellek.Ekle(cumle, cumle);
+            return cumle;
+        }
         if (SenBicimi) tr = TurkceDuzelt.SenBicimi(tr, cumle);
         _onbellek.Ekle(cumle, tr);
         return tr;
     }
 
     /// <summary>Modeli bellekten atar (ONNX oturumları kapanır). Sonraki çeviride yeniden yüklenir.</summary>
+    /// <remarks>UI iş parçacığını en çok ~200 ms bekletir: o sırada çeviri/yükleme sürüyorsa boşaltma, çeviri bitince yapılır.</remarks>
     public void Bosalt()
     {
-        _kilit.Wait();
+        if (!_kilit.Wait(200)) { _bosaltIstegi = true; return; }
         try { BellektenAt(); }
         finally { _kilit.Release(); }
     }
@@ -136,13 +157,18 @@ public sealed partial class CevrimdisiCevirmen : ICevirmen
         GC.Collect();
     }
 
+    /// <remarks>
+    /// Bloklamaz (en çok ~200 ms): çeviri sürüyorsa iptal edilir; model yükleniyorsa (iptal edilemez) yükleme bitince
+    /// çevirinin finally bloğu modeli bırakır.
+    /// </remarks>
     public void Dispose()
     {
         if (_atildi) return;
         _atildi = true;
+        try { _kapanis.Cancel(); } catch (ObjectDisposedException) { }
         _bosZamanlayici.Dispose();
         Bosalt();
-        _onbellek.Kaydet();
+        try { _onbellek.Kaydet(); } catch (ObjectDisposedException) { }
     }
 
     private MarianModel Yukle()

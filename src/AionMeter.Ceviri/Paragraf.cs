@@ -32,6 +32,8 @@ public static class Paragraf
             son = s.Kutu; sonSatir = m;
         }
         if (metin != null) sonuc.Add(metin);
+        // Satır kırılınca "by" ile sayı ayrı satırlara düşmüş olabilir: % düzeltmesini birleşmiş paragrafta yeniden uygula.
+        for (int i = 0; i < sonuc.Count; i++) sonuc[i] = Ocr.YuzdeDuzelt(sonuc[i]);
         return sonuc;
     }
 

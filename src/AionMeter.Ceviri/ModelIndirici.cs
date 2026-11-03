@@ -43,7 +43,22 @@ public static class ModelIndirici
         IndirAsync(VarsayilanKlasor, ilerleme, ct);
 
     /// <summary>Eksik/bozuk dosyaları indirir ve doğrular. Tamam olan dosyaya dokunmaz.</summary>
+    /// <remarks>
+    /// Aynı anda tek indirme: ikinci çağrı birincinin bitmesini bekler, sonra sadece doğrular (dosyalar hazırsa hemen döner).
+    /// Ağ 30 sn hiç veri göndermezse o deneme TimeoutException ile kesilir ve yeniden denenir (en çok 3 kez).
+    /// </remarks>
     public static async Task IndirAsync(string klasor, IProgress<(long indirilen, long toplam)>? ilerleme, CancellationToken ct)
+    {
+        await IndirmeKilidi.WaitAsync(ct).ConfigureAwait(false);
+        try { await KilitliIndirAsync(klasor, ilerleme, ct).ConfigureAwait(false); }
+        finally { IndirmeKilidi.Release(); }
+    }
+
+    private static readonly SemaphoreSlim IndirmeKilidi = new(1, 1);
+    /// <summary>Bir okuma (ya da yanıt başlığı) için en uzun bekleme; her veri parçasında sıfırlanır.</summary>
+    internal static TimeSpan DurmaSiniri { get; set; } = TimeSpan.FromSeconds(30);
+
+    private static async Task KilitliIndirAsync(string klasor, IProgress<(long indirilen, long toplam)>? ilerleme, CancellationToken ct)
     {
         Directory.CreateDirectory(klasor);
         long onceki = 0;
@@ -75,7 +90,7 @@ public static class ModelIndirici
                     break;
                 }
                 catch (Exception e) when (deneme < 3 && !ct.IsCancellationRequested
-                                          && e is HttpRequestException or IOException or InvalidDataException)
+                                          && e is HttpRequestException or IOException or InvalidDataException or TimeoutException)
                 {
                     await Task.Delay(2000 * deneme, ct).ConfigureAwait(false);
                 }
@@ -94,7 +109,12 @@ public static class ModelIndirici
 
         using var istek = new HttpRequestMessage(HttpMethod.Get, url);
         if (mevcut > 0) istek.Headers.Range = new RangeHeaderValue(mevcut, null);
-        using var yanit = await http.SendAsync(istek, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        using var sure = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        sure.CancelAfter(DurmaSiniri);
+        HttpResponseMessage yanitHam;
+        try { yanitHam = await http.SendAsync(istek, HttpCompletionOption.ResponseHeadersRead, sure.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new TimeoutException("Sunucu yanıt vermedi."); }
+        using var yanit = yanitHam;
         yanit.EnsureSuccessStatusCode();
         if (mevcut > 0 && yanit.StatusCode != System.Net.HttpStatusCode.PartialContent) mevcut = 0; // sunucu baştan gönderiyor
 
@@ -103,8 +123,14 @@ public static class ModelIndirici
         var tampon = new byte[1 << 16];
         long inen = mevcut, sonRapor = 0;
         int n;
-        while ((n = await giris.ReadAsync(tampon, ct).ConfigureAwait(false)) > 0)
+        while (true)
         {
+            // Durma sınırı her parçada yeniden kurulur: indirme yavaş olabilir ama hiç ilerlemiyorsa kesilir.
+            using var okumaSuresi = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            okumaSuresi.CancelAfter(DurmaSiniri);
+            try { n = await giris.ReadAsync(tampon, okumaSuresi.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new TimeoutException("İndirme durdu (30 sn veri yok)."); }
+            if (n <= 0) break;
             await cikis.WriteAsync(tampon.AsMemory(0, n), ct).ConfigureAwait(false);
             inen += n;
             if (inen - sonRapor >= 1 << 20) { sonRapor = inen; ilerleme?.Report((onceki + inen, ToplamBoyut)); }

@@ -270,6 +270,18 @@ internal static class EkranAraclari
         }
     }
 
+    /// <summary>
+    /// Farkı esik'ten büyük hücre sayısı. Küçük bir kutu (alanın ~%7'si) ortalamayı neredeyse oynatmaz;
+    /// "yeni bir şey açıldı mı" sorusu için ortalama yerine bu kullanılır.
+    /// </summary>
+    public static int DegisenHucre(byte[] a, byte[] b, int esik)
+    {
+        int n = 0;
+        for (int i = 0; i < a.Length; i++)
+            if (Math.Abs(a[i] - b[i]) > esik) n++;
+        return n;
+    }
+
     /// <summary>Ortalama mutlak fark (0..255).</summary>
     public static int Fark(byte[] a, byte[] b)
     {

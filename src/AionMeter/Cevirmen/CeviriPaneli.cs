@@ -113,6 +113,7 @@ internal sealed class CeviriPaneli : Form
 
     public Rectangle Kaynak => _kaynak;
     public bool Kucuk => _kucuk;
+    public bool Yukleniyor => _yukleniyor;
 
     /// <summary>Tek satırlık durum. "Çevriliyor…" ise üst kenarda yükleme çizgisi döner.</summary>
     public void Durum(string metin, Rectangle kaynak, bool yukleniyor = false)
