@@ -23,6 +23,8 @@ internal sealed class Ayarlar
     public bool IlkAcilis = true;  // dosya yoksa true
     public bool? SadeceOyunda;     // null = ayarlanmamış (normalde açık, --demo'da kapalı)
     public bool OtomatikGuncelleme = true;
+    public bool AltCeviri = true;  // Alt ile açıklama çevirisi (model indirildiyse çalışır)
+    public bool CevirmenDusukRam;  // false: hızlı (~1 GB yüklüyken), true: ~660 MB ama ~5× yavaş
 
     public static string Klasor { get; } = KlasorBul();
     public static string Dosya => Path.Combine(Klasor, "ayarlar.ini");
@@ -74,6 +76,8 @@ internal sealed class Ayarlar
                     case "Kilitli": a.Kilitli = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                     case "SadeceOyundayken": a.SadeceOyunda = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                     case "OtomatikGuncelleme": a.OtomatikGuncelleme = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
+                    case "AltCeviri": a.AltCeviri = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
+                    case "CevirmenDusukRam": a.CevirmenDusukRam = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                 }
             }
         }
@@ -98,6 +102,8 @@ internal sealed class Ayarlar
                 "Opaklik=" + Opaklik.ToString(inv) + Environment.NewLine +
                 "Kilitli=" + (Kilitli ? "1" : "0") + Environment.NewLine +
                 "OtomatikGuncelleme=" + (OtomatikGuncelleme ? "1" : "0") + Environment.NewLine +
+                "AltCeviri=" + (AltCeviri ? "1" : "0") + Environment.NewLine +
+                "CevirmenDusukRam=" + (CevirmenDusukRam ? "1" : "0") + Environment.NewLine +
                 (SadeceOyunda is bool so ? "SadeceOyundayken=" + (so ? "1" : "0") + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Prototip: ekran görüntüsünden İngilizce metni okur (Windows OCR) ve çevrimdışı İngilizce→Türkçe çevirir (OPUS-MT, ONNX). -->
+  <PropertyGroup>
+    <!-- 10.0.19041: WinRT Windows.Media.Ocr bu hedefle gelir (Windows 10 2004+). -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AionMeter.Ceviri</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AionMeter.Ceviri.Check" />
+    <!-- Sadece System.Drawing gerekiyor; WinForms'un örtük using'i Timer belirsizliği yaratmasın. -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+</Project>

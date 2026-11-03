@@ -2,14 +2,17 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- 10.0.19041: Çevirmen'in Windows OCR'ı (Windows.Media.Ocr) için gerekli. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <DefineConstants>$(DefineConstants);AIONMETER_CEVIRI</DefineConstants>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>AionMeter</RootNamespace>
     <AssemblyName>AionMeter</AssemblyName>
     <!-- Sürüm: release etiketi v<Version>. Güncelleyici bunu AssemblyInformationalVersion'dan okur. -->
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
@@ -41,6 +44,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AionMeter.Abstractions\AionMeter.Abstractions.csproj" />
     <ProjectReference Include="..\AionMeter.Core\AionMeter.Core.csproj" />
+    <ProjectReference Include="..\AionMeter.Ceviri\AionMeter.Ceviri.csproj" />
   </ItemGroup>
 
   <!-- Motorun okuduğu veri dosyaları exe'nin yanına assets\aion2\ olarak kopyalanır (oyun yamasında sadece bunlar güncellenir). -->

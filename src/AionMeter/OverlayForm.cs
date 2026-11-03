@@ -13,7 +13,7 @@ internal sealed class OverlayForm : Form
     private const int MaxSatir = 12;
     private const int UstSayisi = 5; // kalabalıkta (> 5 oyuncu) gösterilen ilk sıra sayısı
     private static readonly string[] SiraMetni = { "1", "2", "3", "4", "5" };
-    private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4;
+    private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4, KisayolCevir = 5;
 
     // Renkler
     private static readonly Color RenkArka = Color.FromArgb(18, 20, 26);
@@ -112,6 +112,7 @@ internal sealed class OverlayForm : Form
 
     // Görünürlük: kullanıcı gizlediyse (Ctrl+Alt+H) ya da "sadece oyun öndeyken" açıkken oyun önde değilse gizli.
     private readonly OnPlanIzleyici _onPlan = new();
+    private readonly Cevirmen.CevirmenDenetleyici _cevirmen;
     private bool _kullaniciGizledi, _sadeceOyunda, _gorunur = true;
     private float _olcek = 1f;
 
@@ -147,6 +148,12 @@ internal sealed class OverlayForm : Form
 
         _zamanlayici = new System.Windows.Forms.Timer { Interval = 500 }; // 2 Hz
         _zamanlayici.Tick += (_, _) => Tick();
+        _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _olcek, BizimPencereler, m => _tepsi?.Bildir(m));
+        _cevirmen.DurumDegisti += () =>
+        {
+            TepsiGuncelle();
+            AltZamanlayiciGuncelle();
+        };
         _altZamanlayici = new System.Windows.Forms.Timer { Interval = 50 };
         _altZamanlayici.Tick += (_, _) => AltTick();
 
@@ -209,7 +216,8 @@ internal sealed class OverlayForm : Form
     {
         base.OnLoad(e);
 
-        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Detayim, OtoGuncellemeDegistir, Close);
+        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, SadeceOyundaDegistir, Sifirla, Detayim, OtoGuncellemeDegistir,
+            _cevirmen.BolgeCevir, _cevirmen.AltCeviriDegistir, _cevirmen.ModeliIndir, _cevirmen.DusukRamDegistir, Close);
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -217,6 +225,7 @@ internal sealed class OverlayForm : Form
         if (!_kisayol.Kaydet(KisayolGoster, Keys.H)) alinamayan.Add("Ctrl+Alt+H");
         if (!_kisayol.Kaydet(KisayolSifirla, Keys.R)) alinamayan.Add("Ctrl+Alt+R");
         if (!_kisayol.Kaydet(KisayolDetayim, Keys.D)) alinamayan.Add("Ctrl+Alt+D");
+        if (!_kisayol.Kaydet(KisayolCevir, Keys.T)) alinamayan.Add("Ctrl+Alt+T");
         TepsiGuncelle();
 
         if (alinamayan.Count > 0)
@@ -284,7 +293,15 @@ internal sealed class OverlayForm : Form
         if (pid != (uint)Environment.ProcessId) menu.Close(ToolStripDropDownCloseReason.AppFocusChange);
     }
 
-    private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _sadeceOyunda, _ayar.OtomatikGuncelleme);
+    private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _sadeceOyunda, _ayar.OtomatikGuncelleme,
+        _ayar.AltCeviri, _cevirmen.ModelHazir, _ayar.CevirmenDusukRam);
+
+    /// <summary>Çevirmen için: bizim görünür pencerelerimiz (maskelenir, üstündeyken Alt sayaca aittir).</summary>
+    private IEnumerable<Rectangle> BizimPencereler()
+    {
+        if (IsHandleCreated && _gorunur) yield return Bounds;
+        if (_detay is { Visible: true }) yield return _detay.Bounds;
+    }
 
     /// <summary>Açılışta tepsi balonunda gösterilecek tek seferlik mesaj (Program ayarlar).</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -948,13 +965,15 @@ internal sealed class OverlayForm : Form
     private void AltZamanlayiciGuncelle()
     {
         // Demoda oyun yok: oyun-önde şartı aranmaz (test edilebilsin).
-        bool calismali = _kilitli && _gorunur && (_demo || _onPlan.OyunOnde());
+        bool oyunOnde = _demo || _onPlan.OyunOnde();
+        bool calismali = oyunOnde && ((_kilitli && _gorunur) || _cevirmen.AltCeviriCalisir);
         if (calismali == _altZamanlayici.Enabled) return;
         if (calismali) _altZamanlayici.Start();
         else
         {
             _altZamanlayici.Stop();
             AltBirakildi();
+            _cevirmen.AltDurumu(false, Point.Empty); // açıklama paneli/işi kapanır
         }
     }
 
@@ -963,22 +982,34 @@ internal sealed class OverlayForm : Form
         try
         {
             bool basili = (Native.GetAsyncKeyState(Native.VK_MENU) & 0x8000) != 0;
-            if (basili && !_altAcik)
+            var imlec = Cursor.Position;
+            // İmleç sayacın/detayın üstündeyse Alt sayaca aittir; değilse çevirmene. İkisi birden asla.
+            bool bizimUstunde = (_gorunur && Bounds.Contains(imlec)) || (_detay is { Visible: true } && _detay.Bounds.Contains(imlec));
+
+            if (_kilitli)
             {
-                _altAcik = true;
-                TiklanmazlikUygula(); // WS_EX_TRANSPARENT kalkar; NOACTIVATE kalır
+                if (basili && !_altAcik)
+                {
+                    _altAcik = true;
+                    TiklanmazlikUygula(); // WS_EX_TRANSPARENT kalkar; NOACTIVATE kalır
+                }
+                else if (!basili && _altAcik)
+                {
+                    AltBirakildi();
+                }
+                if (_altAcik && bizimUstunde)
+                {
+                    // Stil değişiminden hemen sonra WM_MOUSEMOVE gelmeyebilir: imleci burada da yokla.
+                    var p = PointToClient(imlec);
+                    if (ClientRectangle.Contains(p)) UzerineGelindi(p.Y);
+                }
             }
-            else if (!basili && _altAcik)
+            else if (_altAcik)
             {
                 AltBirakildi();
-                return;
             }
-            if (_altAcik)
-            {
-                // Stil değişiminden hemen sonra WM_MOUSEMOVE gelmeyebilir: imleci burada da yokla.
-                var p = PointToClient(Cursor.Position);
-                if (ClientRectangle.Contains(p)) UzerineGelindi(p.Y);
-            }
+
+            _cevirmen.AltDurumu(basili && !bizimUstunde, imlec);
         }
         catch (Exception ex)
         {
@@ -1083,6 +1114,7 @@ internal sealed class OverlayForm : Form
             case KisayolGoster: GosterDegistir(); break;
             case KisayolSifirla: Sifirla(); break;
             case KisayolDetayim: Detayim(); break;
+            case KisayolCevir: _cevirmen.BolgeCevir(); break;
         }
     }
 
@@ -1154,6 +1186,7 @@ internal sealed class OverlayForm : Form
             SystemEvents.DisplaySettingsChanged -= EkranDegisti;
             _zamanlayici.Dispose();
             _altZamanlayici.Dispose();
+            _cevirmen.Dispose();
             DetayKapat();
             _kisayol?.Dispose();
             _tepsi?.Dispose();

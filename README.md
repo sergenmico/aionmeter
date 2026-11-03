@@ -24,9 +24,12 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Ctrl+Alt+R` | Sıfırla |
 | `Alt` (basılı tut) | Kilitliyken satırın üstüne gel: detay; tıkla: sabitle |
 | `Ctrl+Alt+D` | Kendi detayın |
+| `Ctrl+Alt+T` | Ekranda bölge seç, Türkçeye çevir (tekrar basınca kapanır) |
+| `Alt` + üstüne gel | Eşya/craft/beceri açıklamasını çevirir (model indirildikten sonra) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (tepsi menüsünden kapatılabilir).
+Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da tepsi menüsünden "Çeviri modelini indir").
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini
