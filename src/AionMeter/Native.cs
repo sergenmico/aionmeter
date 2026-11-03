@@ -70,6 +70,14 @@ internal static class Native
         else SetWindowLong32(hWnd, GWL_EXSTYLE, unchecked((int)style));
     }
 
+    /// <summary>Pencerenin sahip (owner) bağını kaldırır (GWLP_HWNDPARENT = 0).</summary>
+    public static void SahibiKaldir(IntPtr hWnd)
+    {
+        const int GWLP_HWNDPARENT = -8;
+        if (IntPtr.Size == 8) SetWindowLongPtr64(hWnd, GWLP_HWNDPARENT, IntPtr.Zero);
+        else SetWindowLong32(hWnd, GWLP_HWNDPARENT, 0);
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyIcon(IntPtr hIcon);
 
@@ -96,6 +104,27 @@ internal static class Native
 
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string message);
+
+    [DllImport("user32.dll")]
+    private static extern bool ChangeWindowMessageFilter(uint message, uint flag);
+
+    /// <summary>
+    /// Yönetici süreçte: Explorer'ın (normal kullanıcı) "TaskbarCreated" iletisi UIPI'ye takılmasın. Bu ileti gelmezse
+    /// Explorer yeniden başladığında tepsi simgesi kaybolur. Süreç geneli, bir kez.
+    /// </summary>
+    public static void TepsiYenidenYaratmaIzni()
+    {
+        try
+        {
+            const uint MSGFLT_ADD = 1;
+            uint ileti = RegisterWindowMessage("TaskbarCreated");
+            if (ileti != 0) ChangeWindowMessageFilter(ileti, MSGFLT_ADD);
+        }
+        catch { /* önemsiz */ }
+    }
 
     public const int VK_MENU = 0x12; // Alt
     public const int VK_TAB = 0x09, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_LWIN = 0x5B, VK_RWIN = 0x5C;

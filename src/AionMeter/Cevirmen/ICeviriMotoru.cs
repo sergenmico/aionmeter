@@ -217,12 +217,54 @@ internal static class EkranAraclari
 {
     public const int OzetG = 32, OzetY = 24;
 
+    /// <summary>
+    /// Ekran alanını yakalar. Windows 11'de önce Windows.Graphics.Capture (tam ekran oyunlarda da çalışır, görünmez);
+    /// Windows 10'da önce GDI, görüntü tamamen siyahsa (tam ekran oyun) Windows.Graphics.Capture. Hepsi olmazsa GDI sonucu.
+    /// </summary>
     public static Bitmap Yakala(Rectangle ekranAlani)
+    {
+        if (EkranYakalayici.Kenarsiz && EkranYakalayici.Yakala(ekranAlani) is Bitmap wgc) return wgc;
+        var gdi = GdiYakala(ekranAlani);
+        if (!EkranYakalayici.Kenarsiz && EkranYakalayici.Destekleniyor && Siyah(gdi) &&
+            EkranYakalayici.Yakala(ekranAlani) is Bitmap yedek)
+        {
+            gdi.Dispose();
+            return yedek;
+        }
+        return gdi;
+    }
+
+    private static Bitmap GdiYakala(Rectangle ekranAlani)
     {
         var bmp = new Bitmap(Math.Max(1, ekranAlani.Width), Math.Max(1, ekranAlani.Height), PixelFormat.Format32bppPArgb);
         using var g = Graphics.FromImage(bmp);
         g.CopyFromScreen(ekranAlani.Location, Point.Empty, ekranAlani.Size, CopyPixelOperation.SourceCopy);
         return bmp;
+    }
+
+    /// <summary>Görüntü (seyrek örneklemeyle) tamamen siyah mı? GDI tam ekran DirectX oyununda böyle döner.</summary>
+    private static bool Siyah(Bitmap bmp)
+    {
+        var veri = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+        try
+        {
+            int adimX = Math.Max(1, bmp.Width / 64), adimY = Math.Max(1, bmp.Height / 64);
+            var satir = new byte[bmp.Width * 4];
+            for (int y = 0; y < bmp.Height; y += adimY)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(veri.Scan0 + y * veri.Stride, satir, 0, satir.Length);
+                for (int x = 0; x < bmp.Width; x += adimX)
+                {
+                    int j = x * 4;
+                    if (satir[j] > 8 || satir[j + 1] > 8 || satir[j + 2] > 8) return false;
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            bmp.UnlockBits(veri);
+        }
     }
 
     /// <summary>Kendi pencerelerimizi görüntüde siyaha boyar (tooltip sanılmasınlar, özeti oynatmasınlar).</summary>

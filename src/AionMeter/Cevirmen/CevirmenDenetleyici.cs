@@ -44,7 +44,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
     // Alt ile açıklama
     private CeviriPaneli? _aciklamaPaneli;
     private CancellationTokenSource? _aciklamaIptal;
-    private bool _altAktif, _buDurusIslendi, _isleniyor, _incelemeSuruyor;
+    private bool _altAktif, _buDurusIslendi, _isleniyor, _incelemeSuruyor, _kayipKontrolu;
     private Point _durma, _tetik;
     private long _durmaBas;
     private int _sayac;
@@ -55,10 +55,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
     private readonly byte[] _sonKutuOzet = new byte[EkranAraclari.OzetG * EkranAraclari.OzetY];
     private long _sonCeviriMs = long.MinValue;
     private const int OzetBoyu = EkranAraclari.OzetG * EkranAraclari.OzetY;
-    // Sadece UI iş parçacığında (KutuKayboldumu) kullanılan tamponlar; arka plan işleri kendi tamponlarını kullanır.
-    private readonly Bitmap _kucuk = new(EkranAraclari.OzetG, EkranAraclari.OzetY, PixelFormat.Format32bppArgb);
-    private readonly byte[] _tampon = new byte[OzetBoyu * 4];
-    private readonly byte[] _ozet = new byte[OzetBoyu];
+    // Açık açıklama kutusunun özeti (UI iş parçacığında yazılır; arka plan işleri kopyasını alır).
     private readonly byte[] _kutuOzet = new byte[OzetBoyu];
 
     /// <summary>Duruşun başında (t0) yakalanan imleç çevresi: maskelenmiş görüntü + özet.</summary>
@@ -97,6 +94,7 @@ internal sealed class CevirmenDenetleyici : IDisposable
         _olcek = olcek;
         _overlayPencereleri = overlayPencereleri;
         _bildir = bildir;
+        EkranYakalayici.OnHazirla(); // ilk Ctrl+Alt+T'de UI beklemesin
     }
 
     /// <summary>Motor tembel oluşturulur; çevirmenin kendisi ilk çeviride yüklenir.</summary>
@@ -157,19 +155,20 @@ internal sealed class CevirmenDenetleyici : IDisposable
             _bildir("Çeviri modeli zaten hazır.");
             return;
         }
-        if (ModeliSor(Native.GetForegroundWindow()))
+        if (ModeliSor(Native.GetForegroundWindow(), out _))
             _bildir("Çeviri modeli hazır. Ctrl+Alt+T ile bölge çevirebilir, oyunda Alt basılıyken açıklamaların üstüne gelebilirsin.");
     }
 
     /// <summary>Tek giriş noktası: aynı anda tek model penceresi. true = model hazır.</summary>
-    private bool ModeliSor(IntPtr onceki)
+    private bool ModeliSor(IntPtr onceki, out bool altaAlindi)
     {
+        altaAlindi = false;
         if (_modelIndiriliyor) return false;
         _modelIndiriliyor = true;
         DurumDegisti?.Invoke(); // tepsi: "Çeviri modeli indiriliyor…" (pasif)
         try
         {
-            if (!ModelIndirmeFormu.Sor(Motor, onceki)) return false;
+            if (!ModelIndirmeFormu.Sor(Motor, onceki, out altaAlindi)) return false;
             _modelHazir = true;
             return true;
         }
@@ -198,7 +197,13 @@ internal sealed class CevirmenDenetleyici : IDisposable
         {
             if (!ModelHazir)
             {
-                if (!ModeliSor(onceki)) return;
+                if (!ModeliSor(onceki, out bool altaAlindi)) return;
+                if (altaAlindi)
+                {
+                    // Kullanıcı indirme sırasında başka işe geçti: ekranı aniden dondurma, sadece haber ver.
+                    _bildir("Çeviri modeli hazır. Ctrl+Alt+T ile bölge çevirebilir, oyunda Alt basılıyken açıklamaların üstüne gelebilirsin.");
+                    return;
+                }
                 // Pencere kapandıktan hemen sonra yakalanan ekranda hâlâ görünüyordu (DWM henüz çizmedi): kısa bekle.
                 await Task.Delay(250);
             }
@@ -576,19 +581,32 @@ internal sealed class CevirmenDenetleyici : IDisposable
     }
 
     /// <summary>Panel açıkken saniyede bir: açıklama kutusu kaybolduysa paneli kapat.</summary>
-    private void KutuKayboldumu()
+    /// <remarks>Yakalama arka planda (UI iş parçacığı takılmasın); karar UI'da, kutu o arada değişmediyse.</remarks>
+    private async void KutuKayboldumu()
     {
-        if (_kutuEkran.IsEmpty) return;
+        if (_kutuEkran.IsEmpty || _kayipKontrolu) return;
+        _kayipKontrolu = true;
         try
         {
-            using var bmp = EkranAraclari.Yakala(_kutuEkran);
-            EkranAraclari.Maskele(bmp, _kutuEkran, TumBizimPencereler());
-            EkranAraclari.Ozet(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height), _kucuk, _tampon, _ozet);
-            if (EkranAraclari.Fark(_ozet, _kutuOzet) > KaybolmaEsigi) AciklamayiKapat();
+            var kutu = _kutuEkran;
+            var maske = MaskeListesi();
+            var oncekiOzet = (byte[])_kutuOzet.Clone();
+            bool kayboldu = await Task.Run(() =>
+            {
+                using var bmp = EkranAraclari.Yakala(kutu);
+                EkranAraclari.Maskele(bmp, kutu, maske);
+                using var arac = new OzetAraci();
+                return EkranAraclari.Fark(arac.Ozet(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)), oncekiOzet) > KaybolmaEsigi;
+            });
+            if (kayboldu && _kutuEkran == kutu) AciklamayiKapat();
         }
         catch (Exception ex)
         {
             HataLog.Yaz("Açıklama kutusu kontrolü", ex);
+        }
+        finally
+        {
+            _kayipKontrolu = false;
         }
     }
 
@@ -611,6 +629,6 @@ internal sealed class CevirmenDenetleyici : IDisposable
         _aciklamaPaneli = null;
         _motor?.Dispose(); // çevirmen modeli bellekten bırakılır
         _motor = null;
-        _kucuk.Dispose();
+        EkranYakalayici.Kapat();
     }
 }

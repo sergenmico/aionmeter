@@ -10,8 +10,9 @@ Gösterdikleri:
 
 ## Kurulum
 1. Zip'i bir klasöre çıkar, `AionMeter.exe`'yi çalıştır.
-2. Npcap yoksa sorar; **Evet** de, açılan kurulumu varsayılan ayarlarla bitir.
-3. Meter'ı **oyuna girmeden önce** aç (yoksa isimler ilk bölge değişimine kadar `Oyuncu #…` görünebilir).
+2. Windows yönetici izni sorar; **Evet** de. Oyun yönetici olarak çalıştığı için `Alt` tuşu ancak böyle okunabiliyor ("Hayır" dersen de açılır, sadece `Alt` özellikleri çalışmaz).
+3. Npcap yoksa sorar; **Evet** de, açılan kurulumu varsayılan ayarlarla bitir.
+4. Meter'ı **oyuna girmeden önce** aç (yoksa isimler ilk bölge değişimine kadar `Oyuncu #…` görünebilir).
 
 .NET kurmaya gerek yok, exe'nin içinde.
 Her açılışta güncellemeleri kontrol eder ve kendini günceller.

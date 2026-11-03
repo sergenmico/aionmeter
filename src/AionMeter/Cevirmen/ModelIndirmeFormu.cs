@@ -3,7 +3,8 @@ namespace AionMeter.Cevirmen;
 /// <summary>
 /// Çeviri modeli indirme penceresi; güncelleyici penceresiyle aynı koyu, kodla çizilen tarz.
 /// Soru: "Çeviri modeli gerekli" + açıklama, birincil "İndir" (Enter) ve ikincil "Vazgeç" (Esc).
-/// İndir'e basınca aynı pencere ilerlemeye geçer: çubuk + "%45 · 36 / 80 MB" + "İptal". Hata: kısa mesaj + "Kapat".
+/// İndir'e basınca aynı pencere ilerlemeye geçer: çubuk + "%45 · 36 / 80 MB" + "Alta al" + "İptal". Hata: kısa mesaj + "Kapat".
+/// İndirme sürerken pencere en üstte durmaz ve görev çubuğuna alınabilir (ilerleme görev çubuğu başlığında görünür).
 /// SADECE açık kullanıcı eylemiyle açılır (Ctrl+Alt+T ilk kullanım / tepsi "Çeviri modelini indir");
 /// oyun sırasında Alt ile açıklama çevirisi bu pencereyi asla açmaz. Odak alabilir (bir iletişim kutusu), geçiş efekti yok.
 /// </summary>
@@ -20,7 +21,7 @@ internal sealed class ModelIndirmeFormu : Form
     private enum Asama { Soru, Indiriliyor, Hata }
 
     private readonly ICeviriMotoru _motor;
-    private readonly Button _birincil, _ikincil;
+    private readonly Button _birincil, _ikincil, _altaAl;
     private readonly CancellationTokenSource _iptal = new();
     private readonly SolidBrush _fircaCubukArka = new(Color.FromArgb(40, 44, 54));
     private readonly SolidBrush _fircaCubuk = new(RenkMavi);
@@ -32,6 +33,7 @@ internal sealed class ModelIndirmeFormu : Form
     private string _baslik = "Çeviri modeli gerekli", _govde = "", _ayrinti = "";
     private float _oran;
     private bool _indiriliyor;
+    private bool _altaAlindi; // indirme bittiğinde pencere küçüktü ya da önde değildi (kullanıcı başka işle meşgul)
 
     private ModelIndirmeFormu(ICeviriMotoru motor)
     {
@@ -59,8 +61,12 @@ internal sealed class ModelIndirmeFormu : Form
             else await IndirAsync();
         };
         _ikincil.Click += (_, _) => Vazgec();
+        _altaAl = Dugme("Alta al", RenkIkincil, Cizim.Yazi);
+        _altaAl.Visible = false;
+        _altaAl.Click += (_, _) => AltaAl();
         Controls.Add(_birincil);
         Controls.Add(_ikincil);
+        Controls.Add(_altaAl);
         AcceptButton = _birincil; // Enter
         CancelButton = _ikincil;  // Esc
     }
@@ -75,14 +81,19 @@ internal sealed class ModelIndirmeFormu : Form
         return b;
     }
 
-    /// <summary>true = model hazır (indirildi). Odak, çağıranın verdiği önceki pencereye geri verilir.</summary>
-    public static bool Sor(ICeviriMotoru motor, IntPtr oncekiPencere)
+    /// <summary>
+    /// true = model hazır (indirildi). altaAlindi = kullanıcı indirme sırasında pencereyi görev çubuğuna aldı;
+    /// o zaman odak geri verilmez (kullanıcı başka bir pencerede) ve çağıran işe kendiliğinden devam etmemeli.
+    /// </summary>
+    public static bool Sor(ICeviriMotoru motor, IntPtr oncekiPencere, out bool altaAlindi)
     {
+        altaAlindi = false;
         try
         {
             using var f = new ModelIndirmeFormu(motor);
             bool sonuc = f.ShowDialog() == DialogResult.OK;
-            OdakYardimcisi.GeriVer(oncekiPencere);
+            altaAlindi = f._altaAlindi;
+            if (!altaAlindi) OdakYardimcisi.GeriVer(oncekiPencere);
             return sonuc;
         }
         catch (Exception ex)
@@ -90,6 +101,25 @@ internal sealed class ModelIndirmeFormu : Form
             HataLog.Yaz("Model indirme penceresi", ex);
             return false;
         }
+    }
+
+    /// <summary>Görev çubuğundan küçültülüp geri açılabilsin (çerçevesiz pencerede bu stiller kendiliğinden yok).</summary>
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            const int WS_MINIMIZEBOX = 0x00020000, WS_SYSMENU = 0x00080000;
+            var cp = base.CreateParams;
+            cp.Style |= WS_MINIMIZEBOX | WS_SYSMENU;
+            return cp;
+        }
+    }
+
+    private void AltaAl()
+    {
+        // Sahipli pencere küçülünce görev çubuğu yerine masaüstünün köşesine küçük bir başlık olur: sahip bağını kaldır.
+        Native.SahibiKaldir(Handle);
+        WindowState = FormWindowState.Minimized;
     }
 
     private int P(float v) => (int)MathF.Round(v * _olcek);
@@ -103,6 +133,7 @@ internal sealed class ModelIndirmeFormu : Form
         _yaziKucuk = new Font("Segoe UI", 11f * _olcek, FontStyle.Regular, GraphicsUnit.Pixel);
         _birincil.Font = _yaziKalin;
         _ikincil.Font = _yazi;
+        _altaAl.Font = _yazi;
         try
         {
             int tercih = Native.DWMWCP_ROUNDSMALL; // Windows 11: küçük yuvarlak köşe; Windows 10: kare
@@ -119,12 +150,16 @@ internal sealed class ModelIndirmeFormu : Form
         _birincil.Focus();
     }
 
-    /// <summary>Boyut sabit (440 × 160); ekranın ortasında. Düğmeler aşamaya göre.</summary>
+    /// <summary>Boyut sabit (440 × 160); ilk açılışta ekranın ortasında. Düğmeler aşamaya göre.</summary>
     private void Yerlesim()
     {
         int w = P(440), h = P(160), pad = P(16);
-        var alan = Screen.FromPoint(Cursor.Position).WorkingArea;
-        Bounds = new Rectangle(alan.Left + (alan.Width - w) / 2, alan.Top + (alan.Height - h) / 2, w, h);
+        if (!_yerlesti)
+        {
+            _yerlesti = true;
+            var alan = Screen.FromPoint(Cursor.Position).WorkingArea;
+            Bounds = new Rectangle(alan.Left + (alan.Width - w) / 2, alan.Top + (alan.Height - h) / 2, w, h);
+        }
         int dy = h - P(48);
         var sag = new Rectangle(w - pad - P(110), dy, P(110), P(32));
         var sol = new Rectangle(sag.X - P(10) - P(110), dy, P(110), P(32));
@@ -136,14 +171,16 @@ internal sealed class ModelIndirmeFormu : Form
                 _birincil.Bounds = sol;
                 _ikincil.Bounds = sag;
                 _birincil.Visible = _ikincil.Visible = true;
+                _altaAl.Visible = false;
                 AcceptButton = _birincil;
                 CancelButton = _ikincil;
                 break;
             case Asama.Indiriliyor:
                 _ikincil.Text = "İptal";
                 _ikincil.Bounds = sag;
+                _altaAl.Bounds = sol;
                 _birincil.Visible = false;
-                _ikincil.Visible = true;
+                _ikincil.Visible = _altaAl.Visible = true;
                 AcceptButton = null;
                 CancelButton = _ikincil;
                 break;
@@ -151,13 +188,15 @@ internal sealed class ModelIndirmeFormu : Form
                 _birincil.Text = "Kapat";
                 _birincil.Bounds = sag;
                 _birincil.Visible = true;
-                _ikincil.Visible = false;
+                _ikincil.Visible = _altaAl.Visible = false;
                 AcceptButton = _birincil;
                 CancelButton = _birincil;
                 break;
         }
         Invalidate();
     }
+
+    private bool _yerlesti;
 
     private void AsamaDegistir(Asama asama)
     {
@@ -174,6 +213,7 @@ internal sealed class ModelIndirmeFormu : Form
         _baslik = "Çeviri modeli indiriliyor";
         _oran = 0f;
         _ayrinti = "";
+        TopMost = false; // uzun sürebilir: diğer pencerelerin önünü kapatmasın
         AsamaDegistir(Asama.Indiriliyor);
         var ilerleme = new Progress<(long Inen, long Toplam)>(t =>
         {
@@ -182,12 +222,16 @@ internal sealed class ModelIndirmeFormu : Form
             _oran = (float)Math.Clamp((double)t.Inen / t.Toplam, 0, 1);
             _ayrinti = "%" + ((int)(_oran * 100)).ToString(Bicim.Tr) + " · " + ((long)(t.Inen / Mb)).ToString("N0", Bicim.Tr) +
                        " / " + ((long)Math.Round(t.Toplam / Mb)).ToString("N0", Bicim.Tr) + " MB";
+            string baslik = "%" + ((int)(_oran * 100)).ToString(Bicim.Tr) + " · Çeviri modeli indiriliyor";
+            if (Text != baslik) Text = baslik; // görev çubuğunda görünür
             Invalidate();
         });
         try
         {
             await _motor.ModeliIndirAsync(ilerleme, _iptal.Token);
             _indiriliyor = false;
+            // Karar bitiş anında: pencere küçükse ya da kullanıcı başka pencereye (oyuna) geçtiyse "başka işle meşgul".
+            _altaAlindi = WindowState == FormWindowState.Minimized || Native.GetForegroundWindow() != Handle;
             DialogResult = DialogResult.OK;
         }
         catch (OperationCanceledException) when (_iptal.IsCancellationRequested)
@@ -202,7 +246,9 @@ internal sealed class ModelIndirmeFormu : Form
             _baslik = "Model indirilemedi";
             _govde = "İnternet bağlantısını kontrol edip daha sonra tekrar dene.";
             _ayrinti = ex.Message;
+            Text = "AionMeter Çevirmen";
             AsamaDegistir(Asama.Hata);
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; // hata görünsün
         }
     }
 

@@ -33,10 +33,20 @@ istatistik = ["Magic Attack", "Physical Attack", "Physical Defense", "Magic Defe
     "Healing Boost", "Magic Boost", "Magic Resist", "Magic Resistance", "Max HP", "Max MP", "HP Regen", "MP Regen",
     "Cooldown", "Cast Time", "Daevanion", "Manastone", "Godstone", "Enchantment", "Enchantment Level",
     "Abyss Points", "Medal", "Concentration", "Stigma Shard", "Aethertool", "Greatsword", "Polearm", "Spellbook", "Dagger",
-    "Aethercannon", "Keyblade"]
+    "Aethercannon", "Keyblade",
+    # AION 2 stat / sistem adları (oyun içi denemede çevrildiği görüldü: "Perfect Chance" -> "Mükemmel Şans" vb.)
+    "Perfect Chance", "Perfect Resist", "Weapon Damage Boost", "Weapon Damage", "Damage Boost", "Damage Bonus",
+    "Damage Reduction", "Damage Amplification", "Power Shard", "Power Shard Damage Bonus", "Critical Hit Resist",
+    "Critical Strike Resist", "Critical Damage Resist", "Critical Hit Chance", "Critical Damage Boost", "Block Penetration",
+    "Parry Penetration", "Defense Penetration", "Armor Penetration", "Multi-Hit", "Multi-Hit Chance", "Multi-Hit Resist",
+    "Backstab Damage", "Boss Damage", "PvE Damage", "PvP Damage", "PvE Defense", "PvP Defense", "PvP Attack", "PvE Attack",
+    "Healing Received", "Healing Power", "Stun Resist", "Status Resist", "Status Effect Resist", "Accuracy Bonus",
+    "Evasion Bonus", "Cooldown Reduction", "Additional Damage", "Additional Defense", "Ignore Defense", "Final Damage",
+    "Monolith Resonance", "Enhance Scroll", "Amulet Enhance Scroll", "Amulet Enhance Scrolls", "Combat Power"]
 # Sıradan İngilizce sözcük olan tek kelimelik terimler: sadece cümle ortasında Büyük Harfle ya da satırın tamamıysa korunur.
 buyukHarf = ["Socket", "Enchant", "Attack", "Defense", "Critical", "Parry", "Block", "Power", "Health", "Agility", "Knowledge", "Will", "Cast",
-    "Sword", "Mace", "Staff", "Orb", "Bow", "Shield", "Cloth", "Leather", "Chain", "Plate", "Pistol", "Cannon", "Harp"]
+    "Sword", "Mace", "Staff", "Orb", "Bow", "Shield", "Cloth", "Leather", "Chain", "Plate", "Pistol", "Cannon", "Harp",
+    "Penetration", "Resistance", "Resist", "Perfect", "Amulet", "Regeneration", "Fortitude"]
 koru = list(dict.fromkeys(cekirdek + istatistik + secilen))
 # Beceri adları çalışma anında skills/skill_names.json'dan okunur. Tek kelimelik ve sıradan İngilizce sözcük olanlar atlanır:
 beceriler = json.load(open(kok + '/assets/aion2/skills/skill_names.json', encoding='utf-8'))

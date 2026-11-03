@@ -85,6 +85,8 @@ internal static class TurkceEk
         string k = kelime.ToLowerInvariant();
         // İngilizce sessiz son "e" okunmaz (Defense → "defens", Manastone → "manaston", Strike → "straik").
         if (k.Length > 3 && k[^1] == 'e' && !Unluler.Contains(k[^2]) && k[..^1].Any(c => Unluler.Contains(c))) k = k[..^1];
+        // "-tion/-sion" "-şın" okunur: Penetration → Penetration'ı, Evasion → Evasion'ı.
+        if (k.Length > 4 && (k.EndsWith("tion") || k.EndsWith("sion"))) return ('ı', false, false);
         char sonUnlu = 'a';
         for (int i = k.Length - 1; i >= 0; i--)
         {

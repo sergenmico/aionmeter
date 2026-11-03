@@ -22,7 +22,7 @@ namespace AionMeter.Ceviri;
 /// </summary>
 internal static partial class TurkceDuzelt
 {
-    public const string Surum = "d2"; // kurallar değişince artır (önbellek geçersiz olur)
+    public const string Surum = "d3"; // kurallar değişince artır (önbellek geçersiz olur)
     private static readonly CultureInfo Tr = CultureInfo.GetCultureInfo("tr-TR");
 
     public static string Once(string ingilizce) =>

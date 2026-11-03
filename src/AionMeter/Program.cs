@@ -20,18 +20,31 @@ internal static class Program
         bool demoIstendi = Arg(args, "--demo");
         bool guncellemeYok = Arg(args, "--guncelleme-yok");
         bool guncellendi = Arg(args, "--guncellendi"); // güncelleyicinin yeniden başlattığı süreç
+        bool yukseltildi = Arg(args, Yonetici.Arguman); // yönetici olarak yeniden açılan süreç
 
-        // Güncellemeden sonra eski süreç kapanırken mutex kısa süre daha tutulabilir: 10 sn'ye kadar bekle.
-        Mutex? tekKopya = TekKopyaAl(guncellendi ? TimeSpan.FromSeconds(10) : TimeSpan.Zero);
+        // Güncellemeden / yükseltmeden sonra eski süreç kapanırken mutex kısa süre daha tutulabilir: 10 sn'ye kadar bekle.
+        Mutex? tekKopya = TekKopyaAl(guncellendi || yukseltildi ? TimeSpan.FromSeconds(10) : TimeSpan.Zero);
         if (tekKopya is null)
         {
             MessageBox.Show("AionMeter zaten çalışıyor (sistem tepsisine bakın).", "AionMeter",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return 1;
         }
+        // Oyun yönetici olarak çalışıyor: Alt'ı okuyabilmek için biz de yönetici olmalıyız (bkz. Yonetici).
+        // Demo (geliştirme testleri) yükseltilmez. Reddedilirse normal devam.
+        bool yoneticiReddedildi = false;
+        if (!demoIstendi && !yukseltildi && !Yonetici.Mi())
+        {
+            tekKopya.ReleaseMutex();
+            tekKopya.Dispose();
+            tekKopya = null;
+            if (Yonetici.YenidenBaslat(args, out yoneticiReddedildi)) return 0;
+            tekKopya = TekKopyaAl(TimeSpan.FromSeconds(2));
+            if (tekKopya is null) return 1; // bu arada başka bir kopya açıldı
+        }
         try
         {
-            return Calis(args, demoIstendi, guncellemeYok, guncellendi, ref tekKopya);
+            return Calis(args, demoIstendi, guncellemeYok, guncellendi, yoneticiReddedildi, ref tekKopya);
         }
         finally
         {
@@ -55,15 +68,23 @@ internal static class Program
         var saat = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            var m = new Mutex(initiallyOwned: true, MutexAdi, out bool ilk);
-            if (ilk) return m;
-            m.Dispose();
+            try
+            {
+                var m = new Mutex(initiallyOwned: true, MutexAdi, out bool ilk);
+                if (ilk) return m;
+                m.Dispose();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Yönetici olarak çalışan kopyanın mutex'ine yönetici olmayan süreç erişemez: o kopya çalışıyor demektir.
+            }
             if (saat.Elapsed >= bekle) return null;
             Thread.Sleep(250);
         }
     }
 
-    private static int Calis(string[] args, bool demoIstendi, bool guncellemeYok, bool guncellendi, ref Mutex? tekKopya)
+    private static int Calis(string[] args, bool demoIstendi, bool guncellemeYok, bool guncellendi, bool yoneticiReddedildi,
+        ref Mutex? tekKopya)
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => HataLog.Yaz("Arayüz hatası", e.Exception);
@@ -88,6 +109,12 @@ internal static class Program
             // Uygulama klasörüne bu süreçte hiç dokunulmadı. Başlatılamazsa eski sürümle devam.
             if (sonuc.KurucuExe is not null && Guncelleyici.KurucuyuBaslat(sonuc, args)) return 0;
         }
+
+        if (yoneticiReddedildi && bildirim is null)
+            bildirim = "Yönetici olarak açılmadı: oyunda Alt ile detay ve Alt ile çeviri çalışmaz. Kısayollar çalışır.";
+
+        // Yönetici sürecine Explorer'ın "TaskbarCreated" yayını UIPI'ye takılır: Explorer yeniden başlayınca tepsi simgesi geri gelsin.
+        if (Yonetici.Mi()) Native.TepsiYenidenYaratmaIzni();
 
         bool demo = demoIstendi || EngineFactory is null;
         if (!demo) NpcapSetup.GerekirseKur(); // gerçek motor varsa: yakalama sürücüsünü ilk açılışta hallet

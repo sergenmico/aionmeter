@@ -127,7 +127,7 @@ internal static class Guncelleyici
         }
     }
 
-    private static readonly string[] KontrolArgumanlari = { "--guncellendi", "--guncelleme-yok", "--kur", "--bekle" };
+    private static readonly string[] KontrolArgumanlari = { "--guncellendi", "--guncelleme-yok", "--kur", "--bekle", Yonetici.Arguman };
 
     /// <summary>Özgün argümanlar, güncelleyicinin kendi bayrakları (ve --kur/--bekle değerleri) çıkarılarak.</summary>
     private static IEnumerable<string> KullaniciArgumanlari(string[] args)
