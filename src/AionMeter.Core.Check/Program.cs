@@ -39,6 +39,7 @@ OtherChecks();
 AuditChecks();
 PlayerTargetChecks();
 DurationChecks();
+ok &= KupKontrol.Calistir(assets); // Gizli Küp: çerçeve çözümü ve sayaçlar
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif
