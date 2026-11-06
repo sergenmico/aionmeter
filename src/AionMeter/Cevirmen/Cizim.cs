@@ -5,13 +5,14 @@ namespace AionMeter.Cevirmen;
 /// <summary>Çevirmen pencerelerinin ortak renkleri (sayacın paleti) ve küçük çizim yardımcıları.</summary>
 internal static class Cizim
 {
-    public static readonly Color Arka = Color.FromArgb(18, 20, 26);
-    public static readonly Color Yazi = Color.FromArgb(222, 225, 230);
-    public static readonly Color Soluk = Color.FromArgb(138, 145, 156);
-    public static readonly Color CokSoluk = Color.FromArgb(110, 116, 128);
-    public static readonly Color Cizgi = Color.FromArgb(44, 48, 58);          // 1 px kenar
-    public static readonly Color Terim = Color.FromArgb(232, 206, 150);       // korunan terimler: hafif sıcak ton
-    public static readonly Color TusKenari = Color.FromArgb(70, 76, 90);
+    // Ortak paletten (AionMeter.Palet): sayaç, detay paneli ve ayarlar penceresiyle aynı renkler.
+    public static readonly Color Arka = Palet.Arka;
+    public static readonly Color Yazi = Palet.Yazi;
+    public static readonly Color Soluk = Palet.Soluk;
+    public static readonly Color CokSoluk = Palet.CokSoluk;
+    public static readonly Color Cizgi = Palet.Cizgi;          // 1 px kenar
+    public static readonly Color Terim = Palet.Terim;          // korunan terimler: hafif sıcak ton
+    public static readonly Color TusKenari = Palet.TusKenari;
 
     /// <summary>Segoe UI Variable Text varsa onu, yoksa Segoe UI'ı döndürür (GDI+ olmayan yazı tipini sessizce değiştirir).</summary>
     public static Font GovdeYaziTipi(float pikselBoyu)

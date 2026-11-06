@@ -6,37 +6,27 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _sadeceOyunda, _otoGuncelleme, _altCeviri, _modelIndir, _dusukRam, _boyut;
+    private readonly ToolStripMenuItem _kilit, _goster, _denetle;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
 
     public ContextMenuStrip Menu { get; }
 
-    public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sadeceOyundaDegistir, Action sifirla, Action detayim,
-                 Action otoGuncellemeDegistir, Action bolgeCevir, Action altCeviriDegistir, Action modeliIndir,
-                 Action dusukRamDegistir, Action<int> boyutSec, Action cikis)
+    /// <summary>Kısa menü: sık kullanılanlar burada, geri kalan her şey Ayarlar penceresinde.</summary>
+    public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sifirla, Action detayim, Action bolgeCevir,
+                 Action ayarlar, Action guncellemeDenetle, Action cikis)
     {
         Menu = new ContextMenuStrip { ShowImageMargin = false };
         _kilit = new ToolStripMenuItem("Kilitle", null, (_, _) => kilitDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" };
         _goster = new ToolStripMenuItem("Gizle", null, (_, _) => gosterDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+H" };
         var sifir = new ToolStripMenuItem("Sıfırla", null, (_, _) => sifirla()) { ShortcutKeyDisplayString = "Ctrl+Alt+R" };
-        var detay = new ToolStripMenuItem("Detayım (Ctrl+Alt+D)", null, (_, _) => detayim());
-        _sadeceOyunda = new ToolStripMenuItem("Sadece oyun öndeyken göster", null, (_, _) => sadeceOyundaDegistir());
-        _otoGuncelleme = new ToolStripMenuItem("Otomatik güncelleme", null, (_, _) => otoGuncellemeDegistir());
+        var detay = new ToolStripMenuItem("Detayım", null, (_, _) => detayim()) { ShortcutKeyDisplayString = "Ctrl+Alt+D" };
         var bolge = new ToolStripMenuItem("Bölge çevir", null, (_, _) => bolgeCevir()) { ShortcutKeyDisplayString = "Ctrl+Alt+T" };
-        _altCeviri = new ToolStripMenuItem("Alt ile açıklama çevirisi", null, (_, _) => altCeviriDegistir());
-        _modelIndir = new ToolStripMenuItem("Çeviri modelini indir", null, (_, _) => modeliIndir());
-        _dusukRam = new ToolStripMenuItem("Düşük RAM modu (çevirmen)", null, (_, _) => dusukRamDegistir());
-        _boyut = new ToolStripMenuItem("Boyut");
-        foreach (int yuzde in Ayarlar.BoyutSecenekleri)
-        {
-            int y = yuzde;
-            _boyut.DropDownItems.Add(new ToolStripMenuItem("%" + y.ToString(Bicim.Tr), null, (_, _) => boyutSec(y)) { Tag = y });
-        }
+        var ayar = new ToolStripMenuItem("Ayarlar…", null, (_, _) => ayarlar());
+        _denetle = new ToolStripMenuItem("Güncellemeleri denetle", null, (_, _) => guncellemeDenetle());
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
-        Menu.ShowCheckMargin = true;
-        Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), bolge, _altCeviri, _dusukRam, _modelIndir,
-            new ToolStripSeparator(), _boyut, _sadeceOyunda, _otoGuncelleme, new ToolStripSeparator(), cik });
+        Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), bolge,
+            new ToolStripSeparator(), ayar, _denetle, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon
@@ -49,19 +39,12 @@ internal sealed class Tepsi : IDisposable
         _simge.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) gosterDegistir(); };
     }
 
-    public void Guncelle(bool kilitli, bool gorunur, bool sadeceOyunda, bool otoGuncelleme, bool altCeviri, bool modelHazir,
-                         bool dusukRam, bool modelIndiriliyor, int boyut)
+    public void Guncelle(bool kilitli, bool gorunur, bool denetleniyor)
     {
-        foreach (ToolStripItem o in _boyut.DropDownItems)
-            if (o is ToolStripMenuItem m) m.Checked = m.Tag is int y && y == boyut;
-        _dusukRam.Checked = dusukRam;
-        _altCeviri.Checked = altCeviri;
-        _modelIndir.Text = modelIndiriliyor ? "Çeviri modeli indiriliyor…" : modelHazir ? "Çeviri modeli hazır" : "Çeviri modelini indir";
-        _modelIndir.Enabled = !modelHazir && !modelIndiriliyor;
-        _sadeceOyunda.Checked = sadeceOyunda;
-        _otoGuncelleme.Checked = otoGuncelleme;
         _kilit.Text = kilitli ? "Kilidi Aç" : "Kilitle";
         _goster.Text = gorunur ? "Gizle" : "Göster";
+        _denetle.Text = denetleniyor ? "Denetleniyor…" : "Güncellemeleri denetle";
+        _denetle.Enabled = !denetleniyor;
         _simge.Text = kilitli ? "AionMeter (kilitli)" : "AionMeter";
     }
 
@@ -84,12 +67,15 @@ internal sealed class Tepsi : IDisposable
             using (var arka = new SolidBrush(Color.FromArgb(28, 32, 40)))
                 g.FillRectangle(arka, 0, 0, n, n);
             using var kirmizi = new SolidBrush(Color.FromArgb(214, 64, 52));
-            using var mavi = new SolidBrush(Color.FromArgb(86, 156, 240));
+            // Üç hasar çubuğu üç sınıfın açık tonunda (overlay'deki sınıf renkleriyle aynı aile)
+            using var c1 = new SolidBrush(Palet.Sinif("Gladiator").Acik);
+            using var c2 = new SolidBrush(Palet.Sinif("Sorcerer").Acik);
+            using var c3 = new SolidBrush(Palet.Sinif("Assassin").Acik);
             // Üstte boss çubuğu, altta üç hasar çubuğu
             g.FillRectangle(kirmizi, 2 * s, 2 * s, 12 * s, 3 * s);
-            g.FillRectangle(mavi, 2 * s, 7 * s, 10 * s, 2 * s);
-            g.FillRectangle(mavi, 2 * s, 10 * s, 7 * s, 2 * s);
-            g.FillRectangle(mavi, 2 * s, 13 * s, 4 * s, 2 * s);
+            g.FillRectangle(c1, 2 * s, 7 * s, 10 * s, 2 * s);
+            g.FillRectangle(c2, 2 * s, 10 * s, 7 * s, 2 * s);
+            g.FillRectangle(c3, 2 * s, 13 * s, 4 * s, 2 * s);
         }
         IntPtr h = bmp.GetHicon();
         return (Icon.FromHandle(h), h);

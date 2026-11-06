@@ -15,6 +15,13 @@ internal static class Bicim
         return Tam((long)Math.Round(dps)) + " /sn";
     }
 
+    /// <summary>Birimsiz DPS (birim sütun başlığında): 48.213.</summary>
+    public static string Sayi(double dps)
+    {
+        if (double.IsNaN(dps) || double.IsInfinity(dps) || dps < 0) dps = 0;
+        return Tam((long)Math.Round(dps));
+    }
+
     public static string Yuzde(double oran) => "%" + (oran * 100.0).ToString("0.0", Tr);
 
     /// <summary>Boss canı: bir ondalığa AŞAĞI yuvarlanır (99,96 → %99,9); hasar almış boss asla %100,0 görünmez.</summary>

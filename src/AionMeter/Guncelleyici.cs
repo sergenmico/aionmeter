@@ -34,7 +34,11 @@ internal static class Guncelleyici
     public sealed record Sonuc(string? KurucuExe, string? Gecici);
     private static readonly Sonuc Devam = new(null, null);
 
-    private sealed record SurumBilgisi(Version Surum, string Etiket, string ZipUrl, string ShaUrl, string Notlar);
+    internal sealed record SurumBilgisi(Version Surum, string Etiket, string ZipUrl, string ShaUrl, string Notlar);
+
+    /// <summary>Elle denetim sonucu (tepsi / ayarlar penceresi "Güncellemeleri denetle").</summary>
+    public enum DenetimDurumu { Guncel, YeniVar, GelistirmeDerlemesi, Hata }
+    public sealed record DenetimSonucu(DenetimDurumu Durum, SurumBilgisi? Bilgi);
 
     /// <summary>AssemblyInformationalVersion ("0.2.0+abc123" → 0.2.0).</summary>
     public static Version MevcutSurum { get; } = SurumOku();
@@ -127,7 +131,70 @@ internal static class Guncelleyici
         }
     }
 
-    private static readonly string[] KontrolArgumanlari = { "--guncellendi", "--guncelleme-yok", "--kur", "--bekle", Yonetici.Arguman };
+    // ---------------- Elle denetim (uygulama açıkken) ----------------
+
+    /// <summary>
+    /// UI iş parçacığından çağrılır, bloklamaz (HTTP tamamen async). En fazla ~6 sn. Asla istisna fırlatmaz.
+    /// AIONMETER_GUNCELLEME_URL ortam değişkeni burada da geçerlidir.
+    /// </summary>
+    public static async Task<DenetimSonucu> DenetleAsync()
+    {
+        try
+        {
+            using var http = HttpOlustur();
+            using var kontrol = new CancellationTokenSource(KontrolSuresi);
+            var bilgi = await KontrolAsync(http, kontrol.Token);
+            if (bilgi is null || bilgi.Surum <= MevcutSurum) return new DenetimSonucu(DenetimDurumu.Guncel, bilgi);
+            // Geliştirme derlemesinde (yanında AionMeter.dll) dosyalar değiştirilmez.
+            return new DenetimSonucu(YayinDerlemesi ? DenetimDurumu.YeniVar : DenetimDurumu.GelistirmeDerlemesi, bilgi);
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Elle güncelleme denetimi başarısız", ex);
+            return new DenetimSonucu(DenetimDurumu.Hata, null);
+        }
+    }
+
+    /// <summary>
+    /// Yeni sürüm bulunduktan sonra: açılıştaki pencerenin aynısı (notlar + "Güncellensin mi?") modsuz açılır;
+    /// onaylanırsa indirir, doğrular, açar. Pencere kapanınca sonuç döner. KurucuExe != null ise çağıran
+    /// <see cref="KurucuyuBaslat"/> ile kurucuyu başlatıp uygulamayı kapatmalıdır.
+    /// </summary>
+    public static Task<Sonuc> GuncellemeyiSorAsync(SurumBilgisi bilgi)
+    {
+        var tamam = new TaskCompletionSource<Sonuc>();
+        try
+        {
+            var form = new GuncellemeFormu(bilgi);
+            form.FormClosed += (_, _) =>
+            {
+                tamam.TrySetResult(form.Sonuc);
+                form.Dispose();
+            };
+            form.Show();
+            Cevirmen.OdakYardimcisi.OneGetir(form); // tepsiden açıldı: Enter/Esc çalışsın
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Güncelleme penceresi açılamadı", ex);
+            tamam.TrySetResult(Devam);
+        }
+        return tamam.Task;
+    }
+
+    private static HttpClient HttpOlustur()
+    {
+        var http = new HttpClient(new SocketsHttpHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.All,
+            ConnectTimeout = KontrolSuresi,
+        })
+        { Timeout = Timeout.InfiniteTimeSpan }; // süreler CancellationToken ile yönetilir
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AionMeter/" + MevcutSurum.ToString(3));
+        return http;
+    }
+
+    private static readonly string[] KontrolArgumanlari ={ "--guncellendi", "--guncelleme-yok", "--kur", "--bekle", Yonetici.Arguman };
 
     /// <summary>Özgün argümanlar, güncelleyicinin kendi bayrakları (ve --kur/--bekle değerleri) çıkarılarak.</summary>
     private static IEnumerable<string> KullaniciArgumanlari(string[] args)
@@ -305,34 +372,32 @@ internal static class Guncelleyici
 
     // ---------------- Akış (UI iş parçacığında, async) ----------------
 
-    private static async Task<Sonuc> AkisAsync(GuncellemeFormu f, CancellationToken iptal)
+    /// <param name="hazir">Elle denetimde sürüm zaten biliniyor: kontrol adımı atlanır.</param>
+    private static async Task<Sonuc> AkisAsync(GuncellemeFormu f, SurumBilgisi? hazir, CancellationToken iptal)
     {
         var mevcut = MevcutSurum;
-        using var http = new HttpClient(new SocketsHttpHandler
-        {
-            AutomaticDecompression = System.Net.DecompressionMethods.All,
-            ConnectTimeout = KontrolSuresi,
-        })
-        { Timeout = Timeout.InfiniteTimeSpan }; // süreler CancellationToken ile yönetilir
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AionMeter/" + mevcut.ToString(3));
+        using var http = HttpOlustur();
 
         // 1) Kontrol (en fazla 6 sn)
-        f.Durum("Güncelleme kontrol ediliyor…");
-        SurumBilgisi? bilgi;
-        try
+        SurumBilgisi? bilgi = hazir;
+        if (bilgi is null)
         {
-            using var kontrol = CancellationTokenSource.CreateLinkedTokenSource(iptal);
-            kontrol.CancelAfter(KontrolSuresi);
-            bilgi = await KontrolAsync(http, kontrol.Token);
-        }
-        catch (OperationCanceledException) when (iptal.IsCancellationRequested)
-        {
-            return Devam;
-        }
-        catch (Exception ex)
-        {
-            HataLog.Yaz("Güncelleme kontrolü başarısız", ex);
-            return Devam;
+            f.Durum("Güncelleme kontrol ediliyor…");
+            try
+            {
+                using var kontrol = CancellationTokenSource.CreateLinkedTokenSource(iptal);
+                kontrol.CancelAfter(KontrolSuresi);
+                bilgi = await KontrolAsync(http, kontrol.Token);
+            }
+            catch (OperationCanceledException) when (iptal.IsCancellationRequested)
+            {
+                return Devam;
+            }
+            catch (Exception ex)
+            {
+                HataLog.Yaz("Güncelleme kontrolü başarısız", ex);
+                return Devam;
+            }
         }
         if (bilgi is null || bilgi.Surum <= mevcut) return Devam; // güncel: sessizce kapan
 
@@ -606,11 +671,11 @@ internal static class Guncelleyici
     /// </summary>
     private sealed class GuncellemeFormu : Form
     {
-        private static readonly Color RenkArka = Color.FromArgb(18, 20, 26);
-        private static readonly Color RenkPanel = Color.FromArgb(26, 29, 37);
-        private static readonly Color RenkYazi = Color.FromArgb(222, 225, 230);
-        private static readonly Color RenkSoluk = Color.FromArgb(138, 145, 156);
-        private static readonly Color RenkMavi = Color.FromArgb(86, 156, 240);
+        private static readonly Color RenkArka = Palet.Arka;
+        private static readonly Color RenkPanel = Palet.Panel;
+        private static readonly Color RenkYazi = Palet.Yazi;
+        private static readonly Color RenkSoluk = Palet.Soluk;
+        private static readonly Color RenkMavi = Palet.Vurgu;
 
         private const TextFormatFlags Sol = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
                                             TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis;
@@ -635,8 +700,11 @@ internal static class Guncelleyici
 
         public Sonuc Sonuc { get; private set; } = Devam;
 
-        public GuncellemeFormu()
+        private readonly SurumBilgisi? _hazir;
+
+        public GuncellemeFormu(SurumBilgisi? hazir = null)
         {
+            _hazir = hazir;
             Text = "AionMeter güncelleme";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
@@ -780,7 +848,7 @@ internal static class Guncelleyici
             base.OnShown(e);
             try
             {
-                Sonuc = await AkisAsync(this, _iptal.Token);
+                Sonuc = await AkisAsync(this, _hazir, _iptal.Token);
             }
             catch (Exception ex)
             {

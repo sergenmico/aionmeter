@@ -7,6 +7,8 @@ namespace AionMeter;
 /// ayarlar.ini: exe klasörüne yazılır; yazılamıyorsa %AppData%\aionmeter kullanılır.
 /// Konum fiziksel piksel, genişlik 96 DPI ve %100 Boyut'taki mantıksal piksel olarak saklanır.
 /// </summary>
+internal enum SavasDisiModu { Soluk, Gizle, HepGorunur }
+
 internal sealed class Ayarlar
 {
     // Genislik = kullanıcının istediği en az genişlik; içerik daha genişse pencere içeriğe göre büyür.
@@ -27,6 +29,13 @@ internal sealed class Ayarlar
     public bool CevirmenDusukRam;  // false: hızlı (~1 GB yüklüyken), true: ~660 MB ama ~5× yavaş
     public int Boyut = 100;        // overlay + detay paneli boyutu, yüzde (Windows ölçeğinin üstüne). Küçük ekranlı dizüstüler için
     public static readonly int[] BoyutSecenekleri = { 70, 80, 90, 100, 110, 125 };
+    public SavasDisiModu SavasDisi = SavasDisiModu.Soluk; // savaş bitince (~8 sn sonra) overlay ne yapsın
+    public int SolukOpaklik = 25;  // "Soluk" modunda pencere opaklığı, yüzde (10..60)
+    public bool OfkeSesi;          // öfke uyarısında kısa sistem sesi (varsayılan kapalı)
+    public string? YerelAd;        // motorun kesin bildiği kendi karakter adın (sonraki açılışta motora verilir)
+    public bool Tani;              // gizli tanı kaydı (tani.log); menüde/pencerede yok, kullanıcı elle "Tani=1" yazar
+
+    public const int EnAzSolukOpaklik = 10, EnFazlaSolukOpaklik = 60;
 
     public static string Klasor { get; } = KlasorBul();
     public static string Dosya => Path.Combine(Klasor, "ayarlar.ini");
@@ -81,6 +90,18 @@ internal sealed class Ayarlar
                     case "AltCeviri": a.AltCeviri = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                     case "Boyut" when sayi: a.Boyut = Math.Clamp(n, 50, 150); break;
                     case "CevirmenDusukRam": a.CevirmenDusukRam = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
+                    case "SavasDisi":
+                        a.SavasDisi = deger.ToLowerInvariant() switch
+                        {
+                            "gizle" => SavasDisiModu.Gizle,
+                            "hep" => SavasDisiModu.HepGorunur,
+                            _ => SavasDisiModu.Soluk,
+                        };
+                        break;
+                    case "SolukOpaklik" when sayi: a.SolukOpaklik = Math.Clamp(n, EnAzSolukOpaklik, EnFazlaSolukOpaklik); break;
+                    case "OfkeSesi": a.OfkeSesi = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
+                    case "YerelAd": a.YerelAd = deger.Length > 0 ? deger : null; break;
+                    case "Tani": a.Tani = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                 }
             }
         }
@@ -108,7 +129,12 @@ internal sealed class Ayarlar
                 "OtomatikGuncelleme=" + (OtomatikGuncelleme ? "1" : "0") + Environment.NewLine +
                 "AltCeviri=" + (AltCeviri ? "1" : "0") + Environment.NewLine +
                 "CevirmenDusukRam=" + (CevirmenDusukRam ? "1" : "0") + Environment.NewLine +
-                (SadeceOyunda is bool so ? "SadeceOyundayken=" + (so ? "1" : "0") + Environment.NewLine : "");
+                "SavasDisi=" + (SavasDisi switch { SavasDisiModu.Gizle => "gizle", SavasDisiModu.HepGorunur => "hep", _ => "soluk" }) + Environment.NewLine +
+                "SolukOpaklik=" + SolukOpaklik.ToString(inv) + Environment.NewLine +
+                "OfkeSesi=" + (OfkeSesi ? "1" : "0") + Environment.NewLine +
+                (SadeceOyunda is bool so ? "SadeceOyundayken=" + (so ? "1" : "0") + Environment.NewLine : "") +
+                (string.IsNullOrWhiteSpace(YerelAd) ? "" : "YerelAd=" + YerelAd.Trim() + Environment.NewLine) +
+                (Tani ? "Tani=1" + Environment.NewLine : ""); // elle eklenen gizli anahtar korunur
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";
             File.WriteAllText(gecici, metin, Encoding.UTF8);

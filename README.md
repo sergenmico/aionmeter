@@ -4,7 +4,7 @@ AION 2 (Global) için küçük, Türkçe hasar ölçer overlay'i. Oyunun ağ tra
 
 Gösterdikleri:
 - **Boss:** ad, tam can, %, dövüş süresi, tahmini öldürme süresi, öfke geri sayımı (`Yetişir` / `geç`)
-- **Parti:** sınıf ikonu, isim, CP, Boss DPS, DPS, toplam hasar, katkı % — en çok vuran en üstte
+- **Parti:** sınıf ikonu ve rengi, isim, CP, Boss DPS, DPS, toplam hasar, katkı %, ölüm sayısı — en çok vuran en üstte (boss varken hasar ve pay bossa vurulandan)
 - **Satıra tıkla:** vuruş istatistikleri, beceri tablosu, DPS grafiği
 - Sayılar yuvarlanmaz. Ölüp dirilmek dövüşü sıfırlamaz; boss ölünce sonuç ekranda kalır.
 
@@ -29,9 +29,10 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Alt` + üstüne gel | Eşya/craft/beceri açıklamasını çevirir (model indirildikten sonra) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
-Overlay küçük ekranda büyük kalıyorsa tepsi menüsünden **Boyut** ile küçült (%70–%125).
-Varsayılan olarak sadece oyun penceresi öndeyken görünür (tepsi menüsünden kapatılabilir).
-Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da tepsi menüsünden "Çeviri modelini indir").
+Tepsi menüsünde **Ayarlar…**: boyut (%70–%125), saydamlık (kaydırırken canlı görünür), savaş dışında davranış, öfke uyarısı sesi, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
+**Savaş dışında** (Ayarlar): bir canavara vurunca overlay tam görünür; savaş bitince ~8 sn sonra `Soluk` (varsayılan), `Gizle` ya da `Hep görünür`.
+Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapatılabilir).
+Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da Ayarlar'dan "Çeviri modeli: İndir").
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini
