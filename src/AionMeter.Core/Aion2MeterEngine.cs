@@ -645,10 +645,14 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     }
 
     /// <summary>
-    /// Canlı kuyruk: dövüş sürerken son vuruştan bu yana geçen süre <see cref="ActiveGap"/>'e kadar paydaya girer (vuruş bu sürede gelirse o
-    /// adım zaten sayılacak: DPS vuruşlar arasında azalır, vuruşta sıçramaz). ActiveGap aşılınca o boşluğun sayılmayacağı kesinleşir; kuyruk bir
-    /// ActiveGap içinde doğrusal olarak sıfıra iner, DPS sıçramadan gerçek değerine (donmuş sonucun değerine) döner.
+    /// Canlı kuyruk: dövüş sürerken son vuruştan bu yana geçen süre <see cref="TailCap"/>'e kadar paydaya girer (vuruş bu sürede gelirse o
+    /// adım zaten sayılacak: DPS vuruşlar arasında azalır, vuruşta sıçramaz). TailCap aşılınca kuyruk bir TailCap içinde doğrusal olarak sıfıra
+    /// iner, DPS sıçramadan gerçek değerine (donmuş sonucun değerine) döner.
     /// </summary>
+    /// <summary>Canlı kuyruğun tepesi: oyuncular saniyede bir ya da daha sık vurur. Daha uzun kuyruk, duran oyuncunun DPS'ini birkaç saniye
+    /// görünür biçimde düşürüp geri çıkarıyordu (kullanıcı: duranın DPS'i erimesin); 1 sn aradaki dalgayı küçük tutar, overlay yumuşatır.</summary>
+    private static readonly TimeSpan TailCap = TimeSpan.FromSeconds(1);
+
     private static TimeSpan Tail(DateTime? last, DateTime now)
     {
         if (last is not { } l || now <= l)
@@ -657,8 +661,8 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         }
 
         TimeSpan elapsed = now - l;
-        return elapsed <= ActiveGap ? elapsed
-            : elapsed < ActiveGap + ActiveGap ? ActiveGap + ActiveGap - elapsed
+        return elapsed <= TailCap ? elapsed
+            : elapsed < TailCap + TailCap ? TailCap + TailCap - elapsed
             : TimeSpan.Zero;
     }
 

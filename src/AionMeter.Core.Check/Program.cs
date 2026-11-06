@@ -1259,21 +1259,22 @@ void DurationChecks()
             Show(suspect) + " >> " + Show(merged));
     }
 
-    // (e) Canlı kuyruk: vuruştan 1 sn sonra payda +1 sn; 3 sn'yi aşınca sıfıra iner (4 sn sonra +2); 10 sn sonra +0 (en çok +3); donmuşta yok.
+    // (e) Canlı kuyruk: vuruştan 1 sn sonra payda +1 sn (tepe); sonraki 1 sn'de sıfıra iner; donmuşta yok.
     {
         var (e, d, _) = New();
         d.NoteClass(me, "Gladiator");
         DateTime t0 = DateTime.Now.AddSeconds(-100);
         for (int i = 0; i <= 10; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
         double At(double sec) => P(e.SnapshotAt(t0.AddSeconds(sec)), me)?.Dps ?? -1;
-        double d10 = At(10), d11 = At(11), d12 = At(12), d13 = At(13), d14 = At(14), d20 = At(20);
+        double d10 = At(10), d105 = At(10.5), d11 = At(11), d115 = At(11.5), d12 = At(12), d13 = At(13), d14 = At(14), d20 = At(20);
         MeterSnapshot live = e.SnapshotAt(t0.AddSeconds(11));
         MeterSnapshot frozen = e.SnapshotAt(t0.AddSeconds(31));
-        Check("süre (e): kuyruk +0/+1/+2/+3/+2 sn, 10 sn sonra +0; dövüş süresi kuyruksuz; donmuşta kuyruk yok",
-            Near(d10, 110_000 / 10.0) && Near(d11, 110_000 / 11.0) && Near(d12, 110_000 / 12.0) && Near(d13, 110_000 / 13.0) && Near(d14, 110_000 / 12.0)
+        Check("süre (e): kuyruk +0/+0,5/+1/+0,5/+0 sn (tepe 1 sn), sonra +0; dövüş süresi kuyruksuz; donmuşta kuyruk yok",
+            Near(d10, 110_000 / 10.0) && Near(d105, 110_000 / 10.5) && Near(d11, 110_000 / 11.0) && Near(d115, 110_000 / 10.5) && Near(d12, 110_000 / 10.0)
+            && Near(d13, 110_000 / 10.0) && Near(d14, 110_000 / 10.0)
             && Near(d20, 110_000 / 10.0) && live.FightDuration == TimeSpan.FromSeconds(10)
             && frozen.FightOver && P(frozen, me) is { } pf && Near(pf.Dps, 110_000 / 10.0),
-            $"dps 10s={d10:N1} 11s={d11:N1} 12s={d12:N1} 13s={d13:N1} 14s={d14:N1} 20s={d20:N1} donmuş={P(frozen, me)?.Dps:N1}");
+            $"dps 10s={d10:N1} 10,5s={d105:N1} 11,5s={d115:N1} 11s={d11:N1} 12s={d12:N1} 13s={d13:N1} 14s={d14:N1} 20s={d20:N1} donmuş={P(frozen, me)?.Dps:N1}");
     }
 
     // (f) Solo kukla (katalog dışı, canı görünen): süre = a.Active (öncekiyle aynı), 5 sn ara sayılmaz; detay aynı süre.
