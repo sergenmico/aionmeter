@@ -279,6 +279,18 @@ internal sealed class AyarlarFormu : Form
                 try { System.Media.SystemSounds.Exclamation.Play(); } catch { /* önizleme */ }
             }
         }));
+
+        _ogeler.Add(new Bolum("Gizli Küp"));
+        _ogeler.Add(new Anahtar("Gizli Küp sesi", "Yakına bir küp gelince kısa, yumuşak ses", () => _ayar.KupSesi, () =>
+        {
+            _ayar.KupSesi = !_ayar.KupSesi;
+            _ayar.Kaydet();
+            if (_ayar.KupSesi) Zil.Kup(_ayar.KupSes); // açınca bir kez önizleme
+        }));
+        _ogeler.Add(new Kaydirici("Küp sesi düzeyi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.KupSes,
+            v => _ayar.KupSes = v, () => { _ayar.Kaydet(); Zil.Kup(_ayar.KupSes); }) // bırakınca bir kez önizleme
+        { Etkin = () => _ayar.KupSesi });
+        _ogeler.Add(new Dugme(() => "Küp sesi", () => "Dene", () => Zil.Kup(_ayar.KupSes)) { Etkin = () => _ayar.KupSesi });
         for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 2;
 
         ClientSize = Yerlesim();

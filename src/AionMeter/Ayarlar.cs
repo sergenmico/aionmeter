@@ -57,6 +57,10 @@ internal sealed class Ayarlar
     public int AlarmSes = 40;      // yüzde, 10..100
     public int AlarmDk = 5;        // son kurulan süre (seçicide ilk görünen)
 
+    // Gizli Küp: yakına bir küp gelince kısa, yumuşak bir ses (varsayılan açık).
+    public bool KupSesi = true;
+    public int KupSes = 40;        // yüzde, 10..100
+
     public const int EnAzSolukOpaklik = 10, EnFazlaSolukOpaklik = 60;
     public const int EnAzYazi = 80, EnFazlaYazi = 130;
     public const int EnAzKukla = 5, EnFazlaKukla = 300;
@@ -108,7 +112,7 @@ internal sealed class Ayarlar
         "X", "Y", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
         "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
         "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
-        "KuklaKisayol",
+        "KuklaKisayol", "KupSesi", "KupSes",
     };
 
     private readonly List<string> _bilinmeyen = new(); // tanınmayan satırlar, Kaydet'te sona aynen yazılır
@@ -173,6 +177,8 @@ internal sealed class Ayarlar
                     case "KuklaOzelSure" when sayi: a.KuklaOzelSure = Math.Clamp(n, EnAzKukla, EnFazlaKukla); break;
                     case "AlarmSes" when sayi: a.AlarmSes = Math.Clamp(n, EnAzAlarmSes, EnFazlaAlarmSes); break;
                     case "AlarmDk" when sayi: a.AlarmDk = Math.Clamp(n, 1, EnFazlaAlarmDk); break;
+                    case "KupSesi": a.KupSesi = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
+                    case "KupSes" when sayi: a.KupSes = Math.Clamp(n, EnAzAlarmSes, EnFazlaAlarmSes); break;
                     case "KuklaKisayol":
                         // "yok" = kısayol kapalı; geçersiz metin varsayılana döner
                         a.KuklaKisayol = deger.Equals("yok", StringComparison.OrdinalIgnoreCase) ? ""
@@ -242,6 +248,8 @@ internal sealed class Ayarlar
                 "AlarmSes=" + AlarmSes.ToString(inv) + Environment.NewLine +
                 "AlarmDk=" + AlarmDk.ToString(inv) + Environment.NewLine +
                 "KuklaKisayol=" + (KuklaKisayol.Length > 0 ? KuklaKisayol : "yok") + Environment.NewLine +
+                "KupSesi=" + (KupSesi ? "1" : "0") + Environment.NewLine +
+                "KupSes=" + KupSes.ToString(inv) + Environment.NewLine +
                 (_bilinmeyen.Count > 0 ? string.Join(Environment.NewLine, _bilinmeyen) + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";
