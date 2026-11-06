@@ -17,7 +17,9 @@ internal sealed class OverlayForm : Form
     private const int MaxSatir = 12;
     private const int UstSayisi = 5; // kalabalıkta (> 5 oyuncu) gösterilen ilk sıra sayısı
     private static readonly string[] SiraMetni = { "1", "2", "3", "4", "5" };
-    private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4, KisayolCevir = 5;
+    private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4, KisayolCevir = 5, KisayolKukla = 6;
+    // Sabit kısayollar (kimlik sırasıyla); kullanıcının kukla kısayolu bunlarla çakışamaz.
+    private static readonly string[] SabitKisayollar = { "", "Ctrl+Alt+L", "Ctrl+Alt+H", "Ctrl+Alt+R", "Ctrl+Alt+D", "Ctrl+Alt+T" };
     private static readonly TimeSpan SavasSonrasi = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan KartTamGorunur = TimeSpan.FromSeconds(20);
     private const string BossEtiketi = "boss/sn", DpsEtiketi = "/sn", CpEtiketi = "CP", HasarEtiketi = "hasar", PayEtiketi = "pay";
@@ -291,7 +293,7 @@ internal sealed class OverlayForm : Form
         base.OnLoad(e);
 
         _tepsi = new Tepsi(KilitDegistir, GosterDegistir, Sifirla, Detayim, _cevirmen.BolgeCevir, AyarlariAc, GuncellemeDenetle, Close,
-            sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc);
+            sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc, KuklaKisayolBasildi);
         _tepsi.Menu.Opening += (_, _) => TepsiGuncelle(); // alarmın kalan süresi menü açılırken güncellenir
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
@@ -301,6 +303,7 @@ internal sealed class OverlayForm : Form
         if (!_kisayol.Kaydet(KisayolSifirla, Keys.R)) alinamayan.Add("Ctrl+Alt+R");
         if (!_kisayol.Kaydet(KisayolDetayim, Keys.D)) alinamayan.Add("Ctrl+Alt+D");
         if (!_kisayol.Kaydet(KisayolCevir, Keys.T)) alinamayan.Add("Ctrl+Alt+T");
+        if (!KuklaKisayolKaydet(_ayar.KuklaKisayol)) alinamayan.Add(_ayar.KuklaKisayol);
         TepsiGuncelle();
 
         if (alinamayan.Count > 0)
@@ -445,7 +448,8 @@ internal sealed class OverlayForm : Form
     private void TepsiGuncelle()
     {
         _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _denetleniyor);
-        _tepsi?.KuklaGuncelle(_ayar.KuklaSure, _ayar.KuklaOzel, _ayar.KuklaOzelSure, _kukla.Etkin, AlarmKalan());
+        _tepsi?.KuklaGuncelle(_ayar.KuklaSure, _ayar.KuklaOzel, _ayar.KuklaOzelSure, _kukla.Etkin,
+            _kukla.Durum == KuklaTesti.Hal.Sonuc, _ayar.KuklaKisayol, AlarmKalan());
     }
 
     /// <summary>Boyut: overlay ve detay paneli bu yüzdeyle çizilir (Windows ölçeğinin üstüne).</summary>
@@ -506,6 +510,9 @@ internal sealed class OverlayForm : Form
             AlarmKur = () => { _ayarlarFormu?.Close(); AlarmSeciciAc(); },
             AlarmIptal = AlarmIptal,
             AlarmKalan = AlarmKalan,
+            KuklaKisayol = () => _ayar.KuklaKisayol,
+            KuklaKisayolAyarla = KuklaKisayolAyarla,
+            KisayolYakalama = KisayolYakalama,
             Ikonlar = _ikonlar,
         };
         IntPtr oyun = _onPlan.OyunOnde() ? _onPlan.SonOyunPenceresi : IntPtr.Zero; // oyun önde değilse odağa dokunma
@@ -971,6 +978,65 @@ internal sealed class OverlayForm : Form
     }
 
     // ---------------- Kukla testi ----------------
+
+    // Kukla kısayolu (varsayılan Ctrl+Alt+K; Ayarlar → Kukla ve alarm'dan değiştirilir ya da kapatılır)
+    private bool _kuklaKisayolKayitli, _kisayolYakalaniyor;
+
+    /// <summary>Kısayol: ayardaki süreyle testi başlat; test sürerken ya da kart açıkken iptal et / kartı kapat.</summary>
+    private void KuklaKisayolBasildi()
+    {
+        if (_kukla.Durum != KuklaTesti.Hal.Kapali) KuklaIptal();
+        else KuklaBaslat(_ayar.KuklaSuresi);
+    }
+
+    /// <summary>Kombinasyonu kaydeder ("" = kısayol yok, başarılı sayılır). Çakışmada false.</summary>
+    private bool KuklaKisayolKaydet(string metin)
+    {
+        if (_kisayol is null || metin.Length == 0) return true;
+        if (!Kisayol.Coz(metin, out uint d, out Keys t)) return false;
+        _kuklaKisayolKayitli = _kisayol.Kaydet(KisayolKukla, d, t);
+        return _kuklaKisayolKayitli;
+    }
+
+    private void KuklaKisayolKaldir()
+    {
+        if (!_kuklaKisayolKayitli) return;
+        _kisayol?.Kaldir(KisayolKukla);
+        _kuklaKisayolKayitli = false;
+    }
+
+    /// <summary>
+    /// Ayarlardan: yeni kısayol ("" = kapat). Sabit kısayollarla çakışırsa ya da başka program almışsa reddedilir,
+    /// eski kombinasyon geri kaydedilir. Hata metni döner; başarılıysa null (ayar kaydedilir).
+    /// </summary>
+    private string? KuklaKisayolAyarla(string yeni)
+    {
+        if (yeni.Length > 0)
+        {
+            if (Kisayol.Duzgun(yeni) is not string d) return "Geçersiz kısayol";
+            yeni = d;
+            if (Array.IndexOf(SabitKisayollar, yeni) > 0) return yeni + " AionMeter'da başka işe atanmış";
+        }
+        string eski = _ayar.KuklaKisayol;
+        KuklaKisayolKaldir();
+        if (!KuklaKisayolKaydet(yeni))
+        {
+            if (!_kisayolYakalaniyor) KuklaKisayolKaydet(eski); // yakalarken eski, yakalama bitince geri kaydedilir
+            return "Bu kısayol kullanımda";
+        }
+        _ayar.KuklaKisayol = yeni;
+        _ayar.Kaydet();
+        TepsiGuncelle();
+        return null;
+    }
+
+    /// <summary>Ayarlar yeni tuşu yakalarken kendi kısayolu WM_HOTKEY'e gitmesin diye geçici olarak bırakılır.</summary>
+    private void KisayolYakalama(bool basladi)
+    {
+        _kisayolYakalaniyor = basladi;
+        if (basladi) KuklaKisayolKaldir();
+        else if (!_kuklaKisayolKayitli) KuklaKisayolKaydet(_ayar.KuklaKisayol);
+    }
 
     private PlayerDetail? KuklaDetay(long id) => _motor.Detail(id);
 
@@ -2193,6 +2259,12 @@ internal sealed class OverlayForm : Form
 
     private void KisayolBasildi(int id)
     {
+        // Ayarlarda yeni kukla kısayolu yakalanırken sabit bir kısayola basıldı: çalıştırma, yakalanan tuş say (reddedilir).
+        if (_kisayolYakalaniyor && id > 0 && id < SabitKisayollar.Length && _ayarlarFormu is not null)
+        {
+            _ayarlarFormu.KisayolYakalandi(SabitKisayollar[id]);
+            return;
+        }
         switch (id)
         {
             case KisayolKilit: KilitDegistir(); break;
@@ -2200,6 +2272,7 @@ internal sealed class OverlayForm : Form
             case KisayolSifirla: Sifirla(); break;
             case KisayolDetayim: Detayim(); break;
             case KisayolCevir: _cevirmen.BolgeCevir(); break;
+            case KisayolKukla: KuklaKisayolBasildi(); break;
         }
     }
 

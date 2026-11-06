@@ -28,6 +28,7 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Ctrl+Alt+D` | Kendi detayın |
 | `Ctrl+Alt+T` | Ekranda bölge seç, Türkçeye çevir (tekrar basınca kapanır) |
 | `Alt` + üstüne gel | Eşya/craft/beceri açıklamasını çevirir (model indirildikten sonra) |
+| `Ctrl+Alt+K` | Kukla testini başlat (Ayarlar'daki süreyle); tekrar basınca iptal / sonuç kartını kapat. Ayarlar → Kukla ve alarm → Kısayol'dan değiştirilir ya da kapatılır |
 | `Alt` + saate tıkla | Alarm kur / kapat (overlay'in sağ alt köşesi) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.

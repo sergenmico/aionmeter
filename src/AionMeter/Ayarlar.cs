@@ -49,6 +49,8 @@ internal sealed class Ayarlar
     public int KuklaSure = 60;
     public bool KuklaOzel;
     public int KuklaOzelSure = 90;
+    public const string VarsayilanKuklaKisayol = "Ctrl+Alt+K";
+    public string KuklaKisayol = VarsayilanKuklaKisayol; // "" = kısayol yok
     public int KuklaSuresi => KuklaOzel ? KuklaOzelSure : KuklaSure;
 
     // Alarm
@@ -106,6 +108,7 @@ internal sealed class Ayarlar
         "X", "Y", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
         "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
         "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
+        "KuklaKisayol",
     };
 
     private readonly List<string> _bilinmeyen = new(); // tanınmayan satırlar, Kaydet'te sona aynen yazılır
@@ -170,6 +173,11 @@ internal sealed class Ayarlar
                     case "KuklaOzelSure" when sayi: a.KuklaOzelSure = Math.Clamp(n, EnAzKukla, EnFazlaKukla); break;
                     case "AlarmSes" when sayi: a.AlarmSes = Math.Clamp(n, EnAzAlarmSes, EnFazlaAlarmSes); break;
                     case "AlarmDk" when sayi: a.AlarmDk = Math.Clamp(n, 1, EnFazlaAlarmDk); break;
+                    case "KuklaKisayol":
+                        // "yok" = kısayol kapalı; geçersiz metin varsayılana döner
+                        a.KuklaKisayol = deger.Equals("yok", StringComparison.OrdinalIgnoreCase) ? ""
+                            : Kisayol.Duzgun(deger) ?? VarsayilanKuklaKisayol;
+                        break;
                     default:
                         // Renk.Gladiator=62A4F0
                         if (anahtar.StartsWith("Renk.", StringComparison.Ordinal))
@@ -233,6 +241,7 @@ internal sealed class Ayarlar
                 "KuklaOzelSure=" + KuklaOzelSure.ToString(inv) + Environment.NewLine +
                 "AlarmSes=" + AlarmSes.ToString(inv) + Environment.NewLine +
                 "AlarmDk=" + AlarmDk.ToString(inv) + Environment.NewLine +
+                "KuklaKisayol=" + (KuklaKisayol.Length > 0 ? KuklaKisayol : "yok") + Environment.NewLine +
                 (_bilinmeyen.Count > 0 ? string.Join(Environment.NewLine, _bilinmeyen) + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";

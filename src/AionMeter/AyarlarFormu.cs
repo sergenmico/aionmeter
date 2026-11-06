@@ -35,6 +35,9 @@ internal sealed class AyarlarFormu : Form
         public Action AlarmKur { get; init; } = () => { };
         public Action AlarmIptal { get; init; } = () => { };
         public Func<string?> AlarmKalan { get; init; } = () => null;
+        public Func<string> KuklaKisayol { get; init; } = () => "";
+        public Func<string, string?> KuklaKisayolAyarla { get; init; } = _ => null; // hata metni ya da null
+        public Action<bool> KisayolYakalama { get; init; } = _ => { };
         public SinifIkonlari? Ikonlar { get; init; }               // overlay'in ikon önbelleği (paylaşılır, Dispose edilmez)
     }
 
@@ -101,6 +104,15 @@ internal sealed class AyarlarFormu : Form
         public readonly bool Yarim = yarim;
         public Rectangle Kutu;
     }
+
+    /// <summary>Kukla kısayolu: [Ctrl+Alt+K] [Değiştir] [Kapat]; altta ipucu ya da kırmızı uyarı.</summary>
+    private sealed class KisayolSatiri : Oge
+    {
+        public Rectangle Deger, Degistir, Kapat;
+    }
+
+    private bool _yakalaniyor;     // "Değiştir"e basıldı: bir sonraki tuş kombinasyonu bekleniyor
+    private string? _kisayolHata;  // kısa kırmızı uyarı (bir sonraki eyleme kadar)
 
     private static readonly string[] Sekmeler = { "Genel", "Renk ve yazı", "Kukla ve alarm" };
     private readonly Rectangle[] _sekmeKutu = new Rectangle[Sekmeler.Length];
@@ -247,6 +259,7 @@ internal sealed class AyarlarFormu : Form
             () => _b.KuklaEtkin() ? "İptal et" : "Başlat",
             () => { if (_b.KuklaEtkin()) _b.KuklaIptal(); else _b.KuklaBaslat(); },
             "Sayaç sıfırlanır; ilk vuruşunla geri sayım başlar"));
+        _ogeler.Add(new KisayolSatiri());
 
         _ogeler.Add(new Bolum("Alarm"));
         _ogeler.Add(new Kaydirici("Alarm sesi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.AlarmSes,
@@ -366,6 +379,15 @@ internal sealed class AyarlarFormu : Form
                         o.Alan = new Rectangle(x0, y, x1 - x0, h);
                         int dw = Math.Max(Olc(d.Metin(), _yaziKucuk), P(96)) + P(28);
                         d.Kutu = new Rectangle(x1 - dw, y + (h - P(28)) / 2, dw, P(28));
+                        break;
+                    }
+                    case KisayolSatiri ks:
+                    {
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(58));
+                        int by = y + P(6), bh = P(28);
+                        ks.Kapat = new Rectangle(x1 - P(64), by, P(64), bh);
+                        ks.Degistir = new Rectangle(ks.Kapat.Left - P(6) - P(84), by, P(84), bh);
+                        ks.Deger = new Rectangle(ks.Degistir.Left - P(8) - P(124), by, P(124), bh);
                         break;
                     }
                     case RenkSecim r:
@@ -505,6 +527,9 @@ internal sealed class AyarlarFormu : Form
                 case RenkSecim rs:
                     CizRenkSecim(g, rs);
                     break;
+                case KisayolSatiri ks:
+                    CizKisayol(g, ks);
+                    break;
             }
         }
 
@@ -553,6 +578,106 @@ internal sealed class AyarlarFormu : Form
             TextRenderer.DrawText(g, ornek, _yaziDeger, new Rectangle(rs.Kutu.Left - P(10) - ow, r.Y, ow, r.Height), Palet.YerelYazi, Sol);
         }
         RenkKutusu(g, rs.Kutu, rs.Acik(), rs.Koyu(), vurgulu);
+    }
+
+    private void CizKisayol(Graphics g, KisayolSatiri ks)
+    {
+        var r = ks.Alan;
+        TextRenderer.DrawText(g, "Kısayol", _yazi, new Rectangle(r.X, ks.Deger.Y, ks.Deger.Left - r.X - P(8), ks.Deger.Height), Palet.Yazi, Sol);
+
+        // Mevcut kombinasyon (yakalarken çerçeveli "Tuşlara bas…")
+        string k = _b.KuklaKisayol();
+        Cizim.YuvarlakDoldur(g, _fircaPanel, ks.Deger, P(5));
+        if (_yakalaniyor)
+        {
+            Cizim.YuvarlakCiz(g, _kalemSeciliKenar, ks.Deger, P(5));
+            TextRenderer.DrawText(g, "Tuşlara bas…", _yaziKucuk, ks.Deger, Palet.Vurgu, Orta);
+        }
+        else TextRenderer.DrawText(g, k.Length > 0 ? k : "Kapalı", k.Length > 0 ? _yaziDeger : _yaziKucuk, ks.Deger,
+            k.Length > 0 ? Palet.Dps : Palet.CokSoluk, Orta);
+
+        Cizim.YuvarlakDoldur(g, _ustunde == ks && _kisayolUstunde == 1 ? _fircaSecili : _fircaPanelUst, ks.Degistir, P(5));
+        TextRenderer.DrawText(g, _yakalaniyor ? "Vazgeç" : "Değiştir", _yaziKucuk, ks.Degistir, Palet.Yazi, Orta);
+        bool kapatEtkin = k.Length > 0 && !_yakalaniyor;
+        Cizim.YuvarlakDoldur(g, kapatEtkin && _ustunde == ks && _kisayolUstunde == 2 ? _fircaSecili : _fircaPanelUst, ks.Kapat, P(5));
+        TextRenderer.DrawText(g, "Kapat", _yaziKucuk, ks.Kapat, kapatEtkin ? Palet.Yazi : Palet.CokSoluk, Orta);
+
+        string alt = _kisayolHata ?? (_yakalaniyor ? "En az bir Ctrl / Alt / Shift / Win + tuş · Esc: vazgeç"
+            : k.Length == 0 ? "Kısayol kapalı; Değiştir ile yenisini ata"
+            : "Basınca test başlar; tekrar basınca iptal eder ya da kartı kapatır");
+        TextRenderer.DrawText(g, alt, _yaziKucuk, new Rectangle(r.X, ks.Deger.Bottom + P(4), r.Width, P(16)),
+            _kisayolHata is not null ? Palet.Kirmizi : Palet.Soluk, Sol);
+    }
+
+    private int _kisayolUstunde; // 1 Değiştir, 2 Kapat
+
+    // ---------------- Kısayol yakalama ----------------
+
+    private void YakalamaBaslat()
+    {
+        _yakalaniyor = true;
+        _kisayolHata = null;
+        _b.KisayolYakalama(true);
+        Invalidate();
+    }
+
+    private void YakalamaBitir()
+    {
+        if (!_yakalaniyor) return;
+        _yakalaniyor = false;
+        _b.KisayolYakalama(false);
+        if (!IsDisposed) Invalidate();
+    }
+
+    private void KisayolDene(string metin)
+    {
+        _kisayolHata = _b.KuklaKisayolAyarla(metin);
+        YakalamaBitir();
+    }
+
+    /// <summary>Overlay'den: yakalarken sabit bir genel kısayola basıldı (WM_HOTKEY'e gitti); onu da dene (reddedilir).</summary>
+    public void KisayolYakalandi(string metin)
+    {
+        if (_yakalaniyor) KisayolDene(metin);
+    }
+
+    /// <summary>Yakalarken her tuş buraya gelir (Alt'lı kombinasyonlar dahil, WM_SYSKEYDOWN da işlenir).</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (!_yakalaniyor) return base.ProcessCmdKey(ref msg, keyData);
+        Keys tus = keyData & Keys.KeyCode;
+        if (tus == Keys.Escape && (keyData & Keys.Modifiers) == Keys.None)
+        {
+            YakalamaBitir();
+            return true;
+        }
+        if (Kisayol.DegistiriciMi(tus) || tus == Keys.None) return true; // değiştiricinin kendisi: tuşu bekle
+        uint d = 0;
+        if ((keyData & Keys.Control) != 0) d |= Native.MOD_CONTROL;
+        if ((keyData & Keys.Alt) != 0) d |= Native.MOD_ALT;
+        if ((keyData & Keys.Shift) != 0) d |= Native.MOD_SHIFT;
+        if ((Native.GetAsyncKeyState(Native.VK_LWIN) & 0x8000) != 0 || (Native.GetAsyncKeyState(Native.VK_RWIN) & 0x8000) != 0)
+            d |= Native.MOD_WIN;
+        if (d == 0)
+        {
+            _kisayolHata = "En az bir Ctrl / Alt / Shift / Win gerekli";
+            Invalidate();
+            return true;
+        }
+        KisayolDene(Kisayol.Metin(d, tus));
+        return true;
+    }
+
+    protected override void OnDeactivate(EventArgs e)
+    {
+        base.OnDeactivate(e);
+        YakalamaBitir(); // başka pencereye geçildi (ör. Win tuşu): yakalama biter, eski kısayol geri gelir
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        YakalamaBitir();
+        base.OnFormClosed(e);
     }
 
     private void CizPalet(Graphics g)
@@ -651,6 +776,7 @@ internal sealed class AyarlarFormu : Form
                 case Anahtar a when o.Alan.Contains(p): return o;   // satırın her yeri anahtarı değiştirir
                 case Dugme d when d.Kutu.Contains(p): return o;
                 case RenkSecim when o.Alan.Contains(p): return o;   // hücrenin her yeri paleti açar
+                case KisayolSatiri ks when ks.Degistir.Contains(p) || ks.Kapat.Contains(p): return o;
             }
         }
         return null;
@@ -719,6 +845,12 @@ internal sealed class AyarlarFormu : Form
             Invalidate();
         }
         var o = OgeBul(e.Location);
+        int ku = o is KisayolSatiri kss ? (kss.Degistir.Contains(e.Location) ? 1 : 2) : 0;
+        if (ku != _kisayolUstunde)
+        {
+            _kisayolUstunde = ku;
+            Invalidate();
+        }
         bool el = (o is not null && o.EtkinMi) || _kapatKutusu.Contains(e.Location) || (si >= 0 && si != _sekme);
         Cursor = el ? Cursors.Hand : Cursors.Default;
         if (o != _ustunde)
@@ -801,6 +933,17 @@ internal sealed class AyarlarFormu : Form
             case RenkSecim r:
                 PaletAc(r);
                 return;
+            case KisayolSatiri ks:
+                if (ks.Degistir.Contains(e.Location))
+                {
+                    if (_yakalaniyor) YakalamaBitir();
+                    else YakalamaBaslat();
+                }
+                else if (!_yakalaniyor && _b.KuklaKisayol().Length > 0)
+                {
+                    _kisayolHata = _b.KuklaKisayolAyarla(""); // kısayol yok
+                }
+                break;
         }
         if (!IsDisposed) Invalidate();
     }

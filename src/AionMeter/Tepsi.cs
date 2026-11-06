@@ -6,7 +6,7 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaOzel, _kuklaIptal, _alarm;
+    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaKisa, _kuklaOzel, _kuklaIptal, _alarm;
     private readonly ToolStripMenuItem[] _kuklaSureleri;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
@@ -15,8 +15,10 @@ internal sealed class Tepsi : IDisposable
 
     /// <summary>Kısa menü: sık kullanılanlar burada, geri kalan her şey Ayarlar penceresinde.</summary>
     /// <param name="kuklaBaslat">Süre (sn) ile kukla testini başlatır; 0 = ayarlardaki özel süre.</param>
+    /// <param name="kuklaKisayol">Kukla kısayoluyla aynı iş: ayardaki süreyle başlat ya da iptal et / kartı kapat.</param>
     public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sifirla, Action detayim, Action bolgeCevir,
-                 Action ayarlar, Action guncellemeDenetle, Action cikis, Action<int> kuklaBaslat, Action kuklaIptal, Action alarm)
+                 Action ayarlar, Action guncellemeDenetle, Action cikis, Action<int> kuklaBaslat, Action kuklaIptal, Action alarm,
+                 Action kuklaKisayol)
     {
         Menu = new ContextMenuStrip { ShowImageMargin = false };
         _kilit = new ToolStripMenuItem("Kilitle", null, (_, _) => kilitDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" };
@@ -27,6 +29,9 @@ internal sealed class Tepsi : IDisposable
 
         // Kukla testi: hazır süreler + özel süre (Ayarlar'dan) + iptal
         _kukla = new ToolStripMenuItem("Kukla testi");
+        _kuklaKisa = new ToolStripMenuItem("Başlat", null, (_, _) => kuklaKisayol());
+        _kukla.DropDownItems.Add(_kuklaKisa);
+        _kukla.DropDownItems.Add(new ToolStripSeparator());
         _kuklaSureleri = Array.ConvertAll(Ayarlar.KuklaSureleri, sn =>
             new ToolStripMenuItem(sn.ToString(Bicim.Tr) + " sn", null, (_, _) => kuklaBaslat(sn)));
         _kuklaOzel = new ToolStripMenuItem("Özel", null, (_, _) => kuklaBaslat(0));
@@ -64,8 +69,13 @@ internal sealed class Tepsi : IDisposable
     }
 
     /// <summary>Kukla alt menüsü: seçili süre işaretli, test sürerken iptal etkin; alarm kalan süresi.</summary>
-    public void KuklaGuncelle(int sure, bool ozel, int ozelSure, bool etkin, string? alarmKalan)
+    public void KuklaGuncelle(int sure, bool ozel, int ozelSure, bool etkin, bool kartAcik, string kisayol, string? alarmKalan)
     {
+        // İlk öğe kısayolla aynı işi yapar; kısayol metni yanında görünür (kapalıysa boş).
+        _kuklaKisa.Text = etkin ? "Testi iptal et" : kartAcik ? "Sonuç kartını kapat"
+            : "Başlat (" + (ozel ? ozelSure : sure).ToString(Bicim.Tr) + " sn)";
+        _kuklaKisa.ShortcutKeyDisplayString = kisayol;
+        _kukla.ShortcutKeyDisplayString = kisayol;
         for (int i = 0; i < _kuklaSureleri.Length; i++) _kuklaSureleri[i].Checked = !ozel && Ayarlar.KuklaSureleri[i] == sure;
         _kuklaOzel.Text = "Özel: " + ozelSure.ToString(Bicim.Tr) + " sn";
         _kuklaOzel.Checked = ozel;
