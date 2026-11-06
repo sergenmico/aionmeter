@@ -38,6 +38,7 @@ TcpChecks();
 OtherChecks();
 AuditChecks();
 PlayerTargetChecks();
+DurationChecks();
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif
@@ -460,7 +461,7 @@ void MotorScenarios()
         for (int i = 10; i >= 5; i--) { e.InjectHit(H(me, t.AddSeconds(-i), 950, 10_000)); }
         MeterSnapshot s1 = e.Snapshot();
         e.InjectHit(H(me, t, 950, 10_000));
-        MeterSnapshot s2 = e.Snapshot();
+        MeterSnapshot s2 = e.SnapshotAt(t); // vuruş anında (canlı kuyruk 0): duvar saatiyle t arasındaki ms'ler paydaya girmesin
         Check("MOTOR 5: 5 sn ara aktif süreye girmez", s1.FightDuration == TimeSpan.FromSeconds(5) && s2.FightDuration == TimeSpan.FromSeconds(5) && P(s2, me)?.Dps == 14_000, Show(s2));
     }
 
@@ -1152,3 +1153,197 @@ void PlayerTargetChecks()
             Show(none) + " >> " + Show(s));
     }
 }
+
+// Oyuncu başı süre: DPS paydası = partinin aktif süresinin oyuncunun ilk ve son vuruşu arasındaki kısmı; canlıyken kendi son vuruşundan kuyruk,
+// donmuşta kuyruk yok.
+void DurationChecks()
+{
+    Console.WriteLine("[oyuncu başı süre]");
+    const int me = 500, friend = 600, boss = 900, trash = 950, dummy = 960;
+    const int catalogNpc = 2300708;
+    DamageEvent H(int src, DateTime at, int target, long amount, int skill = 11010000) => new(at, src, target, amount, false, SkillId: skill);
+    PlayerDamage? P(MeterSnapshot s, int id) => s.Players.FirstOrDefault(p => p.Id == id);
+    bool Near(double a, double b) => Math.Abs(a - b) <= Math.Max(1e-6, Math.Abs(b) * 1e-9);
+
+    (Aion2MeterEngine E, Aion2EntityDirectory D) Party()
+    {
+        var (e, d, _) = New();
+        d.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, DateTime.Now));
+        d.NoteClass(me, "Gladiator");
+        d.Register(friend, "Arkadas"); d.NoteClass(friend, "Ranger");
+        d.NoteParty(new[] { "Ben", "Arkadas" }, DateTime.Now);
+        return (e, d);
+    }
+
+    // (a)(b) İki parti üyesi, arkadaş 30 sn geç başlıyor: geç başlayanın DPS'i = toplamı ÷ kendi süresi (30 sn); erken başlayanın süresi = dövüş süresi.
+    {
+        var (e, d) = Party();
+        DateTime t0 = DateTime.Now.AddSeconds(-60);
+        for (int i = 0; i <= 60; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000));
+            if (i >= 30) { e.InjectHit(H(friend, t0.AddSeconds(i), trash, 20_000, 13010000)); }
+        }
+
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(60));
+        Check("süre (a): 30 sn geç başlayan arkadaşın DPS'i = toplamı ÷ 30 sn",
+            P(s, friend) is { Total: 620_000 } f && Near(f.Dps, 620_000 / 30.0), Show(s));
+        Check("süre (b): erken başlayanın süresi = dövüş süresi (a.Active, 60 sn)",
+            s.FightDuration == TimeSpan.FromSeconds(60) && P(s, me) is { Total: 610_000 } m && Near(m.Dps, 610_000 / 60.0), Show(s));
+        PlayerDetail? live = e.Detail(friend); // canlı: duvar saatiyle son vuruştan birkaç ms sonra
+        Check("süre: canlı detay satırla aynı payda (Dps × Aktif = Toplam, Aktif ≈ 30 sn)",
+            live is { Total: 620_000 } l && l.Active.TotalSeconds >= 30 && l.Active.TotalSeconds < 31 && Near(l.Dps * l.Active.TotalSeconds, 620_000),
+            $"aktif {live?.Active.TotalSeconds:0.000} sn, dps {live?.Dps:N3}");
+        MeterSnapshot over = e.SnapshotAt(t0.AddSeconds(81)); // 21 sn vuruşsuz: dövüş biter (donmuş sonuç)
+        PlayerDetail? frozenFriend = e.Detail(friend), frozenMe = e.Detail(me);
+        Check("süre: donmuş sonuçta kuyruk yok, detay süresi tam 30 / 60 sn",
+            over.FightOver && P(over, friend) is { } of && Near(of.Dps, 620_000 / 30.0)
+            && frozenFriend?.Active == TimeSpan.FromSeconds(30) && frozenMe?.Active == TimeSpan.FromSeconds(60) && frozenMe.Active == over.FightDuration,
+            $"arkadaş {frozenFriend?.Active.TotalSeconds} sn, ben {frozenMe?.Active.TotalSeconds} sn, dövüş {over.FightDuration.TotalSeconds} sn");
+    }
+
+    // (c) Boss dövüşü: ben önce 10 sn trash, sonra 40 sn boss; arkadaş boss'a 20 sn geç katılıyor. BossDps paydası kümeye ilk/son vuruş arası.
+    {
+        var (e, d) = Party();
+        d.RegisterNpc(boss, catalogNpc);
+        DateTime t0 = DateTime.Now.AddSeconds(-40);
+        d.HitPoints.Note(boss, t0.AddSeconds(-11), 100_000_000);
+        for (int i = -10; i < 0; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 5_000)); }
+        long hp = 100_000_000;
+        for (int i = 0; i <= 40; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), boss, 100_000)); hp -= 100_000;
+            if (i >= 20) { e.InjectHit(H(friend, t0.AddSeconds(i), boss, 300_000, 13010000)); hp -= 300_000; }
+            d.HitPoints.Note(boss, t0.AddSeconds(i), hp);
+        }
+
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(40));
+        Check("süre (c): boss'a 20 sn geç katılanın BossDps'i = boss hasarı ÷ 20 sn; benimki ÷ 40 sn; Dps paydaları 20 / 50 sn",
+            s.Boss?.Id == boss && P(s, friend) is { BossTotal: 6_300_000 } f && Near(f.BossDps, 6_300_000 / 20.0) && Near(f.Dps, 6_300_000 / 20.0)
+            && P(s, me) is { BossTotal: 4_100_000, Total: 4_150_000 } m && Near(m.BossDps, 4_100_000 / 40.0) && Near(m.Dps, 4_150_000 / 50.0)
+            && s.FightDuration == TimeSpan.FromSeconds(50), Show(s));
+        MeterSnapshot tail = e.SnapshotAt(t0.AddSeconds(41));
+        Check("süre (c): canlı kuyruk BossDps'e de girer (1 sn sonra ÷ 21 sn), dövüş süresi kuyruksuz",
+            P(tail, friend) is { } ft && Near(ft.BossDps, 6_300_000 / 21.0) && tail.FightDuration == TimeSpan.FromSeconds(50), Show(tail));
+    }
+
+    // (d) Wipe şüphesi boşa çıktı (16 sn ara, taze okuma düşük): denemeler birleşir, oyuncu başı süreler tutarlı.
+    {
+        var (e, d) = Party();
+        d.RegisterNpc(boss, catalogNpc);
+        DateTime t0 = DateTime.Now.AddSeconds(-60);
+        d.HitPoints.Note(boss, t0.AddSeconds(-1), 100_000_000);
+        long hp = 100_000_000;
+        for (int i = 0; i <= 20; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), boss, 100_000)); hp -= 100_000;
+            if (i >= 10) { e.InjectHit(H(friend, t0.AddSeconds(i), boss, 200_000, 13010000)); hp -= 200_000; }
+            d.HitPoints.Note(boss, t0.AddSeconds(i), hp);
+        }
+
+        e.SnapshotAt(t0.AddSeconds(20));
+        for (int i = 36; i <= 40; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), boss, 100_000)); hp -= 100_000;
+            e.InjectHit(H(friend, t0.AddSeconds(i), boss, 200_000, 13010000)); hp -= 200_000;
+        }
+
+        MeterSnapshot suspect = e.SnapshotAt(t0.AddSeconds(40));
+        d.HitPoints.Note(boss, t0.AddSeconds(40), hp); // taze okuma: sıfırlanmamış
+        MeterSnapshot merged = e.SnapshotAt(t0.AddSeconds(40));
+        Check("süre (d): şüphe sırasında yeni deneme 4 sn; birleşince dövüş 24 sn, arkadaş 14 sn (10 + 4)",
+            suspect.Boss is { CanBilinmiyor: true } && suspect.FightDuration == TimeSpan.FromSeconds(4)
+            && merged.Boss is { CanBilinmiyor: false } && merged.FightDuration == TimeSpan.FromSeconds(24)
+            && P(merged, me) is { Total: 2_600_000, BossTotal: 2_600_000 } m && Near(m.Dps, 2_600_000 / 24.0) && Near(m.BossDps, 2_600_000 / 24.0)
+            && P(merged, friend) is { Total: 3_200_000 } f && Near(f.Dps, 3_200_000 / 14.0) && Near(f.BossDps, 3_200_000 / 14.0),
+            Show(suspect) + " >> " + Show(merged));
+    }
+
+    // (e) Canlı kuyruk: vuruştan 1 sn sonra payda +1 sn; 3 sn'yi aşınca sıfıra iner (4 sn sonra +2); 10 sn sonra +0 (en çok +3); donmuşta yok.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        DateTime t0 = DateTime.Now.AddSeconds(-100);
+        for (int i = 0; i <= 10; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+        double At(double sec) => P(e.SnapshotAt(t0.AddSeconds(sec)), me)?.Dps ?? -1;
+        double d10 = At(10), d11 = At(11), d12 = At(12), d13 = At(13), d14 = At(14), d20 = At(20);
+        MeterSnapshot live = e.SnapshotAt(t0.AddSeconds(11));
+        MeterSnapshot frozen = e.SnapshotAt(t0.AddSeconds(31));
+        Check("süre (e): kuyruk +0/+1/+2/+3/+2 sn, 10 sn sonra +0; dövüş süresi kuyruksuz; donmuşta kuyruk yok",
+            Near(d10, 110_000 / 10.0) && Near(d11, 110_000 / 11.0) && Near(d12, 110_000 / 12.0) && Near(d13, 110_000 / 13.0) && Near(d14, 110_000 / 12.0)
+            && Near(d20, 110_000 / 10.0) && live.FightDuration == TimeSpan.FromSeconds(10)
+            && frozen.FightOver && P(frozen, me) is { } pf && Near(pf.Dps, 110_000 / 10.0),
+            $"dps 10s={d10:N1} 11s={d11:N1} 12s={d12:N1} 13s={d13:N1} 14s={d14:N1} 20s={d20:N1} donmuş={P(frozen, me)?.Dps:N1}");
+    }
+
+    // (f) Solo kukla (katalog dışı, canı görünen): süre = a.Active (öncekiyle aynı), 5 sn ara sayılmaz; detay aynı süre.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        DateTime t0 = DateTime.Now.AddSeconds(-100);
+        d.HitPoints.Note(dummy, t0.AddSeconds(-1), 10_000_000);
+        long hp = 10_000_000;
+        for (int i = 0; i <= 30; i++)
+        {
+            if (i is > 10 and < 16) { continue; } // 5 sn ara (adım 6 sn)
+            e.InjectHit(H(me, t0.AddSeconds(i), dummy, 20_000)); hp -= 20_000; d.HitPoints.Note(dummy, t0.AddSeconds(i), hp);
+        }
+
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(30));
+        MeterSnapshot over = e.SnapshotAt(t0.AddSeconds(51));
+        PlayerDetail? det = e.Detail(me);
+        Check("süre (f): solo kukla, süre = a.Active (24 sn), DPS = toplam ÷ süre, detay aynı",
+            s.FightDuration == TimeSpan.FromSeconds(24) && P(s, me) is { Total: 520_000 } p && Near(p.Dps, 520_000 / 24.0) && Near(p.BossDps, 520_000 / 24.0)
+            && over.FightOver && det is { Total: 520_000 } && det.Active == TimeSpan.FromSeconds(24) && Near(det.Dps, 520_000 / 24.0),
+            Show(s) + $" | detay aktif {det?.Active.TotalSeconds} sn");
+    }
+
+    // (g) A ve B 30 sn birlikte vuruyor, A duruyor, B 30 sn daha vuruyor: A'nın DPS'i erimez (31. sn'de yalnız 1 sn kuyruk, 60. sn'de son vuruşundaki değer).
+    // (h) Aynı dövüş, A 20 sn sonra yeniden başlıyor: paydası ilk vuruşundan son vuruşuna kadar partinin aktif süresi (aradaki 20 sn dahil).
+    foreach (bool restart in new[] { false, true })
+    {
+        var (e, d) = Party();
+        DateTime t0 = DateTime.Now.AddSeconds(-100);
+        MeterSnapshot? at31 = null;
+        for (int i = 0; i <= 60; i++)
+        {
+            if (i <= 30 || (restart && i >= 50)) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+            e.InjectHit(H(friend, t0.AddSeconds(i), trash, 20_000, 13010000));
+            if (i == 31) { at31 = e.SnapshotAt(t0.AddSeconds(31)); }
+        }
+
+        MeterSnapshot at60 = e.SnapshotAt(t0.AddSeconds(60));
+        if (!restart)
+        {
+            Check("süre (g): vurmayı bırakanın DPS'i erimez (31. sn ÷ 31 kuyruklu, 60. sn ÷ 30 = son vuruşundaki değer)",
+                at31 is not null && P(at31, me) is { Total: 310_000 } a31 && Near(a31.Dps, 310_000 / 31.0)
+                && P(at60, me) is { Total: 310_000 } a60 && Near(a60.Dps, 310_000 / 30.0)
+                && P(at60, friend) is { Total: 1_220_000 } b && Near(b.Dps, 1_220_000 / 60.0) && at60.FightDuration == TimeSpan.FromSeconds(60),
+                (at31 is null ? "" : Show(at31) + " >> ") + Show(at60));
+        }
+        else
+        {
+            Check("süre (h): 20 sn sonra yeniden başlayanın paydası ilk-son vuruş arası aktif süre (60 sn)",
+                P(at60, me) is { Total: 420_000 } a && Near(a.Dps, 420_000 / 60.0), Show(at60));
+        }
+    }
+
+    // Kimlik birleşmesi: sonradan sahibi bulunan çağrının hasarı sahibine geçer; sahibin süresi ikisinin en erken vuruşundan başlar.
+    {
+        var (e, d) = Party();
+        DateTime t0 = DateTime.Now.AddSeconds(-100);
+        const int summon = 7100;
+        for (int i = 0; i <= 20; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+        for (int i = 5; i <= 20; i++) { e.InjectHit(H(summon, t0.AddSeconds(i), trash, 1_000, 15280002)); }
+        for (int i = 10; i <= 20; i++) { e.InjectHit(H(friend, t0.AddSeconds(i), trash, 5_000, 13010000)); }
+        e.SnapshotAt(t0.AddSeconds(20));
+        MergeIdsForCheck(e, summon, friend);
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(20));
+        Check("süre: çağrı sahibine geçince sahibin süresi çağrının ilk vuruşundan (15 sn)",
+            P(s, friend) is { Total: 71_000 } f && Near(f.Dps, 71_000 / 15.0), Show(s));
+    }
+}
+
+// Denetim aracı: dizinin IdentityMoved olayı gibi (eski kimliğin satırı yenisine birleşir).
+static void MergeIdsForCheck(Aion2MeterEngine e, int from, int to) =>
+    typeof(Aion2MeterEngine).GetMethod("MergeIds", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(e, new object[] { from, to });
