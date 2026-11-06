@@ -1328,6 +1328,47 @@ void DurationChecks()
         }
     }
 
+    // (i)(j)(k) İki ekran aynı sayıyı göstermeli. A t=0'da başlar (100k/sn), B t=20'de (120k/sn), A t=40'ta durur, B t=60'a kadar sürer
+    // (0,1 sn'de bir vuruş). Roster yok: biri yerel, öteki sözde parti; roster var: ikisi de parti. Her bakışta A ≈ 100k, B ≈ 120k (±%2), B üstte.
+    {
+        const int a = 500, b = 600;
+        var results = new Dictionary<(bool Roster, bool LocalA), (double A, double B, string Shown)>();
+        foreach (bool roster in new[] { false, true })
+        {
+            foreach (bool localA in new[] { true, false })
+            {
+                var (e, d, _) = New();
+                int local = localA ? a : b, other = localA ? b : a;
+                d.SetLocalCharacter(new Aion2CharacterInfo(local, localA ? "Aaa" : "Bbb", 6, 50, DateTime.Now));
+                d.NoteClass(local, "Gladiator");
+                d.Register(other, localA ? "Bbb" : "Aaa"); d.NoteClass(other, "Ranger");
+                if (roster) { d.NoteParty(new[] { "Aaa", "Bbb" }, DateTime.Now); }
+                DateTime t0 = DateTime.Now.AddSeconds(-100);
+                for (int k = 0; k <= 600; k++)
+                {
+                    DateTime at = t0.AddMilliseconds(k * 100);
+                    if (k <= 400) { e.InjectHit(H(a, at, trash, 10_000, localA ? 11010000 : 13010000)); }
+                    if (k >= 200) { e.InjectHit(H(b, at, trash, 12_000, localA ? 13010000 : 11010000)); }
+                }
+
+                MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(60));
+                bool order = s.Players.Count == 2 && s.Players[0].Id == b && s.Players[1].Id == a;
+                results[(roster, localA)] = (P(s, a)?.Dps ?? -1, order ? P(s, b)?.Dps ?? -1 : -1, Show(s));
+            }
+        }
+
+        bool Close(double x, double target) => Math.Abs(x - target) <= target * 0.02;
+        foreach (var ((roster, localA), r) in results)
+        {
+            string view = (roster ? "(k) roster var" : localA ? "(i) roster yok" : "(j) roster yok") + (localA ? ", A'nın ekranı" : ", B'nin ekranı");
+            Check($"süre {view}: A ≈ 100.000, B ≈ 120.000 (±%2), sıralama hasara göre", Close(r.A, 100_000) && Close(r.B, 120_000), r.Shown);
+        }
+
+        bool same = results.Values.All(r => Close(r.A, results[(false, true)].A) && Close(r.B, results[(false, true)].B));
+        Check("süre: dört bakışta da A ve B'nin DPS'i birbirine ±%2 içinde", same,
+            string.Join(" ; ", results.Select(kv => $"{kv.Key}: A={kv.Value.A:N0} B={kv.Value.B:N0}")));
+    }
+
     // Kimlik birleşmesi: sonradan sahibi bulunan çağrının hasarı sahibine geçer; sahibin süresi ikisinin en erken vuruşundan başlar.
     {
         var (e, d) = Party();

@@ -160,9 +160,11 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         public DateTime? Start;
         public DateTime? LastPartyHit;
         public TimeSpan Active;
-        // Partinin aktif aralıkları (ardışık parti vuruşları arası ≤ ActiveGap olanlar bir aralık); uzunlukları toplamı = Active.
-        // Oyuncu başı DPS paydası bunlardan okunur (oyuncunun ilk vuruşundan sonraki kısım).
-        public readonly List<(DateTime From, DateTime To)> Spans = new();
+        // Vuruş çizelgesi: bu denemeye (BySource'a) yazılan her vuruşun aktif aralıkları (ardışık vuruşlar arası ≤ ActiveGap bir aralık):
+        // yerel, parti, sözde parti, yabancı, sahibi henüz bilinmeyen çağrı. Oyuncu başı DPS paydası bundan okunur; yalnız parti vuruşlarından
+        // kurulsaydı sözde parti / yabancı vurmaya devam ederken parti durunca onların paydası durur, DPS'leri şişerdi. Toplamla aynı sınır:
+        // bir vuruş ya hem toplama hem çizelgeye girer ya hiçbirine. Yalnız kendi vuruşları varsa (solo) uzunluklar toplamı = Active.
+        public readonly List<(DateTime From, DateTime To)> HitSpans = new();
         public HpSample? BossReading; // dövüş boss'unun motorun gördüğü son okuması (wipe: sıçrama)
 
         // Son görüntünün boss kümesi, kümeye vurulan aktif aralıklar (halkaların birleşimi) ve toplamı (detay paneli aynı denemeden okur).
@@ -215,7 +217,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             }
 
             Active += later.Active;
-            MergeSpans(Spans, later.Spans, MaxPartySpans); // aradaki ≥ WipeSuspectGap boşluk sayılmaz (Active ile aynı)
+            MergeSpans(HitSpans, later.HitSpans, MaxPartySpans); // aradaki vuruşsuz boşluk sayılmaz
             if (later.LastPartyHit is { } last && (LastPartyHit is not { } before || last > before))
             {
                 LastPartyHit = last;
@@ -661,15 +663,17 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     }
 
     /// <summary>
-    /// Oyuncunun DPS paydaları. Active: partinin aktif süresinin, oyuncunun bu denemedeki ilk ve son vuruşu arasındaki kısmı. Sonradan katılan
-    /// katılmadığı süreye bölünmez; vurmayı bırakanın DPS'i erimez (son vuruşundaki değerde kalır); yeniden başlarsa aradaki (parti aktifken
-    /// geçen) süre paydaya girer; parti genelindeki ≥ ActiveGap boşluklar hiç sayılmaz. Dövüşü başlatıp sonuna kadar vuran için Active =
+    /// Oyuncunun DPS paydaları. Active: denemenin vuruş çizelgesinin (<see cref="Attempt.HitSpans"/>: tabloya yazılan herkesin vuruşları),
+    /// oyuncunun bu denemedeki ilk ve son vuruşu arasındaki kısmı; toplamı da aynı ilk vuruştan başlar. Sonradan katılan katılmadığı süreye
+    /// bölünmez; vurmayı bırakanın DPS'i erimez (son vuruşundaki değerde kalır); yeniden başlarsa aradaki (başkaları vururken geçen) süre paydaya
+    /// girer; kimsenin vurmadığı ≥ ActiveGap boşluklar sayılmaz. Aynı dövüşü iki ayrı ekrandan izleyen iki kişi aynı sayıyı görür (vuruşları
+    /// atılan, dövüş başlamadan önceki kısım hem toplamdan hem süreden düşer). Solo, dövüşü başlatıp sonuna kadar vuran için Active =
     /// <see cref="Attempt.Active"/>. Canlıyken kendi son vuruşundan bu yana kuyruk (<see cref="Tail"/>) eklenir. BossActive: aynı kural kümenin
     /// aktif aralıklarıyla (halkaların birleşimi) ve oyuncunun kümeye ilk/son vuruşuyla; küme hiç aktif değilse Active. Called under _gate.
     /// </summary>
     private static (TimeSpan Active, TimeSpan BossActive) PlayerActive(Attempt a, Aggregate agg, DateTime now, bool live)
     {
-        TimeSpan active = ActiveWithin(a.Spans, agg.First, agg.Last) + (live ? Tail(agg.Last, now) : TimeSpan.Zero);
+        TimeSpan active = ActiveWithin(a.HitSpans, agg.First, agg.Last) + (live ? Tail(agg.Last, now) : TimeSpan.Zero);
         DateTime clusterFirst = DateTime.MaxValue, clusterLast = DateTime.MinValue;
         foreach (int member in a.Cluster)
         {
@@ -1029,6 +1033,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             }
 
             agg.SharesTarget |= sharesTarget;
+            AddSpan(a.HitSpans, ev.Timestamp, MaxPartySpans); // toplama giren her vuruş süre çizelgesine de girer (aynı sınır)
             RefreshDetailSet(a);
             if (agg.Detail is null && (agg.Party || a.DetailedStrangers < MaxDetailedStrangers || agg.Total >= a.DetailThreshold))
             {
@@ -1057,9 +1062,15 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
             if (!party)
             {
-                if (pseudo && a.Rings.TryGetValue(target, out DamageRing? watched))
+                if (a.Rings.TryGetValue(target, out DamageRing? watched))
                 {
-                    watched.AddOthers(ev.Timestamp, ev.Amount);
+                    if (pseudo)
+                    {
+                        watched.AddOthers(ev.Timestamp, ev.Amount);
+                    }
+
+                    // Kümenin süre çizelgesi de satıra girebilen herkesin vuruşuyla uzar (BossDps paydası; halkanın hasarı ve seçimi değişmez).
+                    AddSpan(watched.Spans, ev.Timestamp, MaxSpans);
                 }
 
                 return;
@@ -1146,14 +1157,12 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
                     a.Active += step;
                 }
 
-                AddSpan(a.Spans, at, MaxPartySpans); // aynı kural: ≤ ActiveGap uzatır, değilse yeni aralık (uzunluklar toplamı = Active)
                 a.LastPartyHit = at;
             }
         }
         else
         {
             a.LastPartyHit = at;
-            AddSpan(a.Spans, at, MaxPartySpans);
         }
     }
 
