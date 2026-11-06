@@ -75,7 +75,8 @@ internal sealed class DetayForm : Form
     private bool _tiklanmaz; // kilitli overlay'de sabit panel: Alt basılı değilken tıklamalar oyuna geçer
     public event Action? KapatIstendi;
 
-    public DetayForm(IMeterEngine motor, SinifIkonlari ikonlar, float olcek, byte alfa, Func<long, PlayerDamage?> oyuncuAl)
+    public DetayForm(IMeterEngine motor, SinifIkonlari ikonlar, float olcek, byte alfa, Func<long, PlayerDamage?> oyuncuAl,
+                     float adOlcek = 1f, float dpsOlcek = 1f)
     {
         _motor = motor;
         _ikonlar = ikonlar;
@@ -98,8 +99,11 @@ internal sealed class DetayForm : Form
 
         _yazi = Palet.YaziTipi(12f * olcek);
         _yaziYari = Palet.YaziTipi(12f * olcek, yariKalin: true);
-        _yaziAd = Palet.YaziTipi(14f * olcek, yariKalin: true);
-        _yaziBuyuk = Palet.YaziTipi(16f * olcek, yariKalin: true);
+        // Ad ve DPS yazıları Ayarlar → Renk ve yazı'daki yüzdelerle (overlay ile aynı)
+        _yaziAd = Palet.YaziTipi(14f * olcek * adOlcek, yariKalin: true);
+        _yaziBuyuk = Palet.YaziTipi(16f * olcek * dpsOlcek, yariKalin: true);
+        _baslikH = Math.Max(P(26), Olc("Ag", _yaziAd, dikey: true) + P(4));
+        _dpsH = Math.Max(P(24), Olc("Ag", _yaziBuyuk, dikey: true) + P(2));
         _yaziKucuk = Palet.YaziTipi(11f * olcek);
         _kalemGrafik.Width = Math.Max(1f, 1.5f * olcek);
 
@@ -118,13 +122,18 @@ internal sealed class DetayForm : Form
     private int Bosluk => P(12);   // sütun arası
     private int SatirH => P(20);
     private int IstatH => P(18);
-    private int BaslikH => P(26);  // ad satırı
-    private int DpsH => P(24);     // DPS satırı
+    private readonly int _baslikH, _dpsH;
+    private int BaslikH => _baslikH;  // ad satırı (en az 26)
+    private int DpsH => _dpsH;        // DPS satırı (en az 24)
     private int EtiketH => P(15);  // grafik üstü / altı etiket satırları
     private int GrafikH => P(72);
 
-    private static int Olc(string metin, Font font) =>
-        metin.Length == 0 ? 0 : TextRenderer.MeasureText(metin, font, Size.Empty, Temel).Width;
+    private static int Olc(string metin, Font font, bool dikey = false)
+    {
+        if (metin.Length == 0) return 0;
+        var b = TextRenderer.MeasureText(metin, font, Size.Empty, Temel);
+        return dikey ? b.Height : b.Width;
+    }
 
     // ---------------- Pencere stilleri / odak ----------------
 
@@ -172,6 +181,14 @@ internal sealed class DetayForm : Form
         if (alfa == _alfa) return;
         _alfa = alfa;
         if (IsHandleCreated) Native.SetLayeredWindowAttributes(Handle, 0, _alfa, Native.LWA_ALPHA);
+    }
+
+    /// <summary>Renk ayarı değişti (ayarlar penceresi): grafik/beceri renkleri ve kendi ad rengin yeniden.</summary>
+    public void RenkYenile()
+    {
+        _renkSinifi = -1;
+        if (_veriVar) RenkleriAyarla();
+        Invalidate();
     }
 
     /// <summary>Paneli tıklanmaz (WS_EX_TRANSPARENT) yapar ya da geri alır. Odak hiçbir durumda değişmez.</summary>
@@ -392,7 +409,7 @@ internal sealed class DetayForm : Form
         g.DrawImage(_ikonlar.Al(_sinif), x0, y + (BaslikH - ikon) / 2, ikon, ikon);
         int x = x0 + ikon + P(8);
         int adW = Math.Min(Olc(_ad, _yaziAd), _kapatKutusu.Left - x - P(80));
-        TextRenderer.DrawText(g, _ad, _yaziAd, new Rectangle(x, y, Math.Max(0, adW), BaslikH), _yerel ? Palet.Yerel : Palet.Yazi, Sol);
+        TextRenderer.DrawText(g, _ad, _yaziAd, new Rectangle(x, y, Math.Max(0, adW), BaslikH), _yerel ? Palet.YerelYazi : Palet.Yazi, Sol);
         x += Math.Max(0, adW) + P(10);
         TextRenderer.DrawText(g, _cp, _yaziKucuk, new Rectangle(x, y, Math.Max(0, _kapatKutusu.Left - P(6) - x), BaslikH), Palet.Soluk, Sol);
         y += BaslikH;

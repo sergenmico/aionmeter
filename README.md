@@ -27,12 +27,19 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Ctrl+Alt+D` | Kendi detayın |
 | `Ctrl+Alt+T` | Ekranda bölge seç, Türkçeye çevir (tekrar basınca kapanır) |
 | `Alt` + üstüne gel | Eşya/craft/beceri açıklamasını çevirir (model indirildikten sonra) |
+| `Alt` + saate tıkla | Alarm kur / kapat (overlay'in sağ alt köşesi) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
 Tepsi menüsünde **Ayarlar…**: boyut (%70–%125), saydamlık (kaydırırken canlı görünür), savaş dışında davranış, öfke uyarısı sesi, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
 **Savaş dışında** (Ayarlar): bir canavara vurunca overlay tam görünür; savaş bitince ~8 sn sonra `Soluk` (varsayılan), `Gizle` ya da `Hep görünür`.
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapatılabilir).
 Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da Ayarlar'dan "Çeviri modeli: İndir").
+
+## Ek özellikler
+- **Sadece benim satırım** (Ayarlar → Genel): overlay'de boss ve yalnız senin satırın (`#3` gibi sıranla) kalır; diğerleri arka planda sayılmaya devam eder.
+- **Renk ve yazı** (Ayarlar → Renk ve yazı): her sınıfın rengi, kendi satır rengin, ad / DPS / boss yazı boyutu (%80–%130) ve pay çubuğu opaklığı; değiştirdikçe overlay canlı değişir, "Varsayılana dön" ile geri alınır.
+- **Kukla testi** (tepsi menüsü ya da Ayarlar → Kukla ve alarm): süreyi seç (30 / 60 / 120 / 180 sn ya da özel 5–300 sn), kuklaya vurmaya başla; süre dolunca DPS, toplam, en çok vuran 3 beceri ve sınıfına göre kişisel en iyinle kıyas çıkar. Rekorlar `kukla-rekor.json`'da durur. Kart `Alt`+tıkla ya da yeni dövüşte kapanır.
+- **Alarm**: `Alt` basılı tutup overlay'deki saate tıkla, süreyi seç (1–30 dk, ±1 dk), Başlat. Süre dolunca kısa ve yumuşak bir ses, tepsi bildirimi; ses seviyesi Ayarlar'da.
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini

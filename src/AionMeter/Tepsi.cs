@@ -6,15 +6,17 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _denetle;
+    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaOzel, _kuklaIptal, _alarm;
+    private readonly ToolStripMenuItem[] _kuklaSureleri;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
 
     public ContextMenuStrip Menu { get; }
 
     /// <summary>Kısa menü: sık kullanılanlar burada, geri kalan her şey Ayarlar penceresinde.</summary>
+    /// <param name="kuklaBaslat">Süre (sn) ile kukla testini başlatır; 0 = ayarlardaki özel süre.</param>
     public Tepsi(Action kilitDegistir, Action gosterDegistir, Action sifirla, Action detayim, Action bolgeCevir,
-                 Action ayarlar, Action guncellemeDenetle, Action cikis)
+                 Action ayarlar, Action guncellemeDenetle, Action cikis, Action<int> kuklaBaslat, Action kuklaIptal, Action alarm)
     {
         Menu = new ContextMenuStrip { ShowImageMargin = false };
         _kilit = new ToolStripMenuItem("Kilitle", null, (_, _) => kilitDegistir()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" };
@@ -22,11 +24,24 @@ internal sealed class Tepsi : IDisposable
         var sifir = new ToolStripMenuItem("Sıfırla", null, (_, _) => sifirla()) { ShortcutKeyDisplayString = "Ctrl+Alt+R" };
         var detay = new ToolStripMenuItem("Detayım", null, (_, _) => detayim()) { ShortcutKeyDisplayString = "Ctrl+Alt+D" };
         var bolge = new ToolStripMenuItem("Bölge çevir", null, (_, _) => bolgeCevir()) { ShortcutKeyDisplayString = "Ctrl+Alt+T" };
+
+        // Kukla testi: hazır süreler + özel süre (Ayarlar'dan) + iptal
+        _kukla = new ToolStripMenuItem("Kukla testi");
+        _kuklaSureleri = Array.ConvertAll(Ayarlar.KuklaSureleri, sn =>
+            new ToolStripMenuItem(sn.ToString(Bicim.Tr) + " sn", null, (_, _) => kuklaBaslat(sn)));
+        _kuklaOzel = new ToolStripMenuItem("Özel", null, (_, _) => kuklaBaslat(0));
+        _kuklaIptal = new ToolStripMenuItem("Testi iptal et", null, (_, _) => kuklaIptal()) { Enabled = false };
+        _kukla.DropDownItems.AddRange(_kuklaSureleri);
+        _kukla.DropDownItems.Add(_kuklaOzel);
+        _kukla.DropDownItems.Add(new ToolStripSeparator());
+        _kukla.DropDownItems.Add(_kuklaIptal);
+        _alarm = new ToolStripMenuItem("Alarm…", null, (_, _) => alarm());
+
         var ayar = new ToolStripMenuItem("Ayarlar…", null, (_, _) => ayarlar());
         _denetle = new ToolStripMenuItem("Güncellemeleri denetle", null, (_, _) => guncellemeDenetle());
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
         Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), bolge,
-            new ToolStripSeparator(), ayar, _denetle, new ToolStripSeparator(), cik });
+            _kukla, _alarm, new ToolStripSeparator(), ayar, _denetle, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon
@@ -46,6 +61,17 @@ internal sealed class Tepsi : IDisposable
         _denetle.Text = denetleniyor ? "Denetleniyor…" : "Güncellemeleri denetle";
         _denetle.Enabled = !denetleniyor;
         _simge.Text = kilitli ? "AionMeter (kilitli)" : "AionMeter";
+    }
+
+    /// <summary>Kukla alt menüsü: seçili süre işaretli, test sürerken iptal etkin; alarm kalan süresi.</summary>
+    public void KuklaGuncelle(int sure, bool ozel, int ozelSure, bool etkin, string? alarmKalan)
+    {
+        for (int i = 0; i < _kuklaSureleri.Length; i++) _kuklaSureleri[i].Checked = !ozel && Ayarlar.KuklaSureleri[i] == sure;
+        _kuklaOzel.Text = "Özel: " + ozelSure.ToString(Bicim.Tr) + " sn";
+        _kuklaOzel.Checked = ozel;
+        _kuklaIptal.Enabled = etkin;
+        _kukla.Text = etkin ? "Kukla testi (sürüyor)" : "Kukla testi";
+        _alarm.Text = alarmKalan is null ? "Alarm…" : "Alarm… (" + alarmKalan + ")";
     }
 
     public void Bildir(string metin)

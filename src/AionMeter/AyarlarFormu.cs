@@ -5,7 +5,8 @@ namespace AionMeter;
 
 /// <summary>
 /// Tepsi "Ayarlar…": tek küçük koyu pencere, tamamen kodla çizilir (overlay ile aynı palet ve yazı tipleri).
-/// Her değişiklik anında uygulanır ve ayarlar.ini'ye yazılır; saydamlık kaydırılırken overlay canlı değişir.
+/// Üç sekme: Genel · Renk ve yazı · Kukla ve alarm. Her değişiklik anında uygulanır ve ayarlar.ini'ye yazılır;
+/// saydamlık, renkler ve yazı boyutları değiştirilirken overlay (ve açık detay paneli) canlı değişir.
 /// Pencere odak alabilir (Esc kapatır); kapanınca overlay odağı oyuna geri verir. Tanı kaydı burada yoktur.
 /// </summary>
 internal sealed class AyarlarFormu : Form
@@ -26,6 +27,14 @@ internal sealed class AyarlarFormu : Form
         public Action ModeliIndir { get; init; } = () => { };
         public Action GuncellemeDenetle { get; init; } = () => { };
         public Func<bool> Denetleniyor { get; init; } = () => false;
+        public Action GorunumDegisti { get; init; } = () => { };   // renk, yazı, çubuk, sadece benim satırım
+        public Action KuklaBaslat { get; init; } = () => { };
+        public Action KuklaIptal { get; init; } = () => { };
+        public Func<bool> KuklaEtkin { get; init; } = () => false;
+        public Action AlarmKur { get; init; } = () => { };
+        public Action AlarmIptal { get; init; } = () => { };
+        public Func<string?> AlarmKalan { get; init; } = () => null;
+        public SinifIkonlari? Ikonlar { get; init; }               // overlay'in ikon önbelleği (paylaşılır, Dispose edilmez)
     }
 
     private const TextFormatFlags Temel = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
@@ -37,6 +46,7 @@ internal sealed class AyarlarFormu : Form
     // ---- Öğeler ----
     private abstract class Oge
     {
+        public int Sekme;
         public Rectangle Alan;
         public Func<bool>? Etkin;
         public bool EtkinMi => Etkin?.Invoke() ?? true;
@@ -50,9 +60,11 @@ internal sealed class AyarlarFormu : Form
         public readonly Action<int> Sec = sec;
         public Rectangle[] Parcalar = Array.Empty<Rectangle>();
     }
-    private sealed class Kaydirici(string etiket, int min, int max, Func<int> deger, Action<int> ayarla, Action bitti) : Oge
+    private sealed class Kaydirici(string etiket, int min, int max, Func<int> deger, Action<int> ayarla, Action bitti,
+                                   Func<int, string>? yazi = null) : Oge
     {
         public readonly string Etiket = etiket;
+        public readonly Func<int, string> Yazi = yazi ?? (v => "%" + v.ToString(Bicim.Tr));
         public readonly int Min = min, Max = max;
         public readonly Func<int> Deger = deger;
         public readonly Action<int> Ayarla = ayarla;
@@ -67,13 +79,38 @@ internal sealed class AyarlarFormu : Form
         public readonly Action Degistir = degistir;
         public Rectangle Dugme;
     }
-    private sealed class Dugme(Func<string> etiket, Func<string> metin, Action tikla) : Oge
+    private sealed class Dugme(Func<string> etiket, Func<string> metin, Action tikla, string? aciklama = null) : Oge
     {
         public readonly Func<string> Etiket = etiket;
+        public readonly string? Aciklama = aciklama;
         public readonly Func<string> Metin = metin;
         public readonly Action Tikla = tikla;
         public Rectangle Kutu;
     }
+    /// <summary>Renk seçimi: sınıf (yarım genişlik, ikonlu) ya da kendi satır rengin. Kutuya tıklayınca palet açılır.</summary>
+    private sealed class RenkSecim(string etiket, string? sinif, Func<Color> acik, Func<Color> koyu, Func<int?> secili,
+                                   Color varsayilan, Action<int?> sec, bool yarim) : Oge
+    {
+        public readonly string Etiket = etiket;
+        public readonly string? Sinif = sinif;
+        public readonly Func<Color> Acik = acik, Koyu = koyu;
+        public readonly Func<int?> Secili = secili;   // 0xRRGGBB, null = varsayılan
+        public readonly Color Varsayilan = varsayilan;
+        public readonly Action<int?> Sec = sec;
+        public readonly bool Yarim = yarim;
+        public Rectangle Kutu;
+    }
+
+    private static readonly string[] Sekmeler = { "Genel", "Renk ve yazı", "Kukla ve alarm" };
+    private readonly Rectangle[] _sekmeKutu = new Rectangle[Sekmeler.Length];
+    private int _sekme;
+    private int _sekmeUstunde = -1;
+
+    // Renk paleti (açılır kutu): 8 × 2 renk + "Varsayılan"
+    private RenkSecim? _palet;
+    private Rectangle _paletAlani, _paletVarsayilan;
+    private readonly Rectangle[] _paletKutu = new Rectangle[Palet.Secenekler.Length];
+    private int _paletUstunde = -1; // 0..15 renk, 16 varsayılan
 
     private readonly Ayarlar _ayar;
     private readonly Baglanti _b;
@@ -89,6 +126,9 @@ internal sealed class AyarlarFormu : Form
     private readonly Pen _kalemKenar = new(Palet.Cizgi);
     private readonly Pen _kalemSeciliKenar = new(Palet.Vurgu);
     private readonly Pen _kalemKapat = new(Palet.Soluk, 1.5f);
+    private readonly Pen _kalemHalka = new(Palet.Dps, 2f);
+    private readonly Pen _kalemHalkaSoluk = new(Palet.Soluk, 1.5f);
+    private readonly SolidBrush _fircaRenk = new(Color.Black);   // renk kutuları (Color atanır, tahsis yok)
     private Rectangle _kapatKutusu, _baslikAlani;
     private Oge? _ustunde;
     private Kaydirici? _suruklenen;
@@ -119,7 +159,11 @@ internal sealed class AyarlarFormu : Form
         _yaziDeger = Palet.YaziTipi(12f * olcek, yariKalin: true);
         _kalemKapat.Width = Math.Max(1f, 1.5f * olcek);
 
+        _kalemHalka.Width = Math.Max(1.5f, 2f * olcek);
+        _kalemHalkaSoluk.Width = Math.Max(1f, 1.5f * olcek);
+
         string[] boyutlar = Array.ConvertAll(Ayarlar.BoyutSecenekleri, v => "%" + v.ToString(Bicim.Tr));
+        // ---- Sekme 0: Genel ----
         _ogeler.Add(new Bolum("Görünüm"));
         _ogeler.Add(new Secim("Boyut", boyutlar, () => Array.IndexOf(Ayarlar.BoyutSecenekleri, _ayar.Boyut),
             i => _b.BoyutSec(Ayarlar.BoyutSecenekleri[i])));
@@ -131,16 +175,11 @@ internal sealed class AyarlarFormu : Form
             v => { _ayar.SolukOpaklik = v; _b.SolukDegisti(); }, _ayar.Kaydet)
         { Etkin = () => _ayar.SavasDisi == SavasDisiModu.Soluk });
         _ogeler.Add(new Anahtar("Sadece oyun öndeyken göster", null, _b.SadeceOyunda, _b.SadeceOyundaDegistir));
-
-        _ogeler.Add(new Bolum("Uyarı"));
-        _ogeler.Add(new Anahtar("Öfke uyarısı sesi", "Öfkeye 30 sn kala ve yetişmeyecekse kısa ses", () => _ayar.OfkeSesi, () =>
+        _ogeler.Add(new Anahtar("Sadece benim satırım", "Diğerleri arka planda sayılır; sıran #3 gibi görünür", () => _ayar.SadeceBen, () =>
         {
-            _ayar.OfkeSesi = !_ayar.OfkeSesi;
+            _ayar.SadeceBen = !_ayar.SadeceBen;
             _ayar.Kaydet();
-            if (_ayar.OfkeSesi)
-            {
-                try { System.Media.SystemSounds.Exclamation.Play(); } catch { /* önizleme */ }
-            }
+            _b.GorunumDegisti();
         }));
 
         _ogeler.Add(new Bolum("Çevirmen"));
@@ -160,6 +199,73 @@ internal sealed class AyarlarFormu : Form
             () => _b.Denetleniyor() ? "Denetleniyor…" : "Güncellemeleri denetle", _b.GuncellemeDenetle)
         { Etkin = () => !_b.Denetleniyor() });
 
+        // ---- Sekme 1: Renk ve yazı ----
+        int ilk = _ogeler.Count;
+        _ogeler.Add(new Bolum("Sınıf renkleri"));
+        for (int i = 1; i < Palet.SinifSirasi.Length; i++)
+        {
+            int si = i;
+            string sinif = Palet.SinifSirasi[i]!;
+            _ogeler.Add(new RenkSecim(sinif, sinif, () => Palet.Sinif(sinif).Acik, () => Palet.Sinif(sinif).Koyu,
+                () => _ayar.SinifRenk[si], Palet.VarsayilanSinif(sinif).Acik, r => RenkDegisti(() => _ayar.SinifRenk[si] = r), yarim: true));
+        }
+        _ogeler.Add(new RenkSecim("Kendi satır rengim", null, () => Palet.YerelRenk, () => Palet.SabitSatir,
+            () => _ayar.YerelRenk, Palet.Yerel, r => RenkDegisti(() => _ayar.YerelRenk = r), yarim: false));
+        _ogeler.Add(new Bolum("Yazı ve çubuk"));
+        _ogeler.Add(new Kaydirici("Ad yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziAd,
+            v => { _ayar.YaziAd = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+        _ogeler.Add(new Kaydirici("DPS yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziDps,
+            v => { _ayar.YaziDps = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+        _ogeler.Add(new Kaydirici("Boss yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziBoss,
+            v => { _ayar.YaziBoss = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+        _ogeler.Add(new Kaydirici("Pay çubuğu opaklığı", 0, 100, () => _ayar.CubukOpaklik,
+            v => { _ayar.CubukOpaklik = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+        _ogeler.Add(new Dugme(() => "Tüm renkler ve yazılar", () => "Varsayılana dön", () => RenkDegisti(_ayar.RenkSifirla))
+        { Etkin = () => !_ayar.RenkVarsayilan });
+        for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 1;
+
+        // ---- Sekme 2: Kukla ve alarm ----
+        ilk = _ogeler.Count;
+        string[] sureler = new string[Ayarlar.KuklaSureleri.Length + 1];
+        for (int i = 0; i < Ayarlar.KuklaSureleri.Length; i++) sureler[i] = Ayarlar.KuklaSureleri[i].ToString(Bicim.Tr) + " sn";
+        sureler[^1] = "Özel";
+        _ogeler.Add(new Bolum("Kukla testi"));
+        _ogeler.Add(new Secim("Süre", sureler,
+            () => _ayar.KuklaOzel ? sureler.Length - 1 : Array.IndexOf(Ayarlar.KuklaSureleri, _ayar.KuklaSure),
+            i =>
+            {
+                _ayar.KuklaOzel = i == sureler.Length - 1;
+                if (!_ayar.KuklaOzel) _ayar.KuklaSure = Ayarlar.KuklaSureleri[i];
+                _ayar.Kaydet();
+            }) { Etkin = () => !_b.KuklaEtkin() });
+        _ogeler.Add(new Kaydirici("Özel süre", Ayarlar.EnAzKukla, Ayarlar.EnFazlaKukla, () => _ayar.KuklaOzelSure,
+            v => _ayar.KuklaOzelSure = v, _ayar.Kaydet, v => v.ToString(Bicim.Tr) + " sn")
+        { Etkin = () => _ayar.KuklaOzel && !_b.KuklaEtkin() });
+        _ogeler.Add(new Dugme(() => _b.KuklaEtkin() ? "Test sürüyor" : "Kukla dövüşü",
+            () => _b.KuklaEtkin() ? "İptal et" : "Başlat",
+            () => { if (_b.KuklaEtkin()) _b.KuklaIptal(); else _b.KuklaBaslat(); },
+            "Sayaç sıfırlanır; ilk vuruşunla geri sayım başlar"));
+
+        _ogeler.Add(new Bolum("Alarm"));
+        _ogeler.Add(new Kaydirici("Alarm sesi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.AlarmSes,
+            v => _ayar.AlarmSes = v, () => { _ayar.Kaydet(); Zil.Cal(_ayar.AlarmSes); })); // bırakınca bir kez önizleme
+        _ogeler.Add(new Dugme(() => _b.AlarmKalan() is string k ? "Alarm · " + k + " kaldı" : "Alarm",
+            () => _b.AlarmKalan() is null ? "Kur…" : "Kapat",
+            () => { if (_b.AlarmKalan() is null) _b.AlarmKur(); else _b.AlarmIptal(); },
+            "Oyunda: Alt basılı tut, overlay'deki saate tıkla"));
+
+        _ogeler.Add(new Bolum("Uyarı"));
+        _ogeler.Add(new Anahtar("Öfke uyarısı sesi", "Öfkeye 30 sn kala ve yetişmeyecekse kısa ses", () => _ayar.OfkeSesi, () =>
+        {
+            _ayar.OfkeSesi = !_ayar.OfkeSesi;
+            _ayar.Kaydet();
+            if (_ayar.OfkeSesi)
+            {
+                try { System.Media.SystemSounds.Exclamation.Play(); } catch { /* önizleme */ }
+            }
+        }));
+        for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 2;
+
         ClientSize = Yerlesim();
     }
 
@@ -174,60 +280,102 @@ internal sealed class AyarlarFormu : Form
         if (!IsDisposed) Invalidate();
     }
 
+    /// <summary>Renk/yazı değişti: kaydet, overlay'e (ve detay paneline) canlı uygula, yeniden çiz.</summary>
+    private void RenkDegisti(Action degistir)
+    {
+        degistir();
+        _ayar.Kaydet();
+        _b.GorunumDegisti();
+        Invalidate();
+    }
+
     // ---------------- Yerleşim ----------------
 
     private Size Yerlesim()
     {
         int w = P(440), pad = P(20);
         int x0 = pad, x1 = w - pad;
-        int y = 0;
         _baslikAlani = new Rectangle(0, 0, w, P(50));
         int k = P(18);
         _kapatKutusu = new Rectangle(w - P(14) - k, (P(50) - k) / 2, k, k);
-        y += P(50);
 
-        foreach (var o in _ogeler)
+        // Sekme şeridi: başlığın altında tam genişlik
+        int sy = P(50) + P(12), sh = P(30);
+        int sw = (x1 - x0) / Sekmeler.Length;
+        for (int i = 0; i < Sekmeler.Length; i++)
+            _sekmeKutu[i] = new Rectangle(x0 + i * sw, sy, i == Sekmeler.Length - 1 ? x1 - x0 - i * sw : sw, sh);
+        int ust = sy + sh + P(4);
+
+        // Her sekme aynı noktadan başlar; pencere en uzun sekmenin boyunda (sekme değişince boyut zıplamaz).
+        int enAlt = ust;
+        for (int t = 0; t < Sekmeler.Length; t++)
         {
-            switch (o)
+            int y = ust;
+            bool solDolu = false; // yarım genişlikli renk hücresi: önce sol, sonra sağ
+            int yarimH = P(36), yarimW = (x1 - x0 - P(16)) / 2;
+            foreach (var o in _ogeler)
             {
-                case Bolum:
-                    o.Alan = new Rectangle(x0, y, x1 - x0, P(34));
-                    break;
-                case Secim s:
+                if (o.Sekme != t) continue;
+                if (o is RenkSecim { Yarim: true } yr)
                 {
-                    o.Alan = new Rectangle(x0, y, x1 - x0, P(38));
-                    int n = s.Secenekler.Length;
-                    int parcaW = 0;
-                    foreach (string m in s.Secenekler) parcaW = Math.Max(parcaW, Olc(m, _yaziKucuk) + P(16));
-                    int toplam = parcaW * n;
-                    int sx = x1 - toplam, sy = y + (P(38) - P(26)) / 2;
-                    s.Parcalar = new Rectangle[n];
-                    for (int i = 0; i < n; i++) s.Parcalar[i] = new Rectangle(sx + i * parcaW, sy, parcaW, P(26));
-                    break;
+                    o.Alan = solDolu ? new Rectangle(x1 - yarimW, y, yarimW, yarimH) : new Rectangle(x0, y, yarimW, yarimH);
+                    yr.Kutu = new Rectangle(o.Alan.Right - P(44), y + (yarimH - P(20)) / 2, P(44), P(20));
+                    if (solDolu) y += yarimH;
+                    solDolu = !solDolu;
+                    continue;
                 }
-                case Kaydirici kd:
-                    o.Alan = new Rectangle(x0, y, x1 - x0, P(38));
-                    kd.Iz = new Rectangle(x1 - P(48) - P(180), y + P(38) / 2 - P(2), P(180), P(4));
-                    break;
-                case Anahtar a:
+                if (solDolu)
                 {
-                    int h = a.Aciklama is null ? P(38) : P(48);
-                    o.Alan = new Rectangle(x0, y, x1 - x0, h);
-                    a.Dugme = new Rectangle(x1 - P(38), y + (h - P(20)) / 2, P(38), P(20));
-                    break;
+                    y += yarimH;
+                    solDolu = false;
                 }
-                case Dugme d:
+                switch (o)
                 {
-                    o.Alan = new Rectangle(x0, y, x1 - x0, P(42));
-                    int dw = Math.Max(Olc("Güncellemeleri denetle", _yaziKucuk), Olc("Denetleniyor…", _yaziKucuk)) + P(28);
-                    d.Kutu = new Rectangle(x1 - dw, y + (P(42) - P(28)) / 2, dw, P(28));
-                    break;
+                    case Bolum:
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(34));
+                        break;
+                    case Secim s:
+                    {
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(38));
+                        int n = s.Secenekler.Length;
+                        int parcaW = 0;
+                        foreach (string m in s.Secenekler) parcaW = Math.Max(parcaW, Olc(m, _yaziKucuk) + P(16));
+                        int toplam = parcaW * n;
+                        int sx = x1 - toplam, syy = y + (P(38) - P(26)) / 2;
+                        s.Parcalar = new Rectangle[n];
+                        for (int i = 0; i < n; i++) s.Parcalar[i] = new Rectangle(sx + i * parcaW, syy, parcaW, P(26));
+                        break;
+                    }
+                    case Kaydirici kd:
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(38));
+                        kd.Iz = new Rectangle(x1 - P(56) - P(170), y + P(38) / 2 - P(2), P(170), P(4));
+                        break;
+                    case Anahtar a:
+                    {
+                        int h = a.Aciklama is null ? P(38) : P(48);
+                        o.Alan = new Rectangle(x0, y, x1 - x0, h);
+                        a.Dugme = new Rectangle(x1 - P(38), y + (h - P(20)) / 2, P(38), P(20));
+                        break;
+                    }
+                    case Dugme d:
+                    {
+                        int h = d.Aciklama is null ? P(42) : P(50);
+                        o.Alan = new Rectangle(x0, y, x1 - x0, h);
+                        int dw = Math.Max(Olc(d.Metin(), _yaziKucuk), P(96)) + P(28);
+                        d.Kutu = new Rectangle(x1 - dw, y + (h - P(28)) / 2, dw, P(28));
+                        break;
+                    }
+                    case RenkSecim r:
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(40));
+                        r.Kutu = new Rectangle(x1 - P(44), y + (P(40) - P(20)) / 2, P(44), P(20));
+                        break;
                 }
+                y += o.Alan.Height;
             }
-            y += o.Alan.Height;
+            if (solDolu) y += yarimH;
+            enAlt = Math.Max(enAlt, y);
         }
-        y += P(10);
-        return new Size(w, y + P(30) + P(10));
+        return new Size(w, enAlt + P(10) + P(30) + P(10));
     }
 
     // ---------------- Pencere ----------------
@@ -246,7 +394,9 @@ internal sealed class AyarlarFormu : Form
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.KeyCode == Keys.Escape) Close();
+        if (e.KeyCode != Keys.Escape) return;
+        if (_palet is not null) PaletKapat(); // önce açık palet kapanır
+        else Close();
     }
 
     // ---------------- Çizim ----------------
@@ -272,8 +422,20 @@ internal sealed class AyarlarFormu : Form
         g.SmoothingMode = eski;
         g.DrawLine(_kalemKenar, 0, P(50) - 1, w, P(50) - 1);
 
+        // Sekmeler
+        var serit = Rectangle.FromLTRB(_sekmeKutu[0].Left, _sekmeKutu[0].Top, _sekmeKutu[^1].Right, _sekmeKutu[0].Bottom);
+        Cizim.YuvarlakDoldur(g, _fircaPanel, serit, P(6));
+        for (int i = 0; i < Sekmeler.Length; i++)
+        {
+            var r = _sekmeKutu[i];
+            if (i == _sekme) Cizim.YuvarlakDoldur(g, _fircaSecili, Rectangle.Inflate(r, -P(3), -P(3)), P(4));
+            var renk = i == _sekme ? Palet.Dps : i == _sekmeUstunde ? Palet.Yazi : Palet.Soluk;
+            TextRenderer.DrawText(g, Sekmeler[i], i == _sekme ? _yaziBolum : _yaziKucuk, r, renk, Orta);
+        }
+
         foreach (var o in _ogeler)
         {
+            if (o.Sekme != _sekme) continue;
             bool etkin = o.EtkinMi;
             var r = o.Alan;
             switch (o)
@@ -295,7 +457,8 @@ internal sealed class AyarlarFormu : Form
                             var ic = Rectangle.Inflate(p, -P(2), -P(2));
                             Cizim.YuvarlakDoldur(g, _fircaSecili, ic, P(4));
                         }
-                        var renk = i == secili ? Palet.Dps : (_ustunde == o ? Palet.Yazi : Palet.Soluk);
+                        var renk = !etkin ? (i == secili ? Palet.Soluk : Palet.CokSoluk)
+                            : i == secili ? Palet.Dps : (_ustunde == o ? Palet.Yazi : Palet.Soluk);
                         TextRenderer.DrawText(g, s.Secenekler[i], _yaziKucuk, p, renk, Orta);
                     }
                     break;
@@ -313,7 +476,7 @@ internal sealed class AyarlarFormu : Form
                     g.SmoothingMode = SmoothingMode.AntiAlias;
                     g.FillEllipse(etkin ? _fircaTopuz : _fircaTopuzKapali, topuz);
                     g.SmoothingMode = eski;
-                    TextRenderer.DrawText(g, "%" + v.ToString(Bicim.Tr), _yaziDeger,
+                    TextRenderer.DrawText(g, k.Yazi(v), _yaziDeger,
                         new Rectangle(k.Iz.Right + P(8), r.Y, r.Right - k.Iz.Right - P(8), r.Height), etkin ? Palet.Yazi : Palet.CokSoluk, Sag);
                     break;
                 }
@@ -331,30 +494,144 @@ internal sealed class AyarlarFormu : Form
                 }
                 case Dugme d:
                 {
-                    Etiket(g, d.Etiket(), null, r, true);
+                    Etiket(g, d.Etiket(), d.Aciklama, r, true, d.Kutu.Left - P(10));
                     Cizim.YuvarlakDoldur(g, etkin && _ustunde == o ? _fircaSecili : _fircaPanelUst, d.Kutu, P(5));
                     TextRenderer.DrawText(g, d.Metin(), _yaziKucuk, d.Kutu, etkin ? Palet.Yazi : Palet.CokSoluk, Orta);
                     break;
                 }
+                case RenkSecim rs:
+                    CizRenkSecim(g, rs);
+                    break;
             }
         }
 
         TextRenderer.DrawText(g, "Değişiklikler hemen uygulanır ve kaydedilir.", _yaziKucuk,
             new Rectangle(pad, h - P(40), w - 2 * pad, P(30)), Palet.CokSoluk, Sol);
+
+        if (_palet is not null) CizPalet(g);
         g.DrawRectangle(_kalemKenar, 0, 0, w - 1, h - 1);
     }
 
-    private void Etiket(Graphics g, string etiket, string? aciklama, Rectangle r, bool etkin)
+    /// <summary>Renk kutusu overlay satırının küçük bir örneği: koyu çubuk + solda açık şerit + ortada açık nokta.</summary>
+    private void RenkKutusu(Graphics g, Rectangle kutu, Color acik, Color koyu, bool vurgulu)
+    {
+        _fircaRenk.Color = koyu;
+        Cizim.YuvarlakDoldur(g, _fircaRenk, kutu, P(4));
+        _fircaRenk.Color = acik;
+        g.FillRectangle(_fircaRenk, kutu.X + P(1), kutu.Y + P(4), Math.Max(2, P(3)), kutu.Height - P(8));
+        int d = P(10);
+        var eski = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.FillEllipse(_fircaRenk, kutu.X + (kutu.Width - d) / 2f + P(2), kutu.Y + (kutu.Height - d) / 2f, d, d);
+        if (vurgulu) Cizim.YuvarlakCiz(g, _kalemSeciliKenar, kutu, P(4));
+        g.SmoothingMode = eski;
+    }
+
+    private void CizRenkSecim(Graphics g, RenkSecim rs)
+    {
+        var r = rs.Alan;
+        bool vurgulu = _ustunde == rs || _palet == rs;
+        if (rs.Yarim)
+        {
+            // [ikon] Sınıf ......... [kutu]
+            int ikon = P(18);
+            int x = r.X;
+            if (_b.Ikonlar is { } ik) g.DrawImage(ik.Al(rs.Sinif), x, r.Y + (r.Height - ikon) / 2, ikon, ikon);
+            x += ikon + P(8);
+            TextRenderer.DrawText(g, rs.Etiket, _yazi, new Rectangle(x, r.Y, Math.Max(0, rs.Kutu.Left - P(6) - x), r.Height),
+                vurgulu ? Palet.Dps : Palet.Yazi, Sol);
+        }
+        else
+        {
+            // Kendi satır rengim ...... Adın (o renkte) [kutu]
+            Etiket(g, rs.Etiket, null, r, true);
+            string ornek = string.IsNullOrWhiteSpace(_ayar.YerelAd) ? "Adın" : _ayar.YerelAd!;
+            int ow = Math.Min(Olc(ornek, _yaziDeger), P(150));
+            TextRenderer.DrawText(g, ornek, _yaziDeger, new Rectangle(rs.Kutu.Left - P(10) - ow, r.Y, ow, r.Height), Palet.YerelYazi, Sol);
+        }
+        RenkKutusu(g, rs.Kutu, rs.Acik(), rs.Koyu(), vurgulu);
+    }
+
+    private void CizPalet(Graphics g)
+    {
+        var rs = _palet!;
+        var eski = g.SmoothingMode;
+        Cizim.YuvarlakDoldur(g, _fircaPanel, _paletAlani, P(6));
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Cizim.YuvarlakCiz(g, _kalemSeciliKenar, _paletAlani, P(6));
+        int? secili = rs.Secili();
+        for (int i = 0; i < _paletKutu.Length; i++)
+        {
+            var c = Palet.Secenekler[i].Renk;
+            var k = _paletKutu[i];
+            _fircaRenk.Color = c;
+            g.FillEllipse(_fircaRenk, Rectangle.Inflate(k, -P(3), -P(3)));
+            bool bu = secili == Palet.RgbAl(c);
+            if (bu) g.DrawEllipse(_kalemHalka, Rectangle.Inflate(k, -P(1), -P(1)));
+            else if (_paletUstunde == i) g.DrawEllipse(_kalemHalkaSoluk, Rectangle.Inflate(k, -P(1), -P(1)));
+        }
+        g.SmoothingMode = eski;
+
+        // Varsayılan: küçük renk noktası + yazı (seçiliyse vurgulu)
+        var v = _paletVarsayilan;
+        Cizim.YuvarlakDoldur(g, _paletUstunde == Palet.Secenekler.Length ? _fircaSecili : _fircaPanelUst, v, P(5));
+        int d = P(10);
+        _fircaRenk.Color = rs.Varsayilan;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.FillEllipse(_fircaRenk, v.X + P(10), v.Y + (v.Height - d) / 2f, d, d);
+        g.SmoothingMode = eski;
+        TextRenderer.DrawText(g, "Varsayılan", _yaziKucuk, new Rectangle(v.X + P(10) + d + P(8), v.Y, v.Width - P(28) - d, v.Height),
+            secili is null ? Palet.Dps : Palet.Yazi, Sol);
+        // Üzerine gelinen rengin adı (sağda)
+        string ad = _paletUstunde >= 0 && _paletUstunde < Palet.Secenekler.Length ? Palet.Secenekler[_paletUstunde].Ad : "";
+        if (ad.Length > 0)
+            TextRenderer.DrawText(g, ad, _yaziKucuk, new Rectangle(v.X, v.Y, v.Width - P(10), v.Height), Palet.Soluk, Sag);
+    }
+
+    private void Etiket(Graphics g, string etiket, string? aciklama, Rectangle r, bool etkin, int sag = 0)
     {
         var renk = etkin ? Palet.Yazi : Palet.CokSoluk;
+        int genislik = sag > 0 ? sag - r.X : r.Width - P(60);
         if (aciklama is null)
         {
-            TextRenderer.DrawText(g, etiket, _yazi, new Rectangle(r.X, r.Y, r.Width / 2, r.Height), renk, Sol);
+            TextRenderer.DrawText(g, etiket, _yazi, new Rectangle(r.X, r.Y, sag > 0 ? genislik : r.Width / 2, r.Height), renk, Sol);
             return;
         }
         int ust = r.Y + (r.Height - P(18) - P(15)) / 2;
-        TextRenderer.DrawText(g, etiket, _yazi, new Rectangle(r.X, ust, r.Width - P(60), P(18)), renk, Sol);
-        TextRenderer.DrawText(g, aciklama, _yaziKucuk, new Rectangle(r.X, ust + P(18), r.Width - P(60), P(15)), Palet.Soluk, Sol);
+        TextRenderer.DrawText(g, etiket, _yazi, new Rectangle(r.X, ust, genislik, P(18)), renk, Sol);
+        TextRenderer.DrawText(g, aciklama, _yaziKucuk, new Rectangle(r.X, ust + P(18), genislik, P(15)), Palet.Soluk, Sol);
+    }
+
+    // ---------------- Renk paleti ----------------
+
+    private void PaletAc(RenkSecim rs)
+    {
+        int hucre = P(26), ara = P(4), ic = P(10);
+        int pw = 8 * hucre + 7 * ara + 2 * ic;
+        int ph = ic + 2 * hucre + ara + P(10) + P(28) + ic;
+        int px = Math.Clamp(rs.Kutu.Right - pw, P(8), ClientSize.Width - pw - P(8));
+        int py = rs.Kutu.Bottom + P(6);
+        if (py + ph > ClientSize.Height - P(8)) py = rs.Kutu.Top - P(6) - ph;
+        _paletAlani = new Rectangle(px, py, pw, ph);
+        for (int i = 0; i < _paletKutu.Length; i++)
+            _paletKutu[i] = new Rectangle(px + ic + (i % 8) * (hucre + ara), py + ic + (i / 8) * (hucre + ara), hucre, hucre);
+        _paletVarsayilan = new Rectangle(px + ic, py + ic + 2 * hucre + ara + P(10), pw - 2 * ic, P(28));
+        _palet = rs;
+        _paletUstunde = -1;
+        Invalidate();
+    }
+
+    private void PaletKapat()
+    {
+        _palet = null;
+        _paletUstunde = -1;
+        Invalidate();
+    }
+
+    private int PaletBul(Point p)
+    {
+        for (int i = 0; i < _paletKutu.Length; i++) if (_paletKutu[i].Contains(p)) return i;
+        return _paletVarsayilan.Contains(p) ? Palet.Secenekler.Length : -1;
     }
 
     // ---------------- Fare ----------------
@@ -363,16 +640,20 @@ internal sealed class AyarlarFormu : Form
     {
         foreach (var o in _ogeler)
         {
+            if (o.Sekme != _sekme) continue;
             switch (o)
             {
                 case Secim s when Array.Exists(s.Parcalar, r => r.Contains(p)): return o;
                 case Kaydirici k when Rectangle.Inflate(k.Iz, P(8), P(12)).Contains(p): return o;
                 case Anahtar a when o.Alan.Contains(p): return o;   // satırın her yeri anahtarı değiştirir
                 case Dugme d when d.Kutu.Contains(p): return o;
+                case RenkSecim when o.Alan.Contains(p): return o;   // hücrenin her yeri paleti açar
             }
         }
         return null;
     }
+
+    private int SekmeBul(Point p) => Array.FindIndex(_sekmeKutu, r => r.Contains(p));
 
     private void KaydiriciAyarla(Kaydirici k, int x)
     {
@@ -386,7 +667,7 @@ internal sealed class AyarlarFormu : Form
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (e.Button != MouseButtons.Left) return;
+        if (e.Button != MouseButtons.Left || _palet is not null) return; // palet açıkken tıklama bırakınca işlenir
         var o = OgeBul(e.Location);
         if (o is Kaydirici k && k.EtkinMi)
         {
@@ -417,8 +698,25 @@ internal sealed class AyarlarFormu : Form
             Location = new Point(_konumBas.X + p.X - _fareBas.X, _konumBas.Y + p.Y - _fareBas.Y);
             return;
         }
+        if (_palet is not null)
+        {
+            int pi = PaletBul(e.Location);
+            Cursor = pi >= 0 ? Cursors.Hand : Cursors.Default;
+            if (pi != _paletUstunde)
+            {
+                _paletUstunde = pi;
+                Invalidate(_paletAlani);
+            }
+            return;
+        }
+        int si = SekmeBul(e.Location);
+        if (si != _sekmeUstunde)
+        {
+            _sekmeUstunde = si;
+            Invalidate();
+        }
         var o = OgeBul(e.Location);
-        bool el = (o is not null && o.EtkinMi) || _kapatKutusu.Contains(e.Location);
+        bool el = (o is not null && o.EtkinMi) || _kapatKutusu.Contains(e.Location) || (si >= 0 && si != _sekme);
         Cursor = el ? Cursors.Hand : Cursors.Default;
         if (o != _ustunde)
         {
@@ -430,8 +728,9 @@ internal sealed class AyarlarFormu : Form
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
-        if (_ustunde is null) return;
+        if (_ustunde is null && _sekmeUstunde < 0) return;
         _ustunde = null;
+        _sekmeUstunde = -1;
         Invalidate();
     }
 
@@ -453,9 +752,33 @@ internal sealed class AyarlarFormu : Form
             Capture = false;
             return;
         }
+        if (_palet is { } rs)
+        {
+            // Palet açık: renk / varsayılan seçilir; dışarı tıklama sadece kapatır.
+            int pi = PaletBul(e.Location);
+            if (pi >= 0)
+            {
+                int? yeni = pi < Palet.Secenekler.Length ? Palet.RgbAl(Palet.Secenekler[pi].Renk) : null;
+                if (yeni is int y && y == Palet.RgbAl(rs.Varsayilan)) yeni = null; // varsayılanla aynı renk = varsayılan
+                rs.Sec(yeni);
+            }
+            if (pi >= 0 || !_paletAlani.Contains(e.Location)) PaletKapat();
+            return;
+        }
         if (_kapatKutusu.Contains(e.Location))
         {
             Close();
+            return;
+        }
+        int si = SekmeBul(e.Location);
+        if (si >= 0)
+        {
+            if (si != _sekme)
+            {
+                _sekme = si;
+                _ustunde = null;
+                Invalidate();
+            }
             return;
         }
         var o = OgeBul(e.Location);
@@ -472,8 +795,11 @@ internal sealed class AyarlarFormu : Form
             case Dugme d:
                 d.Tikla();
                 break;
+            case RenkSecim r:
+                PaletAc(r);
+                return;
         }
-        Invalidate();
+        if (!IsDisposed) Invalidate();
     }
 
     protected override void Dispose(bool disposing)
@@ -482,8 +808,8 @@ internal sealed class AyarlarFormu : Form
         {
             _yaziBaslik.Dispose(); _yazi.Dispose(); _yaziKucuk.Dispose(); _yaziBolum.Dispose(); _yaziDeger.Dispose();
             _fircaPanel.Dispose(); _fircaPanelUst.Dispose(); _fircaVurgu.Dispose(); _fircaSecili.Dispose();
-            _fircaTopuz.Dispose(); _fircaTopuzKapali.Dispose();
-            _kalemKenar.Dispose(); _kalemSeciliKenar.Dispose(); _kalemKapat.Dispose();
+            _fircaTopuz.Dispose(); _fircaTopuzKapali.Dispose(); _fircaRenk.Dispose();
+            _kalemKenar.Dispose(); _kalemSeciliKenar.Dispose(); _kalemKapat.Dispose(); _kalemHalka.Dispose(); _kalemHalkaSoluk.Dispose();
         }
         base.Dispose(disposing);
     }

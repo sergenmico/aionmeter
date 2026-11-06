@@ -126,6 +126,7 @@ internal static class Native
         catch { /* önemsiz */ }
     }
 
+    public const int VK_LBUTTON = 0x01, VK_RBUTTON = 0x02;
     public const int VK_MENU = 0x12; // Alt
     public const int VK_TAB = 0x09, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
 

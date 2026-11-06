@@ -35,7 +35,44 @@ internal sealed class Ayarlar
     public string? YerelAd;        // motorun kesin bildiği kendi karakter adın (sonraki açılışta motora verilir)
     public bool Tani;              // gizli tanı kaydı (tani.log); menüde/pencerede yok, kullanıcı elle "Tani=1" yazar
 
+    // Sadece benim satırım: overlay'de boss + yalnız kendi satırın (sıranla); diğerleri arka planda sayılır.
+    public bool SadeceBen;
+
+    // Renk ve yazı. SinifRenk: Palet.SinifSirasi dizinine göre 0xRRGGBB, null = varsayılan (0. eleman kullanılmaz).
+    public readonly int?[] SinifRenk = new int?[Palet.SinifSirasi.Length];
+    public int? YerelRenk;         // kendi satır rengin; null = varsayılan altın
+    public int YaziAd = 100, YaziDps = 100, YaziBoss = 100; // yüzde, 80..130
+    public int CubukOpaklik = 100; // pay çubuğu opaklığı, yüzde 0..100
+
+    // Kukla testi: hazır süreler (30/60/120/180) ya da özel süre (5..300 sn).
+    public static readonly int[] KuklaSureleri = { 30, 60, 120, 180 };
+    public int KuklaSure = 60;
+    public bool KuklaOzel;
+    public int KuklaOzelSure = 90;
+    public int KuklaSuresi => KuklaOzel ? KuklaOzelSure : KuklaSure;
+
+    // Alarm
+    public int AlarmSes = 40;      // yüzde, 10..100
+    public int AlarmDk = 5;        // son kurulan süre (seçicide ilk görünen)
+
     public const int EnAzSolukOpaklik = 10, EnFazlaSolukOpaklik = 60;
+    public const int EnAzYazi = 80, EnFazlaYazi = 130;
+    public const int EnAzKukla = 5, EnFazlaKukla = 300;
+    public const int EnAzAlarmSes = 10, EnFazlaAlarmSes = 100;
+    public const int EnFazlaAlarmDk = 180;
+
+    /// <summary>Renk ve yazı ayarları varsayılanda mı ("Varsayılana dön" düğmesi için).</summary>
+    public bool RenkVarsayilan =>
+        Array.TrueForAll(SinifRenk, r => r is null) && YerelRenk is null &&
+        YaziAd == 100 && YaziDps == 100 && YaziBoss == 100 && CubukOpaklik == 100;
+
+    public void RenkSifirla()
+    {
+        Array.Clear(SinifRenk);
+        YerelRenk = null;
+        YaziAd = YaziDps = YaziBoss = 100;
+        CubukOpaklik = 100;
+    }
 
     public static string Klasor { get; } = KlasorBul();
     public static string Dosya => Path.Combine(Klasor, "ayarlar.ini");
@@ -102,6 +139,25 @@ internal sealed class Ayarlar
                     case "OfkeSesi": a.OfkeSesi = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
                     case "YerelAd": a.YerelAd = deger.Length > 0 ? deger : null; break;
                     case "Tani": a.Tani = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
+                    case "SadeceBen": a.SadeceBen = deger == "1" || deger.Equals("evet", StringComparison.OrdinalIgnoreCase); break;
+                    case "YerelRenk": a.YerelRenk = RenkOku(deger); break;
+                    case "YaziAd" when sayi: a.YaziAd = Math.Clamp(n, EnAzYazi, EnFazlaYazi); break;
+                    case "YaziDps" when sayi: a.YaziDps = Math.Clamp(n, EnAzYazi, EnFazlaYazi); break;
+                    case "YaziBoss" when sayi: a.YaziBoss = Math.Clamp(n, EnAzYazi, EnFazlaYazi); break;
+                    case "CubukOpaklik" when sayi: a.CubukOpaklik = Math.Clamp(n, 0, 100); break;
+                    case "KuklaSure" when sayi && Array.IndexOf(KuklaSureleri, n) >= 0: a.KuklaSure = n; break;
+                    case "KuklaOzel": a.KuklaOzel = deger == "1"; break;
+                    case "KuklaOzelSure" when sayi: a.KuklaOzelSure = Math.Clamp(n, EnAzKukla, EnFazlaKukla); break;
+                    case "AlarmSes" when sayi: a.AlarmSes = Math.Clamp(n, EnAzAlarmSes, EnFazlaAlarmSes); break;
+                    case "AlarmDk" when sayi: a.AlarmDk = Math.Clamp(n, 1, EnFazlaAlarmDk); break;
+                    default:
+                        // Renk.Gladiator=62A4F0
+                        if (anahtar.StartsWith("Renk.", StringComparison.Ordinal))
+                        {
+                            int i = Palet.SinifIndeksi(anahtar[5..]);
+                            if (i > 0) a.SinifRenk[i] = RenkOku(deger);
+                        }
+                        break;
                 }
             }
         }
@@ -134,7 +190,19 @@ internal sealed class Ayarlar
                 "OfkeSesi=" + (OfkeSesi ? "1" : "0") + Environment.NewLine +
                 (SadeceOyunda is bool so ? "SadeceOyundayken=" + (so ? "1" : "0") + Environment.NewLine : "") +
                 (string.IsNullOrWhiteSpace(YerelAd) ? "" : "YerelAd=" + YerelAd.Trim() + Environment.NewLine) +
-                (Tani ? "Tani=1" + Environment.NewLine : ""); // elle eklenen gizli anahtar korunur
+                (Tani ? "Tani=1" + Environment.NewLine : "") + // elle eklenen gizli anahtar korunur
+                "SadeceBen=" + (SadeceBen ? "1" : "0") + Environment.NewLine +
+                "YaziAd=" + YaziAd.ToString(inv) + Environment.NewLine +
+                "YaziDps=" + YaziDps.ToString(inv) + Environment.NewLine +
+                "YaziBoss=" + YaziBoss.ToString(inv) + Environment.NewLine +
+                "CubukOpaklik=" + CubukOpaklik.ToString(inv) + Environment.NewLine +
+                (YerelRenk is int yr ? "YerelRenk=" + yr.ToString("X6", inv) + Environment.NewLine : "") +
+                RenkSatirlari() +
+                "KuklaSure=" + KuklaSure.ToString(inv) + Environment.NewLine +
+                "KuklaOzel=" + (KuklaOzel ? "1" : "0") + Environment.NewLine +
+                "KuklaOzelSure=" + KuklaOzelSure.ToString(inv) + Environment.NewLine +
+                "AlarmSes=" + AlarmSes.ToString(inv) + Environment.NewLine +
+                "AlarmDk=" + AlarmDk.ToString(inv) + Environment.NewLine;
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";
             File.WriteAllText(gecici, metin, Encoding.UTF8);
@@ -144,5 +212,21 @@ internal sealed class Ayarlar
         {
             HataLog.Yaz("Ayarlar kaydedilemedi", ex);
         }
+    }
+
+    private string RenkSatirlari()
+    {
+        string s = "";
+        for (int i = 1; i < SinifRenk.Length; i++)
+            if (SinifRenk[i] is int r)
+                s += "Renk." + Palet.SinifSirasi[i] + "=" + r.ToString("X6", CultureInfo.InvariantCulture) + Environment.NewLine;
+        return s;
+    }
+
+    /// <summary>"62A4F0" ya da "#62A4F0" → 0xRRGGBB; geçersizse null (varsayılan).</summary>
+    private static int? RenkOku(string deger)
+    {
+        string d = deger.TrimStart('#');
+        return d.Length == 6 && int.TryParse(d, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int r) ? r : null;
     }
 }

@@ -9,6 +9,8 @@ namespace AionMeter;
 /// Satır: [sınıf ikonu · ad · CP] | [boss/sn · /sn] | [hasar · pay]; pay çubuğu sınıfın koyu tonunda.
 /// Boss varken DPS, hasar ve pay aynı hedeften (boss) gelir. Kilitli değilken satıra tıklayınca detay paneli açılır.
 /// Savaş dışında (~8 sn sonra) ayara göre soluklaşır / gizlenir; geçiş 50 ms adımlı ~300 ms.
+/// Ek: "sadece benim satırım" modu, kullanıcı renkleri/yazı boyutları, kukla DPS testi (boss bloğunun yerinde
+/// geri sayım + sonuç kartı) ve alt satırdaki saatten kurulan kişisel alarm.
 /// </summary>
 internal sealed class OverlayForm : Form
 {
@@ -34,7 +36,7 @@ internal sealed class OverlayForm : Form
     private Font? _yazi, _yaziYari, _yaziDps, _yaziKucuk, _yaziBaslik, _yaziBoss;
     private readonly SolidBrush[] _fircaKoyu = new SolidBrush[Palet.SinifSirasi.Length];
     private readonly SolidBrush[] _fircaAcik = new SolidBrush[Palet.SinifSirasi.Length];
-    private readonly SolidBrush _fircaYerel = new(Palet.Yerel);
+    private readonly SolidBrush _fircaYerel = new(Palet.YerelRenk);
     private readonly SolidBrush _fircaSecili = new(Palet.Secili);
     private readonly SolidBrush _fircaSabitSatir = new(Palet.SabitSatir);
     private readonly SolidBrush _fircaBossIz = new(Palet.BossIz);
@@ -45,7 +47,13 @@ internal sealed class OverlayForm : Form
     private readonly Pen _kalemKilitli = new(Palet.Cizgi);
     private readonly Pen _kalemAyirac = new(Palet.Cizgi);
     private readonly Pen _kalemOlum = new(Palet.Kirmizi, 1.6f);
+    private readonly SolidBrush _fircaKart = new(Palet.Panel);
+    private readonly SolidBrush _fircaKukla = new(Palet.YerelRenk);
+    private readonly SolidBrush _fircaKuklaIz = new(Palet.PanelUst);
+    private readonly SolidBrush _fircaAlarmNabiz = new(Color.Transparent);
+    private readonly Pen _kalemSaat = new(Palet.CokSoluk, 1.2f);
     private int _satirlarUst;
+    private int _rowH, _bossSatirH; // yazı boyutuna göre (en az 22 / 19 × ölçek)
 
     private const TextFormatFlags Temel = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
                                           TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
@@ -79,7 +87,7 @@ internal sealed class OverlayForm : Form
     private int _sureW, _partiEtiketW, _partiDegerW, _bossYuzdeW, _sonucW, _oyuncuSayisiW, _bossDegerW, _noktaW, _ipucuW;
 
     // Kalabalık düzen (> 5 oyuncu): en üstte kendi satırın (#sıra ile) + ayırıcı, sonra 1..5.
-    private bool _kalabalik, _sabitUst;
+    private bool _kalabalik, _sabitUst, _sadeceBenModu;
     private string _oyuncuSayisi = "";
 
     // Boss modu: boss takip ediliyorsa satırdaki ana sayı Boss DPS'tir, hasar ve pay da bossa vurulandan.
@@ -127,7 +135,36 @@ internal sealed class OverlayForm : Form
     private int _alfa = -1, _hedefAlfa;   // pencere opaklığı (0..255); -1: henüz uygulanmadı
     private float _olcek = 1f;    // DPI × kullanıcı boyutu (overlay ve detay paneli çizimi)
     private float _dpiOlcek = 1f; // sadece DPI (çevirmen ve ayarlar penceresi)
+    private (int, int, int) _yaziImza; // son uygulanan yazı yüzdeleri (değişmediyse yazı tipleri yeniden yaratılmaz)
     private bool _denetleniyor;   // elle güncelleme denetimi sürüyor
+
+    // Kukla testi: test sürerken boss bloğunun yerinde geri sayım bloğu, bitince sonuç kartı.
+    private readonly KuklaTesti _kukla = new();
+    private readonly System.Windows.Forms.Timer _kuklaZamanlayici; // sadece test sürerken, 100 ms
+    private string _kuklaBaslik = "", _kuklaSag = "", _kuklaBilgi = "", _kuklaIpucu = "";
+    private Color _kuklaBilgiRenk;
+    private float _kuklaOran;
+    private int _kuklaSagW, _kuklaBilgiW, _kuklaIpucuW;
+    private Rectangle _kuklaAlani;
+    // Sonuç kartı
+    private string _kartBaslik = "", _kartDps = "", _kartToplam = "", _kartKiyas = "", _kartKiyasDeger = "";
+    private Color _kartKiyasRenk;
+    private readonly string[] _kartBeceri = new string[3], _kartBeceriHasar = new string[3], _kartBeceriPay = new string[3];
+    private int _kartBeceriSayisi, _kartHasarW, _kartPayW, _kartDpsW;
+    private Font? _yaziKart;
+
+    // Alarm: alt satırdaki saat simgesi; çalışırken "Alarm 04:32". Zamanlayıcı sadece alarm kuruluyken çalışır.
+    private readonly System.Windows.Forms.Timer _alarmZamanlayici;
+    private readonly Stopwatch _alarmNabizSaat = new();
+    private DateTime _alarmBitis = DateTime.MinValue;
+    private int _alarmDk;
+    private string _alarmMetin = "";
+    private int _alarmMetinW, _saatW;
+    private Rectangle _saatAlani, _altAlani;
+    private AlarmSecici? _alarmSecici;
+    private bool _saatUstunde; // imleç saatin üstünde (kilitsiz ya da Alt basılı): saat parlar
+    private const int AlarmNabizMs = 3000, AlarmNabizAdim = 750; // 4 yumuşak yanıp sönme
+    private bool AlarmKurulu => _alarmBitis != DateTime.MinValue;
 
     // Sürükleme / genişlik
     private bool _surukle, _kenardan, _tasindi;
@@ -141,13 +178,14 @@ internal sealed class OverlayForm : Form
         _demo = demo;
         _kilitli = ayar.Kilitli;
         _sadeceOyunda = ayar.SadeceOyunda ?? !demo; // demoda varsayılan kapalı ki görünsün
+        Palet.Uygula(ayar); // kullanıcı renkleri
         for (int i = 0; i < MaxSatir; i++) _satirlar[i] = new SatirModel();
         for (int i = 0; i < Palet.SinifSirasi.Length; i++)
         {
-            var r = Palet.Sinif(Palet.SinifSirasi[i]);
-            _fircaKoyu[i] = new SolidBrush(r.Koyu);
-            _fircaAcik[i] = new SolidBrush(r.Acik);
+            _fircaKoyu[i] = new SolidBrush(Palet.Arka);
+            _fircaAcik[i] = new SolidBrush(Palet.Arka);
         }
+        RenkleriUygula();
 
         Text = "AionMeter";
         FormBorderStyle = FormBorderStyle.None;
@@ -180,6 +218,10 @@ internal sealed class OverlayForm : Form
         _gecisZamanlayici.Tick += (_, _) => GecisTick();
         _uyariZamanlayici = new System.Windows.Forms.Timer { Interval = 50 };
         _uyariZamanlayici.Tick += (_, _) => UyariTick();
+        _kuklaZamanlayici = new System.Windows.Forms.Timer { Interval = 100 };
+        _kuklaZamanlayici.Tick += (_, _) => KuklaTick();
+        _alarmZamanlayici = new System.Windows.Forms.Timer { Interval = 250 };
+        _alarmZamanlayici.Tick += (_, _) => AlarmTick();
 
         SystemEvents.DisplaySettingsChanged += EkranDegisti;
         _sonSavas = DateTime.UtcNow; // açılışta 8 sn tam görünür (çalıştığı görülsün), sonra savaş dışı kuralı
@@ -245,7 +287,9 @@ internal sealed class OverlayForm : Form
     {
         base.OnLoad(e);
 
-        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, Sifirla, Detayim, _cevirmen.BolgeCevir, AyarlariAc, GuncellemeDenetle, Close);
+        _tepsi = new Tepsi(KilitDegistir, GosterDegistir, Sifirla, Detayim, _cevirmen.BolgeCevir, AyarlariAc, GuncellemeDenetle, Close,
+            sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc);
+        _tepsi.Menu.Opening += (_, _) => TepsiGuncelle(); // alarmın kalan süresi menü açılırken güncellenir
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -297,6 +341,8 @@ internal sealed class OverlayForm : Form
         if (_ayarlarFormu is not null) return true;                 // ayar yaparken nasıl görüneceği görünsün
         if (!_kilitli || _altUstunde) return true;                  // konumlandırma / Alt ile göz atma
         if (_sabit && _detay is { Visible: true }) return true;     // sabitlenmiş detay paneli
+        if (_kukla.Durum != KuklaTesti.Hal.Kapali) return true;    // kukla testi ve sonuç kartı
+        if (_alarmSecici is not null || _alarmNabizSaat.IsRunning) return true; // alarm kurulurken / çalınca
         if (_durumHata) return true;                                // Npcap yok vb. sorunlar görünsün
         if (_savasta || DateTime.UtcNow - _sonSavas < SavasSonrasi) return true;
         return _ayar.SavasDisi == SavasDisiModu.HepGorunur;
@@ -389,7 +435,11 @@ internal sealed class OverlayForm : Form
         if (pid != (uint)Environment.ProcessId) menu.Close(ToolStripDropDownCloseReason.AppFocusChange);
     }
 
-    private void TepsiGuncelle() => _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _denetleniyor);
+    private void TepsiGuncelle()
+    {
+        _tepsi?.Guncelle(_kilitli, !_kullaniciGizledi, _denetleniyor);
+        _tepsi?.KuklaGuncelle(_ayar.KuklaSure, _ayar.KuklaOzel, _ayar.KuklaOzelSure, _kukla.Etkin, AlarmKalan());
+    }
 
     /// <summary>Boyut: overlay ve detay paneli bu yüzdeyle çizilir (Windows ölçeğinin üstüne).</summary>
     private void BoyutSec(int yuzde)
@@ -410,6 +460,7 @@ internal sealed class OverlayForm : Form
         if (IsHandleCreated && _pencereAcik && _alfa > 0) yield return Bounds;
         if (_detay is { Visible: true }) yield return _detay.Bounds;
         if (_ayarlarFormu is { Visible: true }) yield return _ayarlarFormu.Bounds;
+        if (_alarmSecici is { Visible: true }) yield return _alarmSecici.Bounds;
     }
 
     // ---------------- Ayarlar penceresi ----------------
@@ -440,6 +491,14 @@ internal sealed class OverlayForm : Form
             ModeliIndir = _cevirmen.ModeliIndir,
             GuncellemeDenetle = GuncellemeDenetle,
             Denetleniyor = () => _denetleniyor,
+            GorunumDegisti = GorunumUygula,
+            KuklaBaslat = () => { KuklaBaslat(_ayar.KuklaSuresi); _ayarlarFormu?.Close(); }, // vurmaya gitsin
+            KuklaIptal = KuklaIptal,
+            KuklaEtkin = () => _kukla.Etkin,
+            AlarmKur = () => { _ayarlarFormu?.Close(); AlarmSeciciAc(); },
+            AlarmIptal = AlarmIptal,
+            AlarmKalan = AlarmKalan,
+            Ikonlar = _ikonlar,
         };
         IntPtr oyun = _onPlan.SonOyunPenceresi;
         _ayarlarFormu = new AyarlarFormu(_ayar, baglanti, _dpiOlcek);
@@ -536,6 +595,18 @@ internal sealed class OverlayForm : Form
 
             var s = _motor.Snapshot();
             SavasDurumu(s);
+            var kuklaOnce = _kukla.Durum;
+            if (kuklaOnce != KuklaTesti.Hal.Kapali && _kukla.Ilerle(s, KuklaDetay))
+            {
+                _onceki = null; // kart kapandı / test baştan / sonuç: model yeniden
+                if (!_kukla.Etkin) _kuklaZamanlayici.Stop();
+                if (_kukla.Durum != kuklaOnce)
+                {
+                    GenislikleriSifirla();
+                    TepsiGuncelle();
+                    _ayarlarFormu?.Yenile();
+                }
+            }
             GorunurlukUygula();
             if (!_pencereAcik) return; // savaş dışında gizli: sadece savaşın başlamasını bekler
 
@@ -552,7 +623,7 @@ internal sealed class OverlayForm : Form
             MenuyuGerekirseKapat();
             if (_detay is { Visible: true }) _detay.Yenile(); // detay sadece açıkken 2 Hz
 
-            bool bossGoster = BossGosterilsinMi(s);
+            bool bossGoster = _kukla.Durum == KuklaTesti.Hal.Kapali && BossGosterilsinMi(s); // test ve kart sürerken boss bloğu yok
             if (_onceki is not null && bossGoster == _bossGoster && Ayni(_onceki, s)) return;
 
             _onceki = s;
@@ -661,11 +732,9 @@ internal sealed class OverlayForm : Form
         else
         {
             // ≤ 5 oyuncu: hepsi, sıra numarasız. > 5: [kendi satırın #sıra] + ayırıcı + 1..5.
+            // Sadece benim satırım: yalnız kendi satırın (#sıra ile); diğerleri arka planda sayılır.
             // Katkı % ve toplamlar HER ZAMAN tüm listeden hesaplanır.
             bool kalabalik = _sirali.Count > UstSayisi;
-            if (kalabalik != _kalabalik) GenislikleriSifirla();
-            _kalabalik = kalabalik;
-            int ustN = kalabalik ? UstSayisi : Math.Min(_sirali.Count, MaxSatir);
             long enCok = 1, partiToplam = 0;
             int yerelSira = -1;
             for (int i = 0; i < _sirali.Count; i++)
@@ -675,9 +744,15 @@ internal sealed class OverlayForm : Form
                 if (t > enCok) enCok = t;
                 if (yerelSira < 0 && _sirali[i].IsLocal) yerelSira = i;
             }
+            bool sadeceBen = _ayar.SadeceBen && yerelSira >= 0;
+            if (sadeceBen) kalabalik = false;
+            if (kalabalik != _kalabalik || sadeceBen != _sadeceBenModu) GenislikleriSifirla();
+            _kalabalik = kalabalik;
+            _sadeceBenModu = sadeceBen;
+            int ustN = sadeceBen ? 0 : kalabalik ? UstSayisi : Math.Min(_sirali.Count, MaxSatir);
             int n = 0;
             _sabitUst = kalabalik && yerelSira >= 0;
-            if (_sabitUst) SatirDoldur(_satirlar[n++], _sirali[yerelSira], "#" + (yerelSira + 1).ToString(Bicim.Tr));
+            if (_sabitUst || sadeceBen) SatirDoldur(_satirlar[n++], _sirali[yerelSira], "#" + (yerelSira + 1).ToString(Bicim.Tr));
             for (int i = 0; i < ustN; i++) SatirDoldur(_satirlar[n++], _sirali[i], kalabalik ? SiraMetni[i] : "");
 
             void SatirDoldur(SatirModel m, PlayerDamage p, string sira)
@@ -707,14 +782,16 @@ internal sealed class OverlayForm : Form
             double d = bossModu ? oyuncular[i].BossDps : oyuncular[i].Dps;
             if (d > 0 && !double.IsNaN(d) && !double.IsInfinity(d)) partiDps += d;
         }
-        bool cok = oyuncular.Count > UstSayisi;
+        bool cok = oyuncular.Count > UstSayisi || (_sadeceBenModu && oyuncular.Count > 1);
         bool partiVar = s.State == EngineState.Connected && _satirSayisi > 0;
-        _partiEtiket = partiVar ? (cok ? "Toplam" : "Parti") : "";
+        _partiEtiket = partiVar ? (oyuncular.Count > UstSayisi ? "Toplam" : "Parti") : "";
         _partiDeger = partiVar ? Bicim.Dps(partiDps) : "";
         _oyuncuSayisi = s.State == EngineState.Connected && cok ? oyuncular.Count.ToString(Bicim.Tr) + " oyuncu" : "";
         _bilgiSayisi = 0;
 
         if (_bossGoster && s.Boss is { } b) BossModelKur(s, b);
+        if (_kukla.Etkin) KuklaModelKur();
+        else if (_kukla.Sonuc is { } ks) KartModelKur(ks);
         _sure = (s.FightOver ? "Sonuç · " : "") + Bicim.Sure(s.FightDuration);
         GenislikleriOlc();
     }
@@ -828,6 +905,424 @@ internal sealed class OverlayForm : Form
         if (!_bossAlani.IsEmpty) Invalidate(_bossAlani);
     }
 
+    // ---------------- Renk ve yazı (Ayarlar → Renk ve yazı, canlı) ----------------
+
+    /// <summary>Palet'teki güncel renklerden önbellekli fırçaları yeniler (tahsis yok, sadece Color atanır).</summary>
+    private void RenkleriUygula()
+    {
+        for (int i = 0; i < Palet.SinifSirasi.Length; i++)
+        {
+            var r = Palet.Sinif(Palet.SinifSirasi[i]);
+            _fircaKoyu[i].Color = Color.FromArgb(Palet.CubukAlfa, r.Koyu);
+            _fircaAcik[i].Color = r.Acik;
+        }
+        _fircaYerel.Color = Palet.YerelRenk;
+        _fircaKukla.Color = Palet.YerelRenk;
+    }
+
+    /// <summary>Ayarlar penceresinden: renk, yazı boyutu, çubuk opaklığı ya da "sadece benim satırım" değişti.</summary>
+    private void GorunumUygula()
+    {
+        Palet.Uygula(_ayar);
+        RenkleriUygula();
+        if (_yaziImza != (_ayar.YaziAd, _ayar.YaziDps, _ayar.YaziBoss))
+        {
+            // Yazı boyutu değişti: açık detay paneli yeni yazıyla yeniden açılır (aynı oyuncu, aynı sabitleme).
+            long? acik = _detay is { Visible: true } ? _detay.OyuncuId : null;
+            bool sabit = _sabit;
+            OlcekAyarla();
+            BoyutAyarla();
+            if (acik is long id) DetayAc(id, sabit);
+        }
+        else _detay?.RenkYenile();
+        GenislikleriSifirla();
+        _onceki = null;
+        Tick();
+        Invalidate();
+    }
+
+    // ---------------- Kukla testi ----------------
+
+    private PlayerDetail? KuklaDetay(long id) => _motor.Detail(id);
+
+    /// <summary>Tepsiden: hazır süre (sn) ya da -1 = özel süre. Seçim ayara yazılır.</summary>
+    private void KuklaTepsiden(int sure)
+    {
+        if (sure < 0) _ayar.KuklaOzel = true;
+        else
+        {
+            _ayar.KuklaOzel = false;
+            _ayar.KuklaSure = sure;
+        }
+        _ayar.Kaydet();
+        KuklaBaslat(_ayar.KuklaSuresi);
+    }
+
+    private void KuklaBaslat(int sure)
+    {
+        try { _motor.Reset(); }
+        catch (Exception ex) { HataLog.Yaz("Kukla sıfırlama", ex); }
+        _kukla.Baslat(sure);
+        _sonSavas = DateTime.UtcNow;
+        GenislikleriSifirla();
+        _onceki = null;
+        _kuklaZamanlayici.Start();
+        GorunurlukUygula();
+        Tick();
+        TepsiGuncelle();
+        _ayarlarFormu?.Yenile();
+    }
+
+    /// <summary>Testi iptal eder ya da sonuç kartını kapatır.</summary>
+    private void KuklaIptal()
+    {
+        if (_kukla.Durum == KuklaTesti.Hal.Kapali) return;
+        _kukla.Kapat();
+        _kuklaZamanlayici.Stop();
+        _sonSavas = DateTime.UtcNow; // kart kapanınca hemen soluklaşmasın
+        GenislikleriSifirla();
+        _onceki = null;
+        Tick();
+        TepsiGuncelle();
+        _ayarlarFormu?.Yenile();
+    }
+
+    /// <summary>Test sürerken 100 ms: geri sayım ve canlı DPS (sadece kukla bloğu yeniden çizilir).</summary>
+    private void KuklaTick()
+    {
+        try
+        {
+            if (!_kukla.Etkin)
+            {
+                _kuklaZamanlayici.Stop();
+                return;
+            }
+            var onceki = _kukla.Durum;
+            var s = _motor.Snapshot();
+            if (!_kukla.Ilerle(s, KuklaDetay)) return;
+            if (_kukla.Durum != onceki)
+            {
+                if (!_kukla.Etkin) _kuklaZamanlayici.Stop();
+                _onceki = null; // sonuç kartı: yükseklik değişir, tam model
+                GenislikleriSifirla();
+                Tick();
+                TepsiGuncelle();
+                _ayarlarFormu?.Yenile();
+                return;
+            }
+            KuklaModelKur();
+            if (_pencereAcik && !_kuklaAlani.IsEmpty) Invalidate(_kuklaAlani);
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Kukla testi", ex);
+        }
+    }
+
+    private string KuklaIpucuMetni(string eylem) => (_kilitli ? "Alt+tık: " : "Tık: ") + eylem;
+
+    private void KuklaModelKur()
+    {
+        _kuklaBaslik = "Kukla testi · " + _kukla.Sure.ToString(Bicim.Tr) + " sn";
+        _kuklaIpucu = KuklaIpucuMetni("iptal");
+        if (_kukla.Durum == KuklaTesti.Hal.Bekliyor)
+        {
+            _kuklaSag = Bicim.Sure(TimeSpan.FromSeconds(_kukla.Sure));
+            _kuklaOran = 0f;
+            _kuklaBilgi = "Vurmaya başla: ilk vuruşta sayım başlar";
+            _kuklaBilgiRenk = Palet.YerelYazi;
+        }
+        else
+        {
+            double kalan = Math.Max(0, _kukla.Sure - _kukla.Gecen.TotalSeconds);
+            _kuklaSag = Bicim.Sure(TimeSpan.FromSeconds(Math.Ceiling(kalan)));
+            _kuklaOran = (float)Math.Clamp(_kukla.Gecen.TotalSeconds / _kukla.Sure, 0, 1);
+            if (_kukla.Durdu)
+            {
+                _kuklaBilgi = "Süre durdu: vurmaya devam et";
+                _kuklaBilgiRenk = Palet.Kirmizi;
+            }
+            else
+            {
+                _kuklaBilgi = Bicim.Dps(_kukla.Dps) + " · Toplam " + Bicim.Tam(_kukla.Toplam);
+                _kuklaBilgiRenk = Palet.Yazi;
+            }
+        }
+        if (_yaziKucuk is not null) _kuklaBilgiW = Olc(_kuklaBilgi, _yaziKucuk);
+    }
+
+    private void KartModelKur(KuklaSonucu k)
+    {
+        _kartBaslik = k.Tamam
+            ? "Kukla testi · " + Bicim.Sure(TimeSpan.FromSeconds(k.Sure))
+            : "Kukla testi yarıda kaldı · " + Bicim.Sure(k.Gercek);
+        _kuklaIpucu = KuklaIpucuMetni("kapat");
+        _kartDps = Bicim.Dps(k.Dps);
+        _kartToplam = "Toplam " + Bicim.Tam(k.Toplam);
+        _kartBeceriSayisi = Math.Min(3, k.Beceriler.Count);
+        for (int i = 0; i < _kartBeceriSayisi; i++)
+        {
+            var (ad, hasar) = k.Beceriler[i];
+            _kartBeceri[i] = ad;
+            _kartBeceriHasar[i] = Bicim.Tam(hasar);
+            _kartBeceriPay[i] = Bicim.Oran(hasar, k.Toplam);
+        }
+        if (!k.Tamam)
+        {
+            _kartKiyas = "Süre dolmadı, rekora sayılmadı";
+            _kartKiyasRenk = Palet.Soluk;
+            _kartKiyasDeger = "";
+        }
+        else if (k.YeniRekor)
+        {
+            _kartKiyas = "Yeni rekor!";
+            _kartKiyasRenk = Palet.Yesil;
+            _kartKiyasDeger = k.OncekiRekor is long o ? "   Önceki: " + Bicim.Dps(o) : "";
+        }
+        else if (k.OncekiRekor is long rekor)
+        {
+            _kartKiyas = "Kişisel en iyi: " + Bicim.Dps(rekor) + " · bu ";
+            _kartKiyasRenk = Palet.Soluk;
+            _kartKiyasDeger = Bicim.Oran((long)Math.Round(k.Dps), rekor);
+        }
+        else
+        {
+            _kartKiyas = "DPS ölçülemedi";
+            _kartKiyasRenk = Palet.Soluk;
+            _kartKiyasDeger = "";
+        }
+    }
+
+    /// <summary>Kukla bloğu (boss bloğuyla aynı ölçüler): başlık · kalan süre / ilerleme çubuğu / canlı DPS ..... ipucu.</summary>
+    private void CizKukla(Graphics g, int x0, int x1, int y)
+    {
+        int satirH = BossSatirH;
+        int sx = x1 - _kuklaSagW;
+        TextRenderer.DrawText(g, _kuklaSag, _yaziBoss!, new Rectangle(sx, y, _kuklaSagW, satirH),
+            _kukla.Durum == KuklaTesti.Hal.Sayiyor ? Palet.Dps : Palet.Soluk, Sag);
+        TextRenderer.DrawText(g, _kuklaBaslik, _yaziBoss!, new Rectangle(x0, y, Math.Max(0, sx - P(12) - x0), satirH), Palet.Yazi, Sol);
+        y += satirH + P(3);
+
+        var cubuk = new Rectangle(x0, y, x1 - x0, BossCubukH);
+        g.FillRectangle(_fircaKuklaIz, cubuk);
+        int dolu = (int)(cubuk.Width * _kuklaOran);
+        if (dolu > 0) g.FillRectangle(_fircaKukla, cubuk.X, cubuk.Y, dolu, cubuk.Height);
+        y += BossCubukH + P(4);
+
+        int bilgiH = BossBilgiH;
+        int ipX = x1 - _kuklaIpucuW;
+        TextRenderer.DrawText(g, _kuklaIpucu, _yaziKucuk!, new Rectangle(ipX, y, _kuklaIpucuW, bilgiH), Palet.CokSoluk, Sag);
+        TextRenderer.DrawText(g, _kuklaBilgi, _yaziKucuk!, new Rectangle(x0, y, Math.Max(0, Math.Min(_kuklaBilgiW, ipX - P(16) - x0)), bilgiH),
+            _kuklaBilgiRenk, Sol);
+    }
+
+    /// <summary>
+    /// Sonuç kartı: başlık ..... ipucu / [ikon] DPS (büyük) · toplam / en çok vuran 3 beceri (hasar · pay) / kişisel en iyi kıyası.
+    /// </summary>
+    private void CizKart(Graphics g, int x0, int x1, int y)
+    {
+        var k = _kukla.Sonuc!;
+        var kart = new Rectangle(x0, y, x1 - x0, KartH);
+        Cevirmen.Cizim.YuvarlakDoldur(g, _fircaKart, kart, P(5));
+        g.FillRectangle(_fircaKukla, kart.X, kart.Y + P(6), Math.Max(2, P(2)), kart.Height - P(12)); // sol şerit: kendi rengin
+        int ic = KartIc;
+        int a0 = kart.X + ic, a1 = kart.Right - ic;
+        y += ic - P(2);
+
+        int satirH = BossSatirH;
+        TextRenderer.DrawText(g, _kuklaIpucu, _yaziKucuk!, new Rectangle(a1 - _kuklaIpucuW, y, _kuklaIpucuW, satirH), Palet.CokSoluk, Sag);
+        TextRenderer.DrawText(g, _kartBaslik, _yaziBoss!, new Rectangle(a0, y, Math.Max(0, a1 - _kuklaIpucuW - P(12) - a0), satirH), Palet.Yazi, Sol);
+        y += satirH + P(4);
+
+        int dpsH = KartDpsH, ikon = IkonW;
+        g.DrawImage(_ikonlar.Al(k.Sinif), a0, y + (dpsH - ikon) / 2, ikon, ikon);
+        int dx = a0 + ikon + P(8);
+        TextRenderer.DrawText(g, _kartDps, _yaziKart!, new Rectangle(dx, y, _kartDpsW, dpsH), Palet.Dps, Sol);
+        dx += _kartDpsW + P(14);
+        TextRenderer.DrawText(g, _kartToplam, _yaziKucuk!, new Rectangle(dx, y + P(2), Math.Max(0, a1 - dx), dpsH), Palet.Soluk, Sol);
+        y += dpsH + P(6);
+
+        // En çok vuran 3 beceri: sıra · ad ........ hasar  pay
+        int payX = a1 - _kartPayW, hasarX = payX - P(10) - _kartHasarW;
+        int siraW = Olc("3", _yaziKucuk!);
+        int bh = KartBeceriH;
+        for (int i = 0; i < _kartBeceriSayisi; i++)
+        {
+            TextRenderer.DrawText(g, (i + 1).ToString(Bicim.Tr), _yaziKucuk!, new Rectangle(a0, y, siraW, bh), Palet.CokSoluk, Sag);
+            int adX = a0 + siraW + P(8);
+            TextRenderer.DrawText(g, _kartBeceri[i], _yazi!, new Rectangle(adX, y, Math.Max(0, hasarX - P(14) - adX), bh), Palet.Yazi, Sol);
+            TextRenderer.DrawText(g, _kartBeceriHasar[i], _yaziKucuk!, new Rectangle(hasarX, y, _kartHasarW, bh), Palet.Yazi, Sag);
+            TextRenderer.DrawText(g, _kartBeceriPay[i], _yaziKucuk!, new Rectangle(payX, y, _kartPayW, bh), Palet.Soluk, Sag);
+            y += bh;
+        }
+        y += P(6);
+        g.DrawLine(_kalemAyirac, a0, y, a1, y);
+        y += 1 + P(6);
+
+        var kiyasYazi = k.YeniRekor ? _yaziYari! : _yaziKucuk!;
+        var degerYazi = k.YeniRekor ? _yaziKucuk! : _yaziYari!;
+        int kw = Olc(_kartKiyas, kiyasYazi);
+        TextRenderer.DrawText(g, _kartKiyas, kiyasYazi, new Rectangle(a0, y, Math.Min(kw, a1 - a0), P(18)), _kartKiyasRenk, Sol);
+        if (_kartKiyasDeger.Length > 0 && a0 + kw < a1)
+            TextRenderer.DrawText(g, _kartKiyasDeger, degerYazi, new Rectangle(a0 + kw, y, a1 - a0 - kw, P(18)),
+                k.YeniRekor ? Palet.Soluk : Palet.Yazi, Sol);
+    }
+
+    // ---------------- Alarm ----------------
+
+    private TimeSpan AlarmKalanSure()
+    {
+        var k = _alarmBitis - DateTime.UtcNow;
+        return k <= TimeSpan.Zero ? TimeSpan.Zero : TimeSpan.FromSeconds(Math.Ceiling(k.TotalSeconds));
+    }
+
+    private string? AlarmKalan() => AlarmKurulu ? Bicim.Sure(AlarmKalanSure()) : null;
+
+    /// <summary>Saat simgesi: kodla çizilmiş daire + iki ibre (emoji/ikon dosyası yok).</summary>
+    private void CizSaat(Graphics g, int x, int cy, Color renk)
+    {
+        float d = SaatBoy - 1f;
+        float ox = x + 0.5f, oy = cy - d / 2f;
+        var eski = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        _kalemSaat.Color = renk;
+        g.DrawEllipse(_kalemSaat, ox, oy, d, d);
+        float mx = ox + d / 2f, my = oy + d / 2f;
+        g.DrawLine(_kalemSaat, mx, my, mx, oy + d * 0.22f);             // yelkovan
+        g.DrawLine(_kalemSaat, mx, my, mx + d * 0.24f, my + d * 0.08f); // akrep
+        g.SmoothingMode = eski;
+    }
+
+    /// <summary>Alt+tık (kilitliyken) / tık (kilitsiz) saat, ya da tepsi "Alarm…": seçiciyi aç / kapat.</summary>
+    private void AlarmSeciciAc()
+    {
+        if (_alarmSecici is not null)
+        {
+            _alarmSecici.Close();
+            return;
+        }
+        IntPtr oyun = _onPlan.SonOyunPenceresi;
+        var f = new AlarmSecici(_olcek, AlarmKurulu ? _alarmDk : _ayar.AlarmDk, AlarmKalan);
+        f.Baslatildi += AlarmBaslat;
+        f.IptalEdildi += AlarmIptal;
+        f.FormClosed += (_, _) =>
+        {
+            if (_alarmSecici == f) _alarmSecici = null;
+            f.Dispose();
+            // Seçici odak almaz; yine de odak bizdeyse (tepsiden açıldıysa) oyuna geri ver.
+            Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out uint pid);
+            if (pid == (uint)Environment.ProcessId) Cevirmen.OdakYardimcisi.GeriVer(oyun);
+            _sonSavas = DateTime.UtcNow;
+            GorunurlukUygula();
+        };
+        _alarmSecici = f;
+        GorunurlukUygula(); // savaş dışında soluksa tam görünsün
+        f.Yerlestir(Bounds);
+        f.Show(); // SW_SHOWNOACTIVATE
+    }
+
+    private void AlarmBaslat(int dk)
+    {
+        _alarmDk = Math.Clamp(dk, 1, Ayarlar.EnFazlaAlarmDk);
+        _ayar.AlarmDk = _alarmDk;
+        _ayar.Kaydet();
+        _alarmBitis = DateTime.UtcNow.AddMinutes(_alarmDk);
+        AlarmNabizDurdur();
+        _alarmMetin = "Alarm " + Bicim.Sure(AlarmKalanSure());
+        _alarmZamanlayici.Interval = 250;
+        _alarmZamanlayici.Start();
+        _onceki = null; // alt satır genişliği değişti
+        Tick();
+        Invalidate();
+        TepsiGuncelle();
+        _ayarlarFormu?.Yenile();
+    }
+
+    private void AlarmIptal()
+    {
+        if (!AlarmKurulu && !_alarmNabizSaat.IsRunning) return;
+        _alarmBitis = DateTime.MinValue;
+        _alarmMetin = "";
+        AlarmNabizDurdur();
+        _alarmZamanlayici.Stop();
+        GenislikleriSifirla();
+        _onceki = null;
+        Tick();
+        Invalidate();
+        TepsiGuncelle();
+        _alarmSecici?.Yenile();
+        _ayarlarFormu?.Yenile();
+    }
+
+    /// <summary>250 ms: kalan süre (metin saniyede bir değişir, sadece alt satır çizilir); çalınca 50 ms'de yumuşak nabız.</summary>
+    private void AlarmTick()
+    {
+        try
+        {
+            if (_alarmNabizSaat.IsRunning)
+            {
+                long ms = _alarmNabizSaat.ElapsedMilliseconds;
+                if (ms >= AlarmNabizMs)
+                {
+                    AlarmNabizDurdur();
+                    _alarmZamanlayici.Stop();
+                    GorunurlukUygula();
+                }
+                else
+                {
+                    double k = Math.Sin(Math.PI * (ms % AlarmNabizAdim) / AlarmNabizAdim); // 0 → 1 → 0
+                    _fircaAlarmNabiz.Color = Color.FromArgb((int)(64 * k * k), Palet.Vurgu);
+                }
+                if (_pencereAcik && !_altAlani.IsEmpty) Invalidate(_altAlani);
+                return;
+            }
+            if (!AlarmKurulu)
+            {
+                _alarmZamanlayici.Stop();
+                return;
+            }
+            if (_alarmBitis <= DateTime.UtcNow)
+            {
+                AlarmCal();
+                return;
+            }
+            string m = "Alarm " + Bicim.Sure(AlarmKalanSure());
+            if (m == _alarmMetin) return;
+            _alarmMetin = m;
+            if (_pencereAcik && !_altAlani.IsEmpty) Invalidate(_altAlani);
+            _alarmSecici?.Yenile();
+            _ayarlarFormu?.Yenile(); // "Alarm · 04:32 kaldı" 
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Alarm", ex);
+        }
+    }
+
+    private void AlarmCal()
+    {
+        int dk = _alarmDk;
+        _alarmBitis = DateTime.MinValue;
+        _alarmMetin = "";
+        Zil.Cal(_ayar.AlarmSes);
+        _tepsi?.Bildir("Alarm: " + dk.ToString(Bicim.Tr) + " dk doldu");
+        _alarmNabizSaat.Restart();
+        _alarmZamanlayici.Interval = 50;
+        GorunurlukUygula(); // soluksa nabız boyunca tam görünür
+        GenislikleriSifirla();
+        _onceki = null;
+        Tick();
+        TepsiGuncelle();
+        _alarmSecici?.Yenile();
+        _ayarlarFormu?.Yenile();
+    }
+
+    private void AlarmNabizDurdur()
+    {
+        _alarmNabizSaat.Reset();
+        _fircaAlarmNabiz.Color = Color.Transparent;
+    }
+
     // ---------------- Ölçüm / boyut / ölçek ----------------
 
     private int P(float v) => (int)MathF.Round(v * _olcek);
@@ -836,18 +1331,28 @@ internal sealed class OverlayForm : Form
     private int Ic => P(6);         // satır içi kenar boşluğu
     private int GrupIci => P(6);    // sütun grubu içinde
     private int GrupArasi => P(14); // [ikon·ad·CP] | [boss/sn·/sn] | [hasar·pay]
-    private int RowH => P(22);
+    private int RowH => _rowH;      // en az 22; büyük yazıda büyür
     private int Aralik => P(2);     // satırlar arası nefes
     private int Adim => RowH + Aralik;
     private int BaslikH => P(15);   // sütun başlığı satırı
     private int Ayirac => P(7);     // sabit üst satırın altındaki boşluk + çizgi
 
     // Boss bloğu: ad/% satırı, ince can çubuğu, bilgi satırı
-    private int BossSatirH => P(19);
+    private int BossSatirH => _bossSatirH; // en az 19; büyük boss yazısında büyür
     private int BossCubukH => P(8);
     private int BossBilgiH => P(16);
     private int BossBlokH => BossSatirH + P(3) + BossCubukH + P(4) + BossBilgiH + P(6);
     private int AltH => P(17);
+    private int KartIc => P(10);     // sonuç kartı iç boşluğu
+    private int KartBeceriH => P(18);
+    private int KartDpsH => Math.Max(P(28), Yuk(_yaziKart!) + P(2));
+    private int KartH => KartIc + BossSatirH + P(4) + KartDpsH + P(6) + _kartBeceriSayisi * KartBeceriH +
+                         P(6) + 1 + P(6) + P(18) + KartIc - P(2);
+
+    private bool KuklaBlokVar => _kukla.Etkin;
+    private bool KartVar => _kukla.Durum == KuklaTesti.Hal.Sonuc && _kukla.Sonuc is not null;
+
+    private static int Yuk(Font f) => TextRenderer.MeasureText("Ağ", f, Size.Empty, Temel).Height;
 
     private static int Olc(string metin, Font font) =>
         metin.Length == 0 ? 0 : TextRenderer.MeasureText(metin, font, Size.Empty, Temel).Width;
@@ -928,18 +1433,50 @@ internal sealed class OverlayForm : Form
             _bossDegerW = Olc(_bossDeger, _yaziKucuk);
             gerek = Math.Max(gerek, 2 * pad + BilgiW() + P(16) + _bossDegerW);
         }
-        _sureW = _bossGoster || _durum != null ? 0 : Olc(_sure, _yaziKucuk); // boss varken süre boss bloğunda; durum mesajında süre yok
+        if (KuklaBlokVar)
+        {
+            // Sağdaki geri sayım şablonla ölçülür: saniye değiştikçe pencere zıplamasın.
+            _kuklaSagW = Math.Max(Olc("00:00", _yaziBoss), Olc(_kuklaSag, _yaziBoss));
+            gerek = Math.Max(gerek, 2 * pad + Olc(_kuklaBaslik, _yaziBoss) + P(12) + _kuklaSagW);
+            _kuklaIpucuW = Olc(_kuklaIpucu, _yaziKucuk);
+            _kuklaBilgiW = Olc(_kuklaBilgi, _yaziKucuk);
+            int sablon = Math.Max(_kuklaBilgiW, Olc("888.888 /sn · Toplam 88.888.888", _yaziKucuk));
+            gerek = Math.Max(gerek, 2 * pad + sablon + P(16) + _kuklaIpucuW);
+        }
+        if (KartVar)
+        {
+            int ic = 2 * pad + 2 * KartIc;
+            _kuklaIpucuW = Olc(_kuklaIpucu, _yaziKucuk);
+            gerek = Math.Max(gerek, ic + Olc(_kartBaslik, _yaziBoss) + P(12) + _kuklaIpucuW);
+            _kartDpsW = Olc(_kartDps, _yaziKart!);
+            gerek = Math.Max(gerek, ic + IkonW + P(8) + _kartDpsW + P(14) + Olc(_kartToplam, _yaziKucuk));
+            _kartPayW = Olc("%100,0", _yaziKucuk);
+            _kartHasarW = 0;
+            int adMaks = 0;
+            for (int i = 0; i < _kartBeceriSayisi; i++)
+            {
+                _kartHasarW = Math.Max(_kartHasarW, Olc(_kartBeceriHasar[i], _yaziKucuk));
+                adMaks = Math.Max(adMaks, Math.Min(Olc(_kartBeceri[i], _yazi), P(190)));
+            }
+            gerek = Math.Max(gerek, ic + Olc("3", _yaziKucuk) + P(8) + adMaks + P(14) + _kartHasarW + P(10) + _kartPayW);
+            gerek = Math.Max(gerek, ic + Olc(_kartKiyas, _yaziKucuk) + Olc(_kartKiyasDeger, _yaziYari));
+        }
+        _sureW = _bossGoster || KuklaBlokVar || _durum != null ? 0 : Olc(_sure, _yaziKucuk); // boss varken süre boss bloğunda; durum mesajında süre yok
         _partiEtiketW = Olc(_partiEtiket, _yaziKucuk);
         _partiDegerW = Olc(_partiDeger, _yaziYari);
         _oyuncuSayisiW = Olc(_oyuncuSayisi, _yaziKucuk);
         _ipucuW = Olc(_ipucu, _yaziKucuk);
-        gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0));
+        _alarmMetinW = AlarmKurulu ? Math.Max(Olc("Alarm 00:00", _yaziKucuk), Olc(_alarmMetin, _yaziKucuk)) : 0;
+        _saatW = SaatBoy + (_alarmMetinW > 0 ? P(5) + _alarmMetinW : 0);
+        gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0) + P(12) + _saatW);
 
         _icerikW = Math.Max(_icerikW, gerek);
     }
 
-    /// <summary>Alt satırda gösterilecek bir şey var mı (yoksa satır ve ayırıcı hiç çizilmez).</summary>
-    private bool AltVar => _sureW > 0 || _partiDegerW > 0 || _ipucuW > 0;
+    /// <summary>Alt satır her zaman var: en azından alarm saati orada durur.</summary>
+    private static bool AltVar => true;
+
+    private int SaatBoy => P(12);
 
     private int BilgiW()
     {
@@ -969,12 +1506,20 @@ internal sealed class OverlayForm : Form
         _dpiOlcek = Math.Max(1f, DeviceDpi / 96f);
         _olcek = _dpiOlcek * _ayar.Boyut / 100f;
         _yazi?.Dispose(); _yaziYari?.Dispose(); _yaziDps?.Dispose(); _yaziKucuk?.Dispose(); _yaziBaslik?.Dispose(); _yaziBoss?.Dispose();
-        _yazi = Palet.YaziTipi(12f * _olcek);
-        _yaziYari = Palet.YaziTipi(12f * _olcek, yariKalin: true);
-        _yaziDps = Palet.YaziTipi(13f * _olcek, yariKalin: true);
+        _yaziKart?.Dispose();
+        // Ad, DPS ve boss yazıları Ayarlar → Renk ve yazı'daki yüzdelerle (%80–%130)
+        float ad = _ayar.YaziAd / 100f, dps = _ayar.YaziDps / 100f, boss = _ayar.YaziBoss / 100f;
+        _yaziImza = (_ayar.YaziAd, _ayar.YaziDps, _ayar.YaziBoss);
+        _yazi = Palet.YaziTipi(12f * _olcek * ad);
+        _yaziYari = Palet.YaziTipi(12f * _olcek * ad, yariKalin: true);
+        _yaziDps = Palet.YaziTipi(13f * _olcek * dps, yariKalin: true);
         _yaziKucuk = Palet.YaziTipi(11f * _olcek);
         _yaziBaslik = Palet.YaziTipi(10.5f * _olcek);
-        _yaziBoss = Palet.YaziTipi(13f * _olcek, yariKalin: true);
+        _yaziBoss = Palet.YaziTipi(13f * _olcek * boss, yariKalin: true);
+        _yaziKart = Palet.YaziTipi(20f * _olcek * dps, yariKalin: true);
+        _rowH = Math.Max(P(22), Math.Max(Yuk(_yazi), Yuk(_yaziDps)) + P(3));
+        _bossSatirH = Math.Max(P(19), Yuk(_yaziBoss) + P(1));
+        _kalemSaat.Width = Math.Max(1f, 1.2f * _olcek);
         _kalemOlum.Width = Math.Max(1.2f, 1.6f * _olcek);
         DetayKapat(); // ölçek değişti: panel yeni ölçekle yeniden açılmalı
         _ikonlar.BoyutAyarla(IkonW);
@@ -985,7 +1530,8 @@ internal sealed class OverlayForm : Form
     private int HesaplaYukseklik()
     {
         int h = Pad;
-        if (_bossGoster) h += BossBlokH;
+        if (_bossGoster || KuklaBlokVar) h += BossBlokH;
+        if (KartVar) h += KartH + P(8);
         if (_durum != null) h += RowH;
         else
         {
@@ -1062,6 +1608,7 @@ internal sealed class OverlayForm : Form
     private void Ciz(Graphics g)
     {
         if (_yazi is null || _yaziYari is null || _yaziDps is null || _yaziKucuk is null || _yaziBaslik is null || _yaziBoss is null) return;
+        if (_yaziKart is null) return;
 
         int w = ClientSize.Width, h = ClientSize.Height;
         int pad = Pad;
@@ -1076,6 +1623,21 @@ internal sealed class OverlayForm : Form
             y += BossBlokH;
         }
         else _bossAlani = Rectangle.Empty;
+
+        // --- Kukla testi: geri sayım bloğu (boss bloğunun yerinde) ya da sonuç kartı ---
+        if (KuklaBlokVar)
+        {
+            _kuklaAlani = new Rectangle(0, 0, w, y + BossBlokH - P(3));
+            CizKukla(g, x0, x1, y);
+            y += BossBlokH;
+        }
+        else if (KartVar)
+        {
+            _kuklaAlani = new Rectangle(0, 0, w, y + KartH + P(4));
+            CizKart(g, x0, x1, y);
+            y += KartH + P(8);
+        }
+        else _kuklaAlani = Rectangle.Empty;
 
         // --- Satırlar ya da durum ---
         if (_durum != null)
@@ -1108,16 +1670,17 @@ internal sealed class OverlayForm : Form
                 // (Şerit çubuğun ucuna değil sola konur: sayıların üstünden geçmesin.)
                 int cubukY = y + ic, cubukH = rowH - 2 * ic;
                 int pay = (int)(gen * m.Oran);
-                if (pay > 0) g.FillRectangle(_fircaKoyu[m.Sinif], x0, cubukY, pay, cubukH);
+                if (pay > 0 && Palet.CubukAlfa > 0) g.FillRectangle(_fircaKoyu[m.Sinif], x0, cubukY, pay, cubukH);
                 g.FillRectangle(m.Yerel ? _fircaYerel : _fircaAcik[m.Sinif], x0, cubukY, Math.Max(2, P(2)), cubukH);
                 if (_detay is { Visible: true } && _detay.OyuncuId == m.Id) g.FillRectangle(_fircaSecili, x0, y, gen, rowH);
 
                 int x = x0 + Ic;
                 if (_siraW > 0)
                 {
-                    // Sıra: sabit satırda "#14" (altın), ilk 5'te küçük ve soluk "1..5"
-                    TextRenderer.DrawText(g, m.Sira, sabitSatir ? _yaziYari : _yaziKucuk, new Rectangle(x, y, _siraW, rowH),
-                        sabitSatir ? Palet.Yerel : Palet.CokSoluk, Sag);
+                    // Sıra: kendi satırında "#14" (kendi rengin), ilk 5'te küçük ve soluk "1..5"
+                    bool kendiSira = m.Sira.Length > 0 && m.Sira[0] == '#';
+                    TextRenderer.DrawText(g, m.Sira, kendiSira ? _yaziYari : _yaziKucuk, new Rectangle(x, y, _siraW, rowH),
+                        kendiSira ? Palet.YerelYazi : Palet.CokSoluk, Sag);
                     x += _siraW + P(4);
                 }
                 int ikon = IkonW;
@@ -1126,7 +1689,7 @@ internal sealed class OverlayForm : Form
                 int adSinir = Math.Max(0, cpX - GrupIci - x - OlumW(m));
                 int adW = Math.Min(m.AdW, adSinir);
                 TextRenderer.DrawText(g, m.Ad, m.Yerel ? _yaziYari : _yazi, new Rectangle(x, y, adW, rowH),
-                    m.Yerel ? Palet.Yerel : Palet.Yazi, Sol);
+                    m.Yerel ? Palet.YerelYazi : Palet.Yazi, Sol);
                 if (m.Olum.Length > 0) CizOlum(g, m, x + adW + P(5), y, rowH);
 
                 TextRenderer.DrawText(g, m.Cp, _yaziKucuk, new Rectangle(cpX, y, _cpW, rowH), Palet.Soluk, Sag);
@@ -1146,16 +1709,22 @@ internal sealed class OverlayForm : Form
             y -= Aralik;
         }
 
-        // --- Alt satır: 1 px ayırıcı, [süre ·] Parti 294.270 /sn [· 25 oyuncu] ...... ipucu ---
-        if (!AltVar)
-        {
-            g.DrawRectangle(_kilitli ? _kalemKilitli : _kalemKilitsiz, 0, 0, w - 1, h - 1);
-            return;
-        }
+        // --- Alt satır: 1 px ayırıcı, [süre ·] Parti 294.270 /sn [· 25 oyuncu] ...... ipucu  ◷ [Alarm 04:32] ---
         y += P(4);
         g.DrawLine(_kalemAyirac, x0, y, x1, y);
         y += 1 + P(4);
         int altH = AltH;
+        _altAlani = new Rectangle(1, y - P(3), w - 2, altH + P(5));
+        if (_fircaAlarmNabiz.Color.A > 0) g.FillRectangle(_fircaAlarmNabiz, _altAlani);
+
+        // Saat (ve çalışan alarmın kalan süresi) en sağda; ipucu onun soluna dayanır.
+        int saatX = x1 - _saatW;
+        _saatAlani = Rectangle.FromLTRB(saatX - P(5), y - P(3), Math.Min(w - 1, x1 + P(5)), y + altH + P(3));
+        CizSaat(g, saatX, y + altH / 2, AlarmKurulu ? Palet.Vurgu : _saatUstunde ? Palet.Yazi : Palet.CokSoluk);
+        if (_alarmMetinW > 0)
+            TextRenderer.DrawText(g, _alarmMetin, _yaziKucuk, new Rectangle(saatX + SaatBoy + P(5), y, _alarmMetinW, altH), Palet.Yazi, Sol);
+        x1 = saatX - P(12);
+
         int x2 = x0;
         if (_sureW > 0)
         {
@@ -1261,7 +1830,7 @@ internal sealed class OverlayForm : Form
         base.OnMouseDown(e);
         if (_kilitli)
         {
-            if (_altAcik && e.Button == MouseButtons.Left) AltTiklandi(e.Y); // Alt+tık: sabitle / bırak
+            if (_altAcik && e.Button == MouseButtons.Left) AltTiklandi(e.Location); // Alt+tık: saat / kukla / sabitle
             return;
         }
         if (e.Button == MouseButtons.Left)
@@ -1285,12 +1854,13 @@ internal sealed class OverlayForm : Form
         base.OnMouseMove(e);
         if (_kilitli)
         {
-            if (_altAcik) UzerineGelindi(e.Y);
+            if (_altAcik) UzerineGelindi(e.Location);
             return;
         }
         if (!_surukle)
         {
-            Cursor = KenardaMi(e.X) ? Cursors.SizeWE : Cursors.SizeAll;
+            SaatUstundeAyarla(e.Location);
+            Cursor = KenardaMi(e.X) ? Cursors.SizeWE : TiklanirAlan(e.Location) ? Cursors.Hand : Cursors.SizeAll;
             return;
         }
         var p = Cursor.Position;
@@ -1320,7 +1890,40 @@ internal sealed class OverlayForm : Form
         _surukle = false;
         Capture = false;
         if (_tasindi) AyarKaydet();
-        else if (!_kenardan && e.Button == MouseButtons.Left) SatiraTiklandi(e.Y);
+        else if (!_kenardan && e.Button == MouseButtons.Left && !OzelTiklama(e.Location)) SatiraTiklandi(e.Y);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        SaatUstundeAyarla(new Point(-1, -1));
+    }
+
+    /// <summary>Saat ve kukla bloğu/kartı tıklanabilir (kilitsizken el imleci).</summary>
+    private bool TiklanirAlan(Point p) => _saatAlani.Contains(p) || _kuklaAlani.Contains(p);
+
+    private void SaatUstundeAyarla(Point p)
+    {
+        bool ust = _saatAlani.Contains(p);
+        if (ust == _saatUstunde) return;
+        _saatUstunde = ust;
+        if (!_saatAlani.IsEmpty) Invalidate(_saatAlani);
+    }
+
+    /// <summary>Saat → alarm seçici; kukla bloğu → testi iptal; sonuç kartı → kapat. İşlendiyse true.</summary>
+    private bool OzelTiklama(Point p)
+    {
+        if (_saatAlani.Contains(p))
+        {
+            AlarmSeciciAc();
+            return true;
+        }
+        if (_kuklaAlani.Contains(p))
+        {
+            KuklaIptal();
+            return true;
+        }
+        return false;
     }
 
     // ---------------- Detay paneli ----------------
@@ -1370,7 +1973,7 @@ internal sealed class OverlayForm : Form
     {
         if (_detay is null)
         {
-            _detay = new DetayForm(_motor, _ikonlar, _olcek, (byte)TamAlfa, OyuncuBul);
+            _detay = new DetayForm(_motor, _ikonlar, _olcek, (byte)TamAlfa, OyuncuBul, _ayar.YaziAd / 100f, _ayar.YaziDps / 100f);
             _detay.KapatIstendi += DetayKapat;
         }
         if (sabit is bool b)
@@ -1409,7 +2012,8 @@ internal sealed class OverlayForm : Form
             var imlec = Cursor.Position;
             // İmleç sayacın/detayın üstündeyse Alt sayaca aittir; değilse çevirmene. İkisi birden asla.
             // Savaş dışında gizliyken de overlay'in yeri sayılır: Alt ile üstüne gelince görünür olsun.
-            bool bizimUstunde = (_sertGorunur && Bounds.Contains(imlec)) || (_detay is { Visible: true } && _detay.Bounds.Contains(imlec));
+            bool bizimUstunde = (_sertGorunur && Bounds.Contains(imlec)) || (_detay is { Visible: true } && _detay.Bounds.Contains(imlec)) ||
+                                (_alarmSecici is { Visible: true } && _alarmSecici.Bounds.Contains(imlec));
 
             if (_kilitli)
             {
@@ -1421,12 +2025,13 @@ internal sealed class OverlayForm : Form
                 else if (!basili && _altAcik)
                 {
                     AltBirakildi();
+                    SaatUstundeAyarla(new Point(-1, -1));
                 }
                 if (_altAcik && bizimUstunde && _pencereAcik)
                 {
                     // Stil değişiminden hemen sonra WM_MOUSEMOVE gelmeyebilir: imleci burada da yokla.
                     var p = PointToClient(imlec);
-                    if (ClientRectangle.Contains(p)) UzerineGelindi(p.Y);
+                    if (ClientRectangle.Contains(p)) UzerineGelindi(p);
                 }
             }
             else if (_altAcik)
@@ -1480,9 +2085,10 @@ internal sealed class OverlayForm : Form
         _detay?.TiklanmazAyarla(tiklanmaz);
     }
 
-    private void UzerineGelindi(int y)
+    private void UzerineGelindi(Point p)
     {
-        int i = SatirIndeksi(y);
+        SaatUstundeAyarla(p);
+        int i = SatirIndeksi(p.Y);
         if (i < 0) return;
         long id = _satirlar[i].Id;
         if (id == _hoverBastirId) return;
@@ -1491,9 +2097,10 @@ internal sealed class OverlayForm : Form
         DetayAc(id, sabit: null);
     }
 
-    private void AltTiklandi(int y)
+    private void AltTiklandi(Point p)
     {
-        int i = SatirIndeksi(y);
+        if (OzelTiklama(p)) return;
+        int i = SatirIndeksi(p.Y);
         if (i < 0) return;
         long id = _satirlar[i].Id;
         if (_sabit && _sabitId == id && _detay is not null)
@@ -1600,6 +2207,12 @@ internal sealed class OverlayForm : Form
 
     private void Sifirla()
     {
+        if (_kukla.Etkin)
+        {
+            KuklaBaslat(_kukla.Sure); // test sürerken sıfırlama: test baştan
+            return;
+        }
+        if (_kukla.Durum != KuklaTesti.Hal.Kapali) KuklaIptal();
         try { _motor.Reset(); }
         catch (Exception ex) { HataLog.Yaz("Sıfırlama", ex); }
         GenislikleriSifirla();
@@ -1620,6 +2233,9 @@ internal sealed class OverlayForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         _zamanlayici.Stop();
+        _kuklaZamanlayici.Stop();
+        _alarmZamanlayici.Stop();
+        _alarmSecici?.Close();
         AyarKaydet();
         base.OnFormClosing(e);
     }
@@ -1633,6 +2249,10 @@ internal sealed class OverlayForm : Form
             _altZamanlayici.Dispose();
             _gecisZamanlayici.Dispose();
             _uyariZamanlayici.Dispose();
+            _kuklaZamanlayici.Dispose();
+            _alarmZamanlayici.Dispose();
+            _alarmSecici?.Dispose();
+            Zil.Birak();
             _ayarlarFormu?.Dispose();
             _cevirmen.Dispose();
             DetayKapat();
@@ -1640,11 +2260,13 @@ internal sealed class OverlayForm : Form
             _tepsi?.Dispose();
             _ikonlar.Dispose();
             _yazi?.Dispose(); _yaziYari?.Dispose(); _yaziDps?.Dispose(); _yaziKucuk?.Dispose(); _yaziBaslik?.Dispose(); _yaziBoss?.Dispose();
+            _yaziKart?.Dispose();
             foreach (var f in _fircaKoyu) f.Dispose();
             foreach (var f in _fircaAcik) f.Dispose();
             _fircaYerel.Dispose(); _fircaSecili.Dispose(); _fircaSabitSatir.Dispose();
             _fircaBossIz.Dispose(); _fircaBossCan.Dispose(); _fircaBossBilinmiyor.Dispose(); _fircaUyari.Dispose();
             _kalemKilitsiz.Dispose(); _kalemKilitli.Dispose(); _kalemAyirac.Dispose(); _kalemOlum.Dispose();
+            _fircaKart.Dispose(); _fircaKukla.Dispose(); _fircaKuklaIz.Dispose(); _fircaAlarmNabiz.Dispose(); _kalemSaat.Dispose();
         }
         base.Dispose(disposing);
     }
