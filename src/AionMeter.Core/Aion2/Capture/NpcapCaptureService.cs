@@ -42,6 +42,9 @@ public sealed class NpcapCaptureService : IDisposable
     private const int MaxQueued = 20_000;
     private const int KernelBufferBytes = 16 * 1024 * 1024;
 
+    /// <summary>Değiştirildi (eklendi): kart seçilemeyip hepsi dinlenirken kart başına tampon (16 MB x kart sayısı olmasın).</summary>
+    private const int KernelBufferBytesEach = 4 * 1024 * 1024;
+
     /// <summary>Değiştirildi (eklendi): işçi en çok bu aralıkla <see cref="OnTick"/> çağırır (parça gelmese de; TCP boşluk süresi için).</summary>
     private const int TickMs = 100;
 
@@ -119,7 +122,7 @@ public sealed class NpcapCaptureService : IDisposable
                         ReadTimeout = 100,
                         Mode = DeviceModes.MaxResponsiveness,
                         Immediate = true,
-                        KernelBufferSize = KernelBufferBytes,
+                        KernelBufferSize = selected.Count > 1 ? KernelBufferBytesEach : KernelBufferBytes,
                     };
                     // Desteklenmeyen bir ayar (eski sürücü) aygıtı açılmaz bırakmasın: ayar atlanır, yakalama varsayılanla sürer.
                     config.ConfigurationFailed += (_, _) => { };

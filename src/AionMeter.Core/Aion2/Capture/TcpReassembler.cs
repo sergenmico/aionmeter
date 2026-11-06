@@ -102,20 +102,19 @@ public sealed class TcpReassembler
         stream.Buffer.Clear();
         stream.Marks.Clear();
         stream.Synced = false;
-        stream.NextSequence = stream.Pending.Keys.First();
-        DrainPending(stream);
-        if (stream.Pending.Count > 0)
+        uint skipTo = stream.Pending.Keys.First();
+        if (stream.Skipped.Count >= 8)
         {
-            // arkasında başka bir boşluk var: onun süresi kalan en eski parçadan başlar
-            DateTime oldest = DateTime.MaxValue;
-            foreach ((ReadOnlyMemory<byte> _, DateTime at) in stream.Pending.Values)
-            {
-                oldest = at < oldest ? at : oldest;
-            }
-
-            stream.HoleSince = oldest;
+            stream.Skipped.RemoveAt(0);
         }
+
+        stream.Skipped.Add((stream.NextSequence, skipTo)); // bırakılan boşluk: sonradan gelirse sayılır (LateAfterGap)
+        stream.NextSequence = skipTo;
+        DrainPending(stream);
     }
+
+    /// <summary>Değiştirildi (eklendi): bırakılmış bir boşluğa sonradan gelen parçalar (boşluk süresi kısa kaldıysa artar).</summary>
+    public int LateAfterGap { get; private set; }
 
     // Değiştirildi (eklendi): 60 sn'den uzun süredir parça gelmeyen akışlar (kapanmış bağlantılar) atılır.
     private static readonly TimeSpan StreamIdle = TimeSpan.FromSeconds(60);
@@ -153,6 +152,15 @@ public sealed class TcpReassembler
             if (overlap >= payload.Length)
             {
                 Retransmissions++;
+                foreach ((uint from, uint to) in stream.Skipped)
+                {
+                    if ((int)(sequence - from) >= 0 && (int)(sequence - to) < 0)
+                    {
+                        LateAfterGap++;
+                        break;
+                    }
+                }
+
                 return;
             }
 
@@ -182,14 +190,29 @@ public sealed class TcpReassembler
 
     private static void DrainPending(StreamState stream)
     {
+        bool drained = false;
         while (stream.Pending.Count > 0)
         {
             uint first = stream.Pending.Keys.First();
             long delta = (int)(first - stream.NextSequence);
             if (delta > 0)
             {
+                if (drained)
+                {
+                    // Değiştirildi (eklendi): bir boşluk doldu, arkasında başka bir boşluk var: onun süresi kalan en eski bekleyenden başlar
+                    DateTime oldest = DateTime.MaxValue;
+                    foreach ((ReadOnlyMemory<byte> _, DateTime waiting) in stream.Pending.Values)
+                    {
+                        oldest = waiting < oldest ? waiting : oldest;
+                    }
+
+                    stream.HoleSince = oldest;
+                }
+
                 return;
             }
+
+            drained = true;
 
             (ReadOnlyMemory<byte> payload, DateTime at) = stream.Pending[first];
             stream.Pending.Remove(first);
@@ -491,6 +514,9 @@ public sealed class TcpReassembler
 
         /// <summary>Değiştirildi (eklendi): ilk sıra dışı parçanın geliş zamanı (boşluk açık); boşluk yokken null.</summary>
         public DateTime? HoleSince;
+
+        /// <summary>Değiştirildi (eklendi): son bırakılan boşluklar (başlangıç, bitiş sırası), en çok 8.</summary>
+        public readonly List<(uint From, uint To)> Skipped = new();
 
         /// <summary>Değiştirildi (eklendi): tampondaki baytların zamanı: her parça için (bitiş konumu, parçanın zamanı); konumlar Buffer'a göredir.</summary>
         public readonly List<(int End, DateTime At)> Marks = new();

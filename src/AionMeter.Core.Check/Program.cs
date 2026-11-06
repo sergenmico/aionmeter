@@ -36,6 +36,7 @@ MotorScenarios();
 FrameChecks();
 TcpChecks();
 OtherChecks();
+AuditChecks();
 
 using (var proc = System.Diagnostics.Process.GetCurrentProcess())
 {
@@ -592,6 +593,7 @@ void MotorScenarios()
         e.InjectHit(H(me, t.AddSeconds(-29), boss, 1_000_000));
         d.HitPoints.Note(boss, t.AddSeconds(-29), 9_000_000);
         e.Snapshot();
+        d.NoteRemoved(boss, 7, t.AddSeconds(-20)); // takım öldü, boss sıfırlanıp kayboldu
         d.RegisterNpc(905, catalogNpc); // aynı boss, yeni kimlik
         MeterSnapshot s1 = e.Snapshot();
         d.HitPoints.Note(905, t.AddSeconds(-5), 10_000_000);
@@ -623,23 +625,41 @@ void MotorScenarios()
         Check("slot: mob'lara vurmak ve ölümleri boss dövüşünü bozmaz", !s.FightOver && s.Boss?.Id == boss && P(s, me) is { Total: 1_200_000, BossTotal: 1_000_000 }, Show(s));
     }
 
-    // MOTOR 10d: wipe kural (i) — boşluk olmadan dövüş boss'unun okuması belirgin yükseldi (sıfırlandı).
+    // MOTOR 10d: wipe kural (i) — parti vuruşu kesildikten (8+ sn) sonra dövüş boss'unun okuması belirgin yükseldi (sıfırlandı).
     {
         var (e, d, _) = New();
         d.NoteClass(me, "Gladiator");
         d.RegisterNpc(boss, catalogNpc);
+        d.HitPoints.Note(boss, t.AddSeconds(-21), 10_000_000);
+        e.InjectHit(H(me, t.AddSeconds(-20), boss, 3_000_000));
+        d.HitPoints.Note(boss, t.AddSeconds(-20), 7_000_000);
+        e.SnapshotAt(t.AddSeconds(-20));
+        d.HitPoints.Note(boss, t.AddSeconds(-19), 7_900_000); // %9 iyileşme: wipe değil
+        MeterSnapshot heal = e.SnapshotAt(t.AddSeconds(-19));
         d.HitPoints.Note(boss, t.AddSeconds(-10), 10_000_000);
-        e.InjectHit(H(me, t.AddSeconds(-9), boss, 3_000_000));
-        d.HitPoints.Note(boss, t.AddSeconds(-9), 7_000_000);
-        e.Snapshot();
-        d.HitPoints.Note(boss, t.AddSeconds(-8), 7_900_000); // %9 iyileşme: wipe değil
-        MeterSnapshot heal = e.Snapshot();
-        d.HitPoints.Note(boss, t.AddSeconds(-7), 10_000_000);
-        MeterSnapshot s1 = e.Snapshot();
+        MeterSnapshot s1 = e.SnapshotAt(t.AddSeconds(-10));
         e.InjectHit(H(me, t.AddSeconds(-6), boss, 100_000));
-        MeterSnapshot s2 = e.Snapshot();
-        Check("MOTOR 10d: can sıçraması -> deneme kapanır, sonraki vuruş yeni deneme (küçük iyileşme wipe sayılmaz)",
+        MeterSnapshot s2 = e.SnapshotAt(t.AddSeconds(-6));
+        Check("MOTOR 10d: vuruşsuz aradan sonra can sıçraması -> deneme kapanır, sonraki vuruş yeni deneme (küçük iyileşme wipe sayılmaz)",
             !heal.FightOver && s1.FightOver && P(s1, me)?.Total == 3_000_000 && !s2.FightOver && P(s2, me)?.Total == 100_000, Show(s1) + " >> " + Show(s2));
+    }
+
+    // MOTOR 10e: wipe kural (i) — parti vururken can sıçradı ama bilinen parti üyelerinin hepsi (yerel oyuncu) son 60 sn'de öldü.
+    {
+        var (e, d, _) = New();
+        d.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, t));
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        d.HitPoints.Note(boss, t.AddSeconds(-11), 10_000_000);
+        e.InjectHit(H(me, t.AddSeconds(-10), boss, 3_000_000));
+        d.HitPoints.Note(boss, t.AddSeconds(-10), 7_000_000);
+        e.SnapshotAt(t.AddSeconds(-10));
+        d.HitPoints.Note(me, t.AddSeconds(-9), 30_000);
+        d.HitPoints.Note(me, t.AddSeconds(-8), 0); // öldüm
+        e.InjectHit(H(me, t.AddSeconds(-6), boss, 1_000)); // ölmeden önce koyduğum bir tik (vuruş kesilmedi)
+        d.HitPoints.Note(boss, t.AddSeconds(-5), 10_000_000);
+        MeterSnapshot s = e.SnapshotAt(t.AddSeconds(-5));
+        Check("MOTOR 10e: herkes öldü + can sıçradı -> wipe", s.FightOver && P(s, me) is { Total: 3_001_000, Olum: 1 }, Show(s));
     }
 
     foreach (bool record in new[] { true, false })
@@ -668,6 +688,7 @@ void MotorScenarios()
     // MOTOR 11c: partisiz, karakter kaydı yok, yandaki isimsiz oyuncu 3 kat fazla beceri kullanıyor; ben kendi kuklamı işaretledim.
     {
         var (e, d, _) = New();
+        e.LocalCacheMs = 0; // gerçekte saniyede bir yenilenir; sentetik senaryo milisaniyeler içinde
         d.HitPoints.Note(boss, t.AddSeconds(-20), 10_000_000);
         d.HitPoints.Note(dummyB, t.AddSeconds(-20), 10_000_000);
         d.SetLocalTarget(boss);
@@ -741,7 +762,7 @@ void TcpChecks()
 
         if (tickAfter)
         {
-            src.Tick(t0.AddMilliseconds(idx * 20 + 400));
+            src.FlushAt(t0.AddMilliseconds(idx * 20 + 400)); // paket saatinde 400 ms sonra
         }
 
         return (outp, src);
@@ -862,7 +883,7 @@ void OtherChecks()
             e.InjectHit(H(me, t.AddSeconds(-9), boss, 3_000_000));
             d.HitPoints.Note(boss, t.AddSeconds(-9), 7_000_000);
             e.Snapshot();
-            d.HitPoints.Note(boss, t.AddSeconds(-7), 10_000_000);
+            d.HitPoints.Note(boss, t.AddSeconds(-0.5), 10_000_000); // 8,5 sn vuruşsuz aradan sonra sıfırlandı
             e.Snapshot();
             s.Tick(DateTime.Now.AddMinutes(2));
         }
@@ -879,5 +900,198 @@ void OtherChecks()
         Check("tanı: başlangıç, boss, wipe, yerel kimlik, sayaç satırları",
             lines.Any(l => l.Contains("dövüş başladı")) && lines.Any(l => l.Contains("wipe")) && lines.Any(l => l.Contains("yerel kimlik"))
             && lines.Any(l => l.Contains("dövüş boss'u")) && lines.Any(l => l.Contains("sayaç")));
+    }
+}
+
+// Bağımsız denetim bulguları (D senaryoları): her biri bir açığı yeniden üretir; beklenen = düzeltilmiş davranış.
+void AuditChecks()
+{
+    Console.WriteLine("[denetim bulguları]");
+    const int me = 500, boss = 900, twin = 905, trash = 950;
+    const int catalogNpc = 2300708;
+    DateTime t = DateTime.Now;
+    DamageEvent H(int src, DateTime at, int target, long amount, int skill = 11010000) => new(at, src, target, amount, false, SkillId: skill);
+    PlayerDamage? P(MeterSnapshot s, int id) => s.Players.FirstOrDefault(p => p.Id == id);
+
+    // D1: aynı NPC'den iki canlı varlık (ikiz / kopya); ikincisine vurmak wipe değildir.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        d.HitPoints.Note(boss, t.AddSeconds(-30), 10_000_000);
+        d.HitPoints.Note(twin, t.AddSeconds(-30), 10_000_000);
+        d.RegisterNpc(twin, catalogNpc);
+        e.SnapshotAt(t.AddSeconds(-29));
+        for (int i = 0; i < 10; i++) { e.InjectHit(H(me, t.AddSeconds(-29 + i), boss, 500_000)); d.HitPoints.Note(boss, t.AddSeconds(-29 + i), 10_000_000 - (i + 1) * 500_000); }
+        e.SnapshotAt(t.AddSeconds(-19));
+        e.InjectHit(H(me, t.AddSeconds(-18), twin, 100_000)); d.HitPoints.Note(twin, t.AddSeconds(-18), 9_900_000);
+        MeterSnapshot s = e.SnapshotAt(t.AddSeconds(-18));
+        Check("D1: iki canlı kopyadan ikincisine vurmak yeni deneme başlatmaz", !s.FightOver && P(s, me)?.Total == 5_100_000, Show(s));
+    }
+
+    // D1b: dövüş sırasında aynı NPC'den ikinci varlık doğuyor (eskisi canlı, yerinde): deneme kapanmaz.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        d.HitPoints.Note(boss, t.AddSeconds(-30), 10_000_000);
+        for (int i = 0; i < 10; i++) { e.InjectHit(H(me, t.AddSeconds(-29 + i), boss, 500_000)); d.HitPoints.Note(boss, t.AddSeconds(-29 + i), 10_000_000 - (i + 1) * 500_000); }
+        e.SnapshotAt(t.AddSeconds(-19));
+        d.RegisterNpc(twin, catalogNpc);
+        MeterSnapshot s3 = e.SnapshotAt(t.AddSeconds(-19));
+        e.InjectHit(H(me, t.AddSeconds(-18), boss, 100_000)); d.HitPoints.Note(boss, t.AddSeconds(-18), 4_900_000);
+        MeterSnapshot s4 = e.SnapshotAt(t.AddSeconds(-18));
+        Check("D1b: eskisi canlıyken kopya doğması wipe değil", !s3.FightOver && !s4.FightOver && P(s4, me)?.Total == 5_100_000, Show(s4));
+    }
+
+    // D2: boss kendini %10 iyileştiriyor (%76 -> %86), parti vurmaya devam ediyor: wipe değil.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        d.HitPoints.Note(boss, t.AddSeconds(-30), 10_000_000);
+        for (int i = 0; i < 12; i++) { e.InjectHit(H(me, t.AddSeconds(-29 + i), boss, 200_000)); d.HitPoints.Note(boss, t.AddSeconds(-29 + i), 10_000_000 - (i + 1) * 200_000); }
+        e.SnapshotAt(t.AddSeconds(-17));
+        d.HitPoints.Note(boss, t.AddSeconds(-16.5), 8_600_000);
+        e.InjectHit(H(me, t.AddSeconds(-16), boss, 200_000));
+        MeterSnapshot s = e.SnapshotAt(t.AddSeconds(-16));
+        Check("D2: parti vururken kendini iyileştirme wipe sayılmaz", !s.FightOver && P(s, me)?.Total == 2_600_000, Show(s));
+    }
+
+    // D3: faz değişimi: can %50 -> %100 (aynı varlık), parti sürekli vuruyor: wipe değil.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        d.HitPoints.Note(boss, t.AddSeconds(-30), 10_000_000);
+        for (int i = 0; i < 10; i++) { e.InjectHit(H(me, t.AddSeconds(-29 + i), boss, 500_000)); d.HitPoints.Note(boss, t.AddSeconds(-29 + i), 10_000_000 - (i + 1) * 500_000); }
+        e.SnapshotAt(t.AddSeconds(-19));
+        d.HitPoints.Note(boss, t.AddSeconds(-18.5), 10_000_000);
+        MeterSnapshot s2 = e.SnapshotAt(t.AddSeconds(-18.5));
+        e.InjectHit(H(me, t.AddSeconds(-18), boss, 500_000));
+        MeterSnapshot s3 = e.SnapshotAt(t.AddSeconds(-18));
+        Check("D3: parti vururken faz değişimi (%50 -> %100) wipe sayılmaz", !s2.FightOver && !s3.FightOver && P(s3, me)?.Total == 5_500_000, Show(s3));
+    }
+
+    // D4: 16 sn ara (wipe şüphesi açılır), son vuruş öldürüyor, ara sonrası ilk okuma 0: aradan önceki hasar atılmaz.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        var t0 = t.AddSeconds(-100);
+        d.HitPoints.Note(boss, t0, 10_000_000);
+        for (int i = 0; i < 40; i++) { e.InjectHit(H(me, t0.AddSeconds(i), boss, 240_000)); d.HitPoints.Note(boss, t0.AddSeconds(i), 10_000_000 - (i + 1) * 240_000); }
+        e.SnapshotAt(t0.AddSeconds(40));
+        var t1 = t0.AddSeconds(56);
+        e.InjectHit(H(me, t1, boss, 400_000));
+        d.HitPoints.Note(boss, t1, 0);
+        MeterSnapshot s = e.SnapshotAt(t1.AddMilliseconds(100));
+        Check("D4: şüphe açıkken boss öldü -> denemeler birleşir (10.000.000)", s.FightOver && s.Boss is { Dead: true } && P(s, me)?.Total == 10_000_000, Show(s));
+        PlayerDetail? detail = e.Detail(me);
+        Check("D4: detay satırla aynı denemeden (boss modu)", detail is { Total: 10_000_000 } && detail.Hits.Hits == 41, $"detay toplam {detail?.Total:N0}, vuruş {detail?.Hits.Hits}");
+    }
+
+    // D5: 10 sn trash, ardından 10 sn boss: BossDps paydası boss'a vurulan aktif süre.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        var t0 = t.AddSeconds(-60);
+        d.HitPoints.Note(trash, t0, 100_000);
+        d.HitPoints.Note(boss, t0, 10_000_000);
+        for (int i = 0; i <= 10; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 5_000)); }
+        for (int i = 11; i <= 21; i++) { e.InjectHit(H(me, t0.AddSeconds(i), boss, 100_000)); d.HitPoints.Note(boss, t0.AddSeconds(i), 10_000_000 - (i - 10) * 100_000); }
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(21));
+        Check("D5: BossDps = boss'a vurulan ÷ boss'a vurulan aktif süre (~110.000)", P(s, me) is { BossTotal: 1_100_000 } p && Math.Abs(p.BossDps - 110_000) < 1, Show(s));
+    }
+
+    // D6: iki farklı katalog boss'u aynı anda, parti hedef değiştiriyor: BossTotal kümenin toplamı, seçili boss değişince zıplamaz.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, catalogNpc);
+        d.RegisterNpc(twin, 2300104); // Enhanced Harcon
+        var t0 = t.AddSeconds(-90);
+        d.HitPoints.Note(boss, t0, 10_000_000);
+        d.HitPoints.Note(twin, t0, 10_000_000);
+        long hb = 10_000_000, ht = 10_000_000;
+        for (int i = 0; i < 20; i++) { e.InjectHit(H(me, t0.AddSeconds(i), boss, 100_000)); hb -= 100_000; d.HitPoints.Note(boss, t0.AddSeconds(i), hb); }
+        MeterSnapshot a = e.SnapshotAt(t0.AddSeconds(20));
+        for (int i = 20; i < 45; i++) { e.InjectHit(H(me, t0.AddSeconds(i), twin, 100_000)); ht -= 100_000; d.HitPoints.Note(twin, t0.AddSeconds(i), ht); }
+        MeterSnapshot b = e.SnapshotAt(t0.AddSeconds(45));
+        Check("D6: iki katalog boss'u: BossTotal kümenin toplamı (2.000.000 -> 4.500.000)", P(a, me)?.BossTotal == 2_000_000 && P(b, me)?.BossTotal == 4_500_000 && !b.FightOver,
+            Show(a) + " >> " + Show(b));
+    }
+
+    // D8: TCP: kuyruk 400 ms gerideyken (Tick duvar saatiyle) yer değiştiren iki parça: boşluk erken bırakılmamalı.
+    {
+        var w = new List<byte>();
+        for (int i = 0; i < 60; i++) { byte[] f = Damage(49668, 1086, 11020030, 1000 + i); Varint(w, f.Length + 4); w.AddRange(f); }
+        byte[] wire = w.ToArray();
+        var segs = new List<(int Start, byte[] Data)>();
+        for (int at = 0; at < wire.Length; at += 100) { segs.Add((at, wire[at..Math.Min(at + 100, wire.Length)])); }
+        (segs[10], segs[11]) = (segs[11], segs[10]);
+        int RunFeed(bool wallTick)
+        {
+            var src = new Aion2PacketCombatSource(Proto());
+            int n = 0;
+            src.Hit += _ => n++;
+            DateTime pkt0 = DateTime.Now.AddSeconds(-5);
+            for (int i = 0; i < segs.Count; i++)
+            {
+                DateTime pktAt = pkt0.AddMilliseconds(i * 2);
+                src.Ingest(new TcpSegment(pktAt, "1.1.1.1:13328", "2.2.2.2:5", unchecked(1000u + (uint)segs[i].Start), segs[i].Data, true));
+                if (wallTick && i == 10) { src.Tick(pktAt.AddMilliseconds(400)); }
+            }
+
+            return n;
+        }
+
+        int plain = RunFeed(false), ticked = RunFeed(true);
+        Check("D8: kuyruk gerideyken Tick boşluğu erken bırakmaz (60/60)", plain == 60 && ticked == 60, $"Tick yok {plain}/60, Tick ile {ticked}/60");
+    }
+
+    // D10: ikili katalog boss'u (Rahu + Ketu): biri ölünce dövüş bitmez, diğerine geçer; BossTotal ikisinin toplamı.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        d.RegisterNpc(boss, 2300282);
+        d.RegisterNpc(twin, 2300283);
+        var t0 = t.AddSeconds(-90);
+        d.HitPoints.Note(boss, t0, 5_000_000);
+        d.HitPoints.Note(twin, t0, 5_000_000);
+        for (int i = 0; i < 10; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), boss, 500_000)); d.HitPoints.Note(boss, t0.AddSeconds(i), 5_000_000 - (i + 1) * 500_000);
+            e.InjectHit(H(me, t0.AddSeconds(i), twin, 100_000)); d.HitPoints.Note(twin, t0.AddSeconds(i), 5_000_000 - (i + 1) * 100_000);
+        }
+
+        MeterSnapshot a = e.SnapshotAt(t0.AddSeconds(10));
+        e.InjectHit(H(me, t0.AddSeconds(11), twin, 100_000)); d.HitPoints.Note(twin, t0.AddSeconds(11), 3_900_000);
+        MeterSnapshot b = e.SnapshotAt(t0.AddSeconds(11));
+        Check("D10: ikili boss'un biri ölünce dövüş diğeriyle sürer, BossTotal toplam",
+            !a.FightOver && a.Boss?.Id == twin && !b.FightOver && P(b, me) is { Total: 6_100_000, BossTotal: 6_100_000 }, Show(a) + " >> " + Show(b));
+    }
+
+    // D11: partisiz, açık dünya; 50M'lik katalog dışı boss benim dövüş boss'um. Bir kez vurduğum 600k'lık elite yabancılar (sözde parti) çok vuruyor.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        int elite = 951, world = 990;
+        var t0 = t.AddSeconds(-40);
+        d.HitPoints.Note(world, t0, 50_000_000);
+        d.HitPoints.Note(elite, t0, 600_000);
+        for (int k = 0; k < 4; k++) { d.Register(700 + k, "Yabanci" + k); d.NoteClass(700 + k, "Ranger"); }
+        long hw = 50_000_000, he = 600_000;
+        for (int i = 0; i < 20; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), world, 5_000)); hw -= 5_000; d.HitPoints.Note(world, t0.AddSeconds(i), hw);
+            if (i == 5) { e.InjectHit(H(me, t0.AddSeconds(i), elite, 5_000)); he -= 5_000; d.HitPoints.Note(elite, t0.AddSeconds(i), he); }
+            if (i > 5) { for (int k = 0; k < 4; k++) { e.InjectHit(H(700 + k, t0.AddSeconds(i), elite, 8_000, 13010000)); he -= 8_000; } d.HitPoints.Note(elite, t0.AddSeconds(i), he); }
+            e.SnapshotAt(t0.AddSeconds(i));
+        }
+
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(20));
+        Check("D11: sözde parti dövüş boss'unu ve BossTotal'ımı değiştirmez", s.Boss?.Id == world && P(s, me)?.BossTotal == 100_000, Show(s));
     }
 }

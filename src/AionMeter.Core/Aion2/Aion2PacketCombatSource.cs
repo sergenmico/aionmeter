@@ -91,6 +91,14 @@ public sealed class Aion2PacketCombatSource : IDisposable
 
         lock (_reassembler)
         {
+            // Paket saati: süreli boşluk duvar saatine değil, son paketin yakalanma zamanına göre ilerler (kuyruk gerideyken erken bırakmasın).
+            if (segment.Timestamp > _lastPacketAt)
+            {
+                _lastPacketAt = segment.Timestamp;
+            }
+
+            _lastPacketTick = Environment.TickCount64;
+
             // Değiştirildi: bölge değişimi segment sonunda değil, geldiği çerçeveden hemen sonra verilir (vuruşlarla aynı sırada).
             // Değiştirildi: her çerçeve kendi parçasının zamanıyla (bekleyen parçalar boşluk dolunca kendi zamanlarıyla çıkar).
             foreach ((ReadOnlyMemory<byte> frame, DateTime at) in _reassembler.Push(segment, _protocol.FrameLayout, _protocol.SyncOpcodes))
@@ -100,44 +108,75 @@ public sealed class Aion2PacketCombatSource : IDisposable
         }
     }
 
+    private DateTime _lastPacketAt;
+    private long _lastPacketTick;
+
     /// <summary>
     /// Değiştirildi (eklendi): yakalama işçisi boşta kaldıkça (~100 ms) çağırır: süresi dolan TCP boşlukları bırakılır, Tanı açıksa dakikada
-    /// bir sayaçlar yazılır. Denetim aracı da sentetik zamanla çağırır.
+    /// bir sayaçlar yazılır (<paramref name="wallNow"/> = duvar saati). Boşluk süresi paket saatiyle ölçülür: son paketin zamanı + ondan beri
+    /// geçen süre; kuyruk gerideyken duvar saati paketlerin ilerisindedir ve gelecek parçaları beklemeden boşluğu bırakırdı.
     /// </summary>
-    public void Tick(DateTime now)
+    public void Tick(DateTime wallNow)
     {
         lock (_reassembler)
         {
-            foreach ((ReadOnlyMemory<byte> frame, DateTime at) in _reassembler.Flush(now, _protocol.FrameLayout, _protocol.SyncOpcodes))
+            if (_lastPacketAt != default)
             {
-                _decoder.Decode(frame.Span, at, _onHit, _onZone);
+                FlushLocked(_lastPacketAt + TimeSpan.FromMilliseconds(Environment.TickCount64 - _lastPacketTick));
             }
 
-            if (MeterTani.Acik && now - _countersAt >= TimeSpan.FromMinutes(1))
+            if (MeterTani.Acik && wallNow - _countersAt >= TimeSpan.FromMinutes(1))
             {
-                WriteCounters(now);
+                WriteCounters(wallNow);
             }
+        }
+    }
+
+    /// <summary>Denetim aracı için: paket saatinde verilen ana göre süresi dolan boşlukları bırakır.</summary>
+    internal void FlushAt(DateTime packetNow)
+    {
+        lock (_reassembler)
+        {
+            FlushLocked(packetNow);
+        }
+    }
+
+    // Called under _reassembler.
+    private void FlushLocked(DateTime packetNow)
+    {
+        foreach ((ReadOnlyMemory<byte> frame, DateTime at) in _reassembler.Flush(packetNow, _protocol.FrameLayout, _protocol.SyncOpcodes))
+        {
+            _decoder.Decode(frame.Span, at, _onHit, _onZone);
         }
     }
 
     private DateTime _countersAt = DateTime.Now;
     private Counters _lastCounters;
 
-    private readonly record struct Counters(long Gaps, long TimedGaps, long Desyncs, long Retrans, long Tls, long QueueDrops, long KernelDrops, long IfDrops,
-        long BundleFailures, long Skipped, long Unknown, long CallbackErrors);
+    private readonly record struct Counters(long Gaps, long TimedGaps, long LateAfterGap, long Desyncs, long Retrans, long Tls, long QueueDrops, long KernelDrops,
+        long IfDrops, long BundleFailures, long Skipped, long Unknown, long CallbackErrors);
 
-    // Called under _reassembler. Son satırdan bu yana artışlar (Δ) ve toplamlar tek satırda.
+    // Called under _reassembler. Son satırdan bu yana artışlar (Δ) tek satırda. Kayıt hatası yakalamayı durdurmaz.
     private void WriteCounters(DateTime now)
     {
         _countersAt = now;
-        (long received, long kernelDrops, long ifDrops) = _capture?.KernelStatistics() ?? (0, 0, 0);
-        var c = new Counters(_reassembler.Gaps, _reassembler.TimedGaps, _reassembler.Desyncs, _reassembler.Retransmissions, _reassembler.TlsRecords,
-            _capture?.Dropped ?? 0, kernelDrops, ifDrops, _decoder.BundleFailures, _decoder.SkippedShortFrames, _decoder.UnknownOpcodes, _capture?.CallbackErrors ?? 0);
-        Counters p = _lastCounters;
-        _lastCounters = c;
-        MeterTani.Yaz?.Invoke($"{now:HH:mm:ss.fff} sayaç (son dakika): tcp boşluk +{c.Gaps - p.Gaps} (süreyle +{c.TimedGaps - p.TimedGaps}), desync +{c.Desyncs - p.Desyncs}, "
-            + $"yeniden iletim +{c.Retrans - p.Retrans}, tls +{c.Tls - p.Tls}, kuyruk taşması +{c.QueueDrops - p.QueueDrops}, ps_drop +{c.KernelDrops - p.KernelDrops}, "
-            + $"if_drop +{c.IfDrops - p.IfDrops}, lz4/paket hatası +{c.BundleFailures - p.BundleFailures}, atlanan çerçeve +{c.Skipped - p.Skipped}, "
-            + $"bilinmeyen opcode +{c.Unknown - p.Unknown}, işleyici hatası +{c.CallbackErrors - p.CallbackErrors}; alınan paket {received}");
+        try
+        {
+            (long received, long kernelDrops, long ifDrops) = _capture?.KernelStatistics() ?? (0, 0, 0);
+            var c = new Counters(_reassembler.Gaps, _reassembler.TimedGaps, _reassembler.LateAfterGap, _reassembler.Desyncs, _reassembler.Retransmissions,
+                _reassembler.TlsRecords, _capture?.Dropped ?? 0, kernelDrops, ifDrops, _decoder.BundleFailures, _decoder.SkippedShortFrames, _decoder.UnknownOpcodes,
+                _capture?.CallbackErrors ?? 0);
+            Counters p = _lastCounters;
+            _lastCounters = c;
+            MeterTani.Yaz?.Invoke($"{now:HH:mm:ss.fff} sayaç (son dakika): tcp boşluk +{c.Gaps - p.Gaps} (süreyle +{c.TimedGaps - p.TimedGaps}, "
+                + $"bırakılan boşluğa geç gelen parça +{c.LateAfterGap - p.LateAfterGap}), desync +{c.Desyncs - p.Desyncs}, yeniden iletim +{c.Retrans - p.Retrans}, "
+                + $"tls +{c.Tls - p.Tls}, kuyruk taşması +{c.QueueDrops - p.QueueDrops}, ps_drop +{c.KernelDrops - p.KernelDrops}, if_drop +{c.IfDrops - p.IfDrops}, "
+                + $"lz4/paket hatası +{c.BundleFailures - p.BundleFailures}, atlanan çerçeve +{c.Skipped - p.Skipped}, bilinmeyen opcode +{c.Unknown - p.Unknown}, "
+                + $"işleyici hatası +{c.CallbackErrors - p.CallbackErrors}; alınan paket {received}");
+        }
+        catch (Exception)
+        {
+            // tanı satırı yazılamadı: yakalama sürer
+        }
     }
 }
