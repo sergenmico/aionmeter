@@ -8,12 +8,18 @@ namespace AionMeter;
 /// <param name="ClassName">Oyunun İngilizce sınıf adı (Gladiator, Templar, Ranger, Assassin, Spiritmaster, Sorcerer, Cleric, Chanter); bilinmiyorsa null.</param>
 /// <param name="CombatPower">Oyunun gösterdiği combat power (tam sayı); bilinmiyorsa null.</param>
 /// <param name="BossDps">Sadece takip edilen bossa vurulan hasar ÷ aynı aktif süre; boss yoksa 0.</param>
-public sealed record PlayerDamage(long Id, string Name, long Total, double Dps, bool IsLocal, string? ClassName = null, int? CombatPower = null, double BossDps = 0);
+/// <param name="BossTotal">Bu denemede takip edilen bossa vurulan toplam hasar (canı okunmadan önceki vuruşlar dahil); boss yoksa 0.
+/// Boss varken overlay Toplam ve Pay %'yi bundan hesaplar (kullanıcı kararı: DPS, Toplam, Pay aynı hedeften).</param>
+public sealed record PlayerDamage(long Id, string Name, long Total, double Dps, bool IsLocal, string? ClassName = null, int? CombatPower = null,
+    double BossDps = 0, long BossTotal = 0);
 
 /// <summary>Takip edilen boss. Max bilinmiyorsa 0'dır.</summary>
 /// <param name="TimeToKill">Kalan can ÷ son 30 sn'deki takım hasarının bossa DPS'i; tahmin edilemiyorsa null.</param>
 /// <param name="TimeToRage">Öfkeye (berserk) kalan süre: boss_rage.json süresi − bossa ilk vuruştan beri geçen süre (eksiye düşebilir = öfkede); başlangıç bilinmiyorsa null.</param>
-public sealed record BossHp(long Id, string Name, long Current, long Max, bool Dead, TimeSpan? TimeToKill = null, TimeSpan? TimeToRage = null);
+/// <param name="CanBilinmiyor">Güncel can bilinmiyor (wipe şüphesi: boss sıfırlanmış olabilir, yeni can okuması gelmedi). Overlay canı "?" gösterir,
+/// TimeToKill null'dır.</param>
+public sealed record BossHp(long Id, string Name, long Current, long Max, bool Dead, TimeSpan? TimeToKill = null, TimeSpan? TimeToRage = null,
+    bool CanBilinmiyor = false);
 
 /// <summary>Vuruş sonuçlarının sayaçları (oyundaki adlarıyla: Critical, Double Chance, Perfect Chance, arkadan, Parry).</summary>
 public sealed record HitStats(long Hits, long Crits, long Doubles, long Perfects, long Backs, long Parries, long MaxHit);
@@ -55,7 +61,11 @@ public sealed record MeterSnapshot(
     BossHp? Boss,
     TimeSpan FightDuration,
     // Boss öldü ya da dövüş bitti: tablo yeni dövüşün ilk vuruşuna kadar donmuş sonuç olarak kalır.
-    bool FightOver = false);
+    bool FightOver = false,
+    // Savaşta: yerel oyuncu (ya da partisi) son birkaç saniyede bir canavara/boss'a vurdu. Overlay savaş dışında soluklaşır/gizlenir.
+    bool Savasta = false,
+    // Kesin bilinen yerel karakter adı (karakter kaydından); bilinmiyorsa null. Overlay ayara kaydeder, sonraki açılışta YerelAdAyarla ile verir.
+    string? YerelAd = null);
 
 public interface IMeterEngine : IDisposable
 {
@@ -70,4 +80,17 @@ public interface IMeterEngine : IDisposable
 
     /// <summary>Mevcut dövüşün hasar tablosunu sıfırlar.</summary>
     void Reset();
+
+    /// <summary>Kayıtlı yerel karakter adı (ayardan). Meter oyun içinde açıldığında "ben kimim" tahmini yerine bu ad kullanılır. Start'tan önce çağrılır.</summary>
+    void YerelAdAyarla(string? ad);
+}
+
+/// <summary>
+/// Tanı kaydı (sadece kullanıcının kendi kopyasında, ayarlar.ini'de "Tani=1" ile; menüde yok). Motor kararlarını ve sayaçları buraya yazar.
+/// Yaz null ise kayıt kapalıdır; çağıran önce Acik'a bakar (metin üretme maliyeti olmasın).
+/// </summary>
+public static class MeterTani
+{
+    public static Action<string>? Yaz { get; set; }
+    public static bool Acik => Yaz is not null;
 }
