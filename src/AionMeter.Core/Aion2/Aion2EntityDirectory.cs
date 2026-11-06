@@ -84,6 +84,13 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         }
     }
 
+    // Gizli Küp: gerçek sayaçlar küp çözücüsüyle gelir (şimdilik yer tutucu).
+    /// <summary>Açılıştan beri menzile giren Gizli Küp sayısı (aynı küpün tekrar duyurulması sayılmaz).</summary>
+    public int CubeArrivals => 0;
+
+    /// <summary>Şu an menzilde olan, açılmamış Gizli Küp sayısı.</summary>
+    public int CubesInRange => 0;
+
     /// <summary>The local player's name as its own character record states it - what the meter then
     /// remembers in Settings so the next session knows it from the start. It used to be the party
     /// roster's leftover name (the one no visible player carries), which, once the roster was read on

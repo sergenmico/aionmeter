@@ -1568,9 +1568,10 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
             bool fighting = _lastEngaged is { } engaged && now - engaged <= CombatWindow;
             string? ownName = dir.LearnedLocalName;
+            (int kupGelis, int kupYakinda) = (dir.CubeArrivals, dir.CubesInRange);
             if (_frozen is { } frozen)
             {
-                return frozen with { State = state, Message = message, Savasta = fighting, YerelAd = ownName };
+                return frozen with { State = state, Message = message, Savasta = fighting, YerelAd = ownName, KupGelis = kupGelis, KupYakinda = kupYakinda };
             }
 
             if (_fightBoss is not null)
@@ -1597,7 +1598,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
                 }
             }
 
-            MeterSnapshot snapshot = Compose(dir, now, over: why is not null) with { State = state, Message = message, Savasta = fighting, YerelAd = ownName };
+            MeterSnapshot snapshot = Compose(dir, now, over: why is not null) with { State = state, Message = message, Savasta = fighting, YerelAd = ownName, KupGelis = kupGelis, KupYakinda = kupYakinda };
             if (why is not null)
             {
                 if (MeterTani.Acik)

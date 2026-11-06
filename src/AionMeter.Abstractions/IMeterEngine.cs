@@ -66,7 +66,11 @@ public sealed record MeterSnapshot(
     // Savaşta: yerel oyuncu (ya da partisi) son birkaç saniyede bir canavara/boss'a vurdu. Overlay savaş dışında soluklaşır/gizlenir.
     bool Savasta = false,
     // Kesin bilinen yerel karakter adı (karakter kaydından); bilinmiyorsa null. Overlay ayara kaydeder, sonraki açılışta YerelAdAyarla ile verir.
-    string? YerelAd = null);
+    string? YerelAd = null,
+    // Gizli Küp (Hidden Cube): açılıştan beri menzile giren küp sayısı (aynı küp tekrar duyurulunca sayılmaz). Overlay sayı artınca yumuşak bir ses çalar.
+    int KupGelis = 0,
+    // Şu an menzilde olan (açılmamış) gizli küp sayısı.
+    int KupYakinda = 0);
 
 public interface IMeterEngine : IDisposable
 {
