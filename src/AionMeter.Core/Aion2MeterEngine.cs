@@ -850,9 +850,16 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         lock (_gate)
         {
             bool local = IsLocal(dir, id);
+            // Ölçer PvE: hedefi oyuncu olan vuruş (kendine gelen hasar, PvP, parti üyesine; çağrının vuruşu da) ya da bir oyuncunun çağrısı hiçbir
+            // şeye girmez: dövüş başlatmaz/uzatmaz, Savasta'yı tetiklemez, hasar tablosuna ve BossTotal'a yazılmaz. Gerçek kayıt (06:16:45):
+            // yerel oyuncunun kendisine (4409) gelen bir vuruş donmuş sonucu silip yeni dövüş başlatmıştı.
+            if (IsPlayerSide(dir, target))
+            {
+                return;
+            }
+
             bool party = local || dir.IsPartyMemberId(id);
-            bool onPlayer = dir.IsKnownPlayer(target);
-            if (party && !onPlayer && (_lastEngaged is not { } engaged || ev.Timestamp > engaged))
+            if (party && (_lastEngaged is not { } engaged || ev.Timestamp > engaged))
             {
                 _lastEngaged = ev.Timestamp;
             }
@@ -930,11 +937,6 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             {
                 det.Record(ev, MaxSkillsPerPlayer);
                 det.AddToBucket((long)(ev.Timestamp - fightStart).TotalSeconds, ev.Amount);
-            }
-
-            if (onPlayer)
-            {
-                return; // oyuncuya vuruş (PvP): boss hasarına ve halkalara girmez
             }
 
             // Her hedef için (canı henüz okunmamış olsa da): hedef sonradan boss sayılınca önceki vuruşlar da BossTotal'a girer.
@@ -1861,6 +1863,12 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
         return boss;
     }
+
+    /// <summary>Oyuncu tarafı: yerel oyuncu (açık ya da tahmin edilen kimlik), parti üyesi, sınıf becerisi görülmüş ya da adı kayıtlı bir oyuncu,
+    /// ya da bir oyuncunun çağrısı. Bunlara gelen vuruşlar sayılmaz. Called under _gate.</summary>
+    private bool IsPlayerSide(Aion2EntityDirectory dir, int entity) =>
+        entity == _localId || entity == dir.ExplicitLocalPlayerId || dir.IsPartyMemberId(entity) || dir.IsKnownPlayer(entity) || dir.HasName(entity)
+        || dir.SummonOwnerOf(entity) is not null;
 
     private static bool IsBoss(Aion2EntityDirectory dir, int entity) =>
         dir.BossNpcIdOf(entity) is not null || (dir.HitPoints.MaxOf(entity) ?? 0) >= BossHitPoints;
