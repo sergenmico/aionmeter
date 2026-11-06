@@ -176,7 +176,7 @@ internal sealed class OverlayForm : Form
     // Yumuşak: savaş dışında soluk / gizli (motor okunmaya devam eder ki savaş başlayınca açılsın).
     private readonly OnPlanIzleyici _onPlan = new();
     private readonly Cevirmen.CevirmenDenetleyici _cevirmen;
-    private bool _kullaniciGizledi, _sadeceOyunda, _sertGorunur = true, _pencereAcik = true;
+    private bool _kullaniciGizledi, _sadeceOyunda, _sertGorunur = true, _pencereAcik = true, _tamEkran;
     private bool _savasta;
     private DateTime _sonSavas = DateTime.MinValue;
     private DateTime _solukOnizlemeBitis = DateTime.MinValue;
@@ -413,11 +413,20 @@ internal sealed class OverlayForm : Form
     private void GorunurlukUygula()
     {
         if (!IsHandleCreated) return;
-        bool sert = _ayarlarFormu is not null || (!_kullaniciGizledi && (!_sadeceOyunda || _onPlan.OyunOnde()));
-        if (sert != _sertGorunur)
+        // Oyun özel tam ekrandayken üstünde hiçbir pencere açılmaz: DLSS Kare Oluşturma ile oyun çöküyor (OnPlanIzleyici).
+        bool tamEkran = !_demo && _onPlan.OzelTamEkran();
+        bool sert = !tamEkran && (_ayarlarFormu is not null || (!_kullaniciGizledi && (!_sadeceOyunda || _onPlan.OyunOnde())));
+        bool tamEkranDegisti = tamEkran != _tamEkran;
+        _tamEkran = tamEkran;
+        if (tamEkranDegisti && tamEkran)
+        {
+            _cevirmen.PencereleriKapat();
+            TamEkranUyar();
+        }
+        if (sert != _sertGorunur || tamEkranDegisti)
         {
             _sertGorunur = sert;
-            AltZamanlayiciGuncelle();
+            AltZamanlayiciGuncelle(); // tam ekranda Alt ile çeviri de durur
         }
         if (!sert)
         {
@@ -460,6 +469,19 @@ internal sealed class OverlayForm : Form
         if (alfa == _alfa || !IsHandleCreated) return;
         _alfa = alfa;
         Native.SetLayeredWindowAttributes(Handle, 0, (byte)Math.Clamp(alfa, 0, 255), Native.LWA_ALPHA);
+    }
+
+    private static readonly TimeSpan TamEkranUyariAraligi = TimeSpan.FromMinutes(10);
+    private DateTime _tamEkranUyarildi = DateTime.MinValue;
+
+    /// <summary>Tepside bir kez (10 dk'da en fazla bir) söyler; oyun tam ekrandayken Windows bildirimi oyun bırakılınca gösterebilir.</summary>
+    private void TamEkranUyar(bool zorla = false)
+    {
+        DateTime simdi = DateTime.UtcNow;
+        if (!zorla && simdi - _tamEkranUyarildi < TamEkranUyariAraligi) return;
+        _tamEkranUyarildi = simdi;
+        _tepsi?.Bildir("Oyun tam ekran modunda. Oyunun çökmemesi için sayaç gizlendi. " +
+            "Oyunun grafik ayarlarından ekran modunu \"Pencereli tam ekran\" yapın; sayaç yeniden görünür.");
     }
 
     private void PencereGoster()
@@ -2578,7 +2600,7 @@ internal sealed class OverlayForm : Form
     {
         // Demoda oyun yok: oyun-önde şartı aranmaz (test edilebilsin).
         bool oyunOnde = _demo || _onPlan.OyunOnde();
-        bool calismali = oyunOnde && ((_kilitli && _sertGorunur) || _cevirmen.AltCeviriCalisir);
+        bool calismali = oyunOnde && !_tamEkran && ((_kilitli && _sertGorunur) || _cevirmen.AltCeviriCalisir);
         if (calismali == _altZamanlayici.Enabled) return;
         if (calismali) _altZamanlayici.Start();
         else
@@ -2752,7 +2774,10 @@ internal sealed class OverlayForm : Form
             case KisayolGoster: GosterDegistir(); break;
             case KisayolSifirla: Sifirla(); break;
             case KisayolDetayim: Detayim(); break;
-            case KisayolCevir: _cevirmen.BolgeCevir(); break;
+            case KisayolCevir:
+                if (!_demo && _onPlan.OzelTamEkran()) TamEkranUyar(zorla: true); // seçim ve çeviri pencereleri oyunu çökertebilir
+                else _cevirmen.BolgeCevir();
+                break;
             case KisayolKukla: KuklaKisayolBasildi(); break;
         }
     }

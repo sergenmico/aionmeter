@@ -98,6 +98,18 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool IsWindow(IntPtr hWnd);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left, Top, Right, Bottom; }
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    /// <summary>QUNS_RUNNING_D3D_FULL_SCREEN: ön plandaki uygulama Direct3D özel tam ekranda.</summary>
+    public const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
+
+    [DllImport("shell32.dll")]
+    public static extern int SHQueryUserNotificationState(out int state);
+
     [DllImport("user32.dll")]
     public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 

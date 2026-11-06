@@ -260,6 +260,20 @@ internal sealed class CevirmenDenetleyici : IDisposable
         }
     }
 
+    /// <summary>Oyun özel tam ekrana geçti: açık çeviri pencereleri kapanır (üstünde pencere kalırsa oyun çökebilir).</summary>
+    public void PencereleriKapat()
+    {
+        try
+        {
+            SonucuKapat();
+            AltDurumu(false, Point.Empty);
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Çevirmen pencerelerini kapatma", ex);
+        }
+    }
+
     private void SonucuKapat()
     {
         _bolgeIptal?.Cancel();

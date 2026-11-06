@@ -14,6 +14,7 @@ Gösterdikleri:
 2. Windows yönetici izni sorar; **Evet** de. Oyun yönetici olarak çalıştığı için `Alt` tuşu ancak böyle okunabiliyor ("Hayır" dersen de açılır, sadece `Alt` özellikleri çalışmaz).
 3. Npcap yoksa sorar; **Evet** de, açılan kurulumu varsayılan ayarlarla bitir.
 4. Meter'ı **oyuna girmeden önce** aç (yoksa isimler ilk bölge değişimine kadar `Oyuncu #…` görünebilir).
+5. Oyunda ekran modu **Pencereli tam ekran** olsun. Tam ekran modunda üstte pencere durunca oyun (DLSS Kare Oluşturma açıkken) çökebiliyor; bu yüzden sayaç o modda kendini gizler.
 
 .NET kurmaya gerek yok, exe'nin içinde.
 Her açılışta güncellemeleri kontrol eder ve kendini günceller.
