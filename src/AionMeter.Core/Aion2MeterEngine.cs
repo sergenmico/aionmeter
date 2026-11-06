@@ -563,6 +563,12 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         if (spans.Count > 0)
         {
             (DateTime from, DateTime to) = spans[^1];
+            if (at < from)
+            {
+                InsertLate(spans, at, max); // sıra dışı (geç işlenen) vuruş: önceki bir boşluğa düşebilir
+                return;
+            }
+
             if (at <= to)
             {
                 return;
@@ -577,6 +583,45 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
         Compact(spans, max - 1);
         spans.Add((at, at));
+    }
+
+    /// <summary>Son aralıktan önceki bir an: içine düştüğü aralık varsa değişmez; yoksa <see cref="ActiveGap"/> içindeki komşu(lar)a eklenir
+    /// (iki komşuyu da kapsıyorsa ikisi birleşir), değilse yeni aralık olarak araya girer. Sıralı ve örtüşmez düzen korunur (denetim D3b).</summary>
+    private static void InsertLate(List<(DateTime From, DateTime To)> spans, DateTime at, int max)
+    {
+        int lo = 0, hi = spans.Count; // ilk From > at olan indeks
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (spans[mid].From > at) { hi = mid; } else { lo = mid + 1; }
+        }
+
+        int next = lo, prev = lo - 1;
+        if (prev >= 0 && at <= spans[prev].To)
+        {
+            return;
+        }
+
+        bool joinPrev = prev >= 0 && at - spans[prev].To <= ActiveGap;
+        bool joinNext = next < spans.Count && spans[next].From - at <= ActiveGap;
+        if (joinPrev && joinNext)
+        {
+            spans[prev] = (spans[prev].From, spans[next].To);
+            spans.RemoveAt(next);
+        }
+        else if (joinPrev)
+        {
+            spans[prev] = (spans[prev].From, at);
+        }
+        else if (joinNext)
+        {
+            spans[next] = (at, spans[next].To);
+        }
+        else
+        {
+            spans.Insert(next, (at, at));
+            Compact(spans, max);
+        }
     }
 
     /// <summary>Sınır aşılınca en eski iki aralık birleşir. Aradaki boşluk süreye eklenmesin diye birleşen aralığın uzunluğu ikisinin toplamıdır
@@ -1037,7 +1082,13 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             }
 
             agg.SharesTarget |= sharesTarget;
-            AddSpan(a.HitSpans, ev.Timestamp, MaxPartySpans); // toplama giren her vuruş süre çizelgesine de girer (aynı sınır)
+            // Süre çizelgesi: partinin, sözde partinin ya da partinin uğraştığı (halkası olan) hedeflere gelen vuruşlar. Yakındaki alakasız
+            // yabancıların başka canavarlara vuruşu girmez: girerse oyuncunun kendi vuruşsuz boşlukları süreye sayılır, DPS düşük çıkar
+            // (denetim D1: %33) ve iki ekran farklı yabancılar gördüğünde farklı sayı gösterir.
+            if (party || pseudo || a.Rings.ContainsKey(target))
+            {
+                AddSpan(a.HitSpans, ev.Timestamp, MaxPartySpans);
+            }
             RefreshDetailSet(a);
             if (agg.Detail is null && (agg.Party || a.DetailedStrangers < MaxDetailedStrangers || agg.Total >= a.DetailThreshold))
             {

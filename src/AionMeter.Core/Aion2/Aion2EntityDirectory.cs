@@ -104,6 +104,7 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         public CubeState State;
         public DateTime LeftAt;   // menzilden çıktığı çerçevenin zamanı (OutOfSight iken)
         public long SeenTick;     // son duyuru/durum değişimi (Environment.TickCount64): kaybolan kaldırmaya karşı bayatlama
+        public DateTime AnnouncedAt; // son duyurunun paket zamanı (bölge değişiminde yeni yerin küpleri korunur)
     }
 
     private readonly Dictionary<int, Cube> _cubes = new();
@@ -115,6 +116,7 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
     /// <summary>Kaldırması hiç gelmeyen küp (kayıp çerçeve) bu kadar sonra unutulur; menzil dışı hatırlanan küp için de üst sınır.</summary>
     private const long CubeStaleMs = 15 * 60 * 1000;
     private const float CubeSamePlace = 3f;
+    private static readonly TimeSpan CubeZoneKeep = TimeSpan.FromSeconds(15);
     private const int MaxCubes = 512;
 
     /// <summary>Açılıştan beri menzile giren Gizli Küp sayısı (aynı küpün tekrar duyurulması sayılmaz).</summary>
@@ -190,6 +192,7 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
                 known.X = x;
                 known.Y = y;
                 known.SeenTick = tick;
+                known.AnnouncedAt = at;
                 return; // menzildeyken tekrar duyuruldu: sayılmaz
             }
 
@@ -221,7 +224,7 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
                 _cubes.Clear(); // bu kadarı hiç yakında olmaz: kaldırmalar kaybolmuş
             }
 
-            _cubes[entityId] = new Cube { X = x, Y = y, State = CubeState.InSight, SeenTick = tick };
+            _cubes[entityId] = new Cube { X = x, Y = y, State = CubeState.InSight, SeenTick = tick, AnnouncedAt = at };
         }
     }
 
@@ -330,7 +333,7 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
     /// boşaltılır; <paramref name="keep"/> (bölge çerçevesinden hemen önce doğanlar) korunur. Oyuncu adı/sınıf/parti bilgisi kalır,
     /// yalnız çok büyüdüyse partide olmayanlar atılır.
     /// </summary>
-    public void ForgetZone(IReadOnlySet<int> keep)
+    public void ForgetZone(IReadOnlySet<int> keep, DateTime? zoneAt = null)
     {
         lock (_gate)
         {
@@ -345,9 +348,13 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
             _fightingAlongside.Clear();
             _skillsSeen.Clear();
             _markHits.Clear(); // Değiştirildi (eklendi): kimlikler bölgeyle değişir
-            // Gizli Küp: duyurulan küpler terk edilen yerindir (oyun sonlarını her zaman duyurmaz), yeni yerinkiler bu çerçeveden sonra gelir
-            // (referans NoteSpawnPosition/ForgetPlace: _env.Clear()). Geliş sayacı sıfırlanmaz.
-            _cubes.Clear();
+            // Gizli Küp: duyurulan küpler terk edilen yerindir (oyun sonlarını her zaman duyurmaz; referans ForgetPlace: _env.Clear()). Geliş
+            // sayacı sıfırlanmaz. Bölge çerçevesinden hemen önce (son 15 sn) duyurulanlar yeni yerindir, korunur: silinirlerse rozet söner ve
+            // aynı küp yeniden duyurulunca ses ikinci kez çalar (denetim bulgusu 5).
+            foreach (int stale in _cubes.Where(kv => zoneAt is not { } z || z - kv.Value.AnnouncedAt > CubeZoneKeep).Select(kv => kv.Key).ToList())
+            {
+                _cubes.Remove(stale);
+            }
             foreach (int faded in _detailedStats.Where(kv => kv.Value < 0.5).Select(kv => kv.Key).ToList())
             {
                 _detailedStats.Remove(faded);

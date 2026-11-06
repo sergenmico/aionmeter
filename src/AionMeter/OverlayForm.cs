@@ -715,8 +715,10 @@ internal sealed class OverlayForm : Form
     /// <summary>Gizli Küp: açılıştan beri gelen küp sayısı arttıysa (ayar açıksa) kısa küp sesi; menzildeki küp sayısı rozet içindir.</summary>
     private void KupDenetle(MeterSnapshot s)
     {
+        // Ses kapalıyken sayaç izlenmez (gizliyken motor okunmaz): ses açılınca ilk okuma yalnız eşitler, birikmiş küpler için çalmaz.
+        if (!_ayar.KupSesi) { _kupGelisSon = -1; return; }
         int gelis = s.KupGelis;
-        if (_kupGelisSon >= 0 && gelis > _kupGelisSon && _ayar.KupSesi) Zil.Kup(_ayar.KupSes);
+        if (_kupGelisSon >= 0 && gelis > _kupGelisSon) Zil.Kup(_ayar.KupSes);
         _kupGelisSon = gelis;
     }
 

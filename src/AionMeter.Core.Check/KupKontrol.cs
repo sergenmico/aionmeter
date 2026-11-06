@@ -71,6 +71,14 @@ internal static class KupKontrol
         Ver(Spawn(601, KupSablon, 301f, 299f), t0.AddMinutes(7).AddSeconds(1));
         Bak("yeni bölgede aynı kimlik: yeni küp", 5, 1);
 
+        // Denetim bulgusu 5: yeni bölgenin küpü bölge çerçevesinden hemen önce duyurulursa korunur (rozet sönmez, ses ikinci kez çalmaz).
+        Ver(Spawn(800, KupSablon, 50f, 60f), t0.AddMinutes(9));
+        Bak("bölge çerçevesinden 2 sn önce duyurulan küp", 6, 2);
+        Ver(Zone(1010), t0.AddMinutes(9).AddSeconds(2));
+        Bak("bölge değişti: hemen önce duyurulan küp korunur, eskisi düşer", 6, 1);
+        Ver(Spawn(800, KupSablon, 50f, 60f), t0.AddMinutes(9).AddSeconds(3));
+        Bak("aynı küp yeniden duyuruldu: ses ikinci kez çalmaz", 6, 1);
+
         Console.WriteLine($"  [gizli küp] geçen {gecen}, kalan {kalan}");
         return kalan == 0;
     }

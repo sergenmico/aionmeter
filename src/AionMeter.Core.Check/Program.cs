@@ -1385,6 +1385,39 @@ void DurationChecks()
         Check("süre: çağrı sahibine geçince sahibin süresi çağrının ilk vuruşundan (15 sn)",
             P(s, friend) is { Total: 71_000 } f && Near(f.Dps, 71_000 / 15.0), Show(s));
     }
+
+    // Denetim D1: yakındaki alakasız yabancının başka bir canavara vuruşları süre çizelgesine girmez (oyuncunun kendi boşlukları sayılmaz).
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        const int stranger = 777, otherMob = 951;
+        DateTime t0 = DateTime.Now.AddSeconds(-100);
+        for (int i = 0; i <= 30; i++)
+        {
+            if (i <= 10 || i >= 20) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+            e.InjectHit(H(stranger, t0.AddSeconds(i).AddMilliseconds(300), otherMob, 5_000, 13010000));
+        }
+
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(30));
+        Check("süre (D1): yabancının başka canavara vuruşları paydayı uzatmaz (220.000 ÷ 20 sn)",
+            P(s, me) is { Total: 220_000 } m && Near(m.Dps, 220_000 / 20.0), Show(s));
+    }
+
+    // Denetim D3b: sıra dışı (geç işlenen) vuruş önceki boşluğa doğru yerleşir; DPS şişmez.
+    {
+        var (e, d) = Party();
+        DateTime t0 = DateTime.Now.AddSeconds(-100);
+        for (int i = 0; i <= 18; i++)
+        {
+            if (i <= 5 || i >= 12) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+        }
+
+        for (int i = 7; i <= 11; i++) { e.InjectHit(H(friend, t0.AddSeconds(i), trash, 50_000, 13010000)); } // benim vuruşlarımdan sonra işlenir
+
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(18));
+        Check("süre (D3b): sıra dışı gelen arkadaş vuruşları: 250.000 ÷ 4 sn (boşluk kapandı), benim 130.000 ÷ 18 sn",
+            P(s, friend) is { Total: 250_000 } f && Near(f.Dps, 250_000 / 4.0) && P(s, me) is { Total: 130_000 } m && Near(m.Dps, 130_000 / 18.0), Show(s));
+    }
 }
 
 // Denetim aracı: dizinin IdentityMoved olayı gibi (eski kimliğin satırı yenisine birleşir).

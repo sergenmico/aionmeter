@@ -123,7 +123,7 @@ public sealed class Aion2FrameDecoder
         _pendingLeftovers.Clear();
         _power.Clear();
         _effectTargets.Clear();
-        _entities.ForgetZone(keep);
+        _entities.ForgetZone(keep, at);
     }
 
     private static readonly TimeSpan ZoneKeepWindow = TimeSpan.FromSeconds(15);
