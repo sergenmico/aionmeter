@@ -10,8 +10,10 @@ public readonly record struct HpSample(DateTime At, long Hp);
 /// Every entity's latest hit points, from the server's HP frame (see Aion2FrameDecoder.DecodeHp), and what is known
 /// of its maximum (highest reading, reported maximum, spawn frame).
 /// </summary>
-public sealed class Aion2HitPoints
+public sealed partial class Aion2HitPoints
 {
+    // İsteğe bağlı yerel tanı eklentisi: gövdesi yoksa derleyici bu çağrıyı siler.
+    partial void YerelOkuma(int entityId, DateTime at, long hp);
     /// <summary>Değiştirildi (eklendi): bir bölgede bundan fazla varlık birikirse tablo boşaltılır (kaldırma kayıpları).</summary>
     private const int MaxEntities = 20_000;
 
@@ -35,6 +37,7 @@ public sealed class Aion2HitPoints
             track.Latest = new HpSample(at, hp);
         }
 
+        YerelOkuma(entityId, at, hp);
         if (died)
         {
             Died?.Invoke(entityId, at); // kilit dışında

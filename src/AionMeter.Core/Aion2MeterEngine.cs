@@ -15,8 +15,12 @@ namespace AionMeter.Core;
 /// <para>Boss kümesi: dövüş boss'u katalogdaysa bu denemede partinin vurduğu bütün katalog boss'ları (Rahu + Ketu gibi ikililer); değilse
 /// yalnız dövüş boss'u. BossTotal/BossDps kümeye göredir, seçili boss değişince Toplam/Pay zıplamaz.</para>
 /// </summary>
-public sealed class Aion2MeterEngine : IMeterEngine
+public sealed partial class Aion2MeterEngine : IMeterEngine
 {
+    // İsteğe bağlı yerel tanı eklentisi: gövdesi yoksa derleyici bu çağrıları siler.
+    partial void YerelBaglan(Aion2PacketCombatSource source);
+    partial void YerelVurus(DamageEvent ev);
+    partial void YerelDenemeBitti(string sebep);
     /// <summary>Boss tutmuyorsa bu kadar parti hasarı gelmezse dövüş biter; sonraki parti vuruşu yeni dövüş başlatır.</summary>
     private static readonly TimeSpan FightGap = TimeSpan.FromSeconds(20);
 
@@ -634,6 +638,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
         source.Entities.IdentityMoved += MergeIds;
         source.Entities.HitPoints.Died += OnDied;
         source.Entities.BossSpawned += OnBossSpawned;
+        YerelBaglan(source);
         lock (_gate)
         {
             if (_disposed)
@@ -688,13 +693,17 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 Tani("dövüş bitti: kullanıcı sıfırladı");
             }
 
-            ClearFight();
+            ClearFight("kullanıcı sıfırladı");
         }
     }
 
     // Called under _gate.
-    private void ClearFight()
+    private void ClearFight(string sebep = "yeni deneme başladı")
     {
+        if (_cur.Start is not null)
+        {
+            YerelDenemeBitti(sebep);
+        }
         _cur = new Attempt();
         _held = null;
         _localTargets.Clear();
@@ -779,7 +788,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 Tani($"dövüş bitti: bölge değişti ({zone.ZoneId})");
             }
 
-            ClearFight();
+            ClearFight("bölge değişti");
             if (keep is not null)
             {
                 _frozen = keep with { FightOver = true };
@@ -829,6 +838,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
     /// <summary>Yakalama işçi iş parçacığında, her çözülen olay için. Sıcak yol: bellek ayırmaz (yeni kaynak/beceri dışında).</summary>
     private void OnHit(DamageEvent ev)
     {
+        YerelVurus(ev);
         if (ev.IsHeal || ev.Estimated || ev.Amount <= 0 || _source is not { } source)
         {
             return;
@@ -1528,7 +1538,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
             }
 
             MergeHeld("boss yeniden doğdu");
-            Freeze(dir, now, Compose(dir, _cur.LastPartyHit ?? now, over: true) with { State = _state, Message = _message });
+            Freeze(dir, now, Compose(dir, _cur.LastPartyHit ?? now, over: true) with { State = _state, Message = _message }, "wipe: aynı boss yeni kimlikle doğdu");
         }
     }
 
@@ -1593,7 +1603,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
                     Tani($"dövüş bitti: {why}");
                 }
 
-                Freeze(dir, now, snapshot);
+                Freeze(dir, now, snapshot, why);
             }
             else if (snapshot.Players.Count > 0)
             {
@@ -1605,8 +1615,9 @@ public sealed class Aion2MeterEngine : IMeterEngine
     }
 
     // Called under _gate. Deneme kapanır: görüntü yeni dövüşün ilk parti vuruşuna kadar donar.
-    private void Freeze(Aion2EntityDirectory dir, DateTime now, MeterSnapshot snapshot)
+    private void Freeze(Aion2EntityDirectory dir, DateTime now, MeterSnapshot snapshot, string why)
     {
+        YerelDenemeBitti(why);
         bool fightBossDead = _fightBoss is int fb && FightBossDead(dir, fb);
         _fightOver = true;
         _held = null;

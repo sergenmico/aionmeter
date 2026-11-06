@@ -37,6 +37,9 @@ FrameChecks();
 TcpChecks();
 OtherChecks();
 AuditChecks();
+#if YEREL_TANI
+ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
+#endif
 
 using (var proc = System.Diagnostics.Process.GetCurrentProcess())
 {

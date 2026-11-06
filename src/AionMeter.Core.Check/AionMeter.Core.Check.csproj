@@ -11,4 +11,8 @@
     <ProjectReference Include="../AionMeter.Core/AionMeter.Core.csproj" />
   </ItemGroup>
 
+  <PropertyGroup Condition="'$(YerelTani)' == 'true'">
+    <DefineConstants>$(DefineConstants);YEREL_TANI</DefineConstants>
+  </PropertyGroup>
+
 </Project>

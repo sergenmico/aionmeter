@@ -20,4 +20,9 @@
     <ProjectReference Include="../AionMeter.Abstractions/AionMeter.Abstractions.csproj" />
   </ItemGroup>
 
+  <!-- İsteğe bağlı yerel tanı eklentisi: yalnız -p:YerelTani=true ile derlenir. -->
+  <ItemGroup Condition="'$(YerelTani)' != 'true'">
+    <Compile Remove="Yerel\**" />
+  </ItemGroup>
+
 </Project>
