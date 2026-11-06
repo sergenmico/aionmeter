@@ -1,4 +1,6 @@
 // Kaynak: SkeeveAN/Aion-DPS-Meter (MIT), Client/Aion2/Capture/TcpReassembler.cs. Değiştirildi.
+// Değiştirildi: dolmayan boşluk süreyle de bırakılır (GapTimeout); her çerçeve, son baytını taşıyan parçanın kendi zaman damgasıyla verilir
+// (bekleyen parçalar boşluk dolunca/bırakılınca hepsi o anki parçanın zamanıyla çıkıyordu: sahte süre ve DPS sıçraması).
 using System.Buffers.Binary;
 using AionDPS.Aion2.Protocol;
 
@@ -17,6 +19,9 @@ public sealed class TcpReassembler
     private const int MaxPendingBytes = 256 * 1024;
     private const int MaxPendingSegments = 64;
 
+    /// <summary>Değiştirildi (eklendi): sıra dışı bir parçadan sonra eksik parça bu kadar sürede gelmezse gelmeyecek sayılır (Npcap düşürdü).</summary>
+    public static readonly TimeSpan GapTimeout = TimeSpan.FromMilliseconds(300);
+
     private readonly Dictionary<string, StreamState> _streams = new();
 
     public int Gaps { get; private set; }
@@ -26,11 +31,16 @@ public sealed class TcpReassembler
     /// <summary>TLS records of another connection on the same stream, skipped.</summary>
     public int TlsRecords { get; private set; }
 
-    public IReadOnlyList<ReadOnlyMemory<byte>> Push(TcpSegment segment, FrameLayout layout, IReadOnlySet<int>? syncOpcodes = null)
+    /// <summary>Değiştirildi (eklendi): <see cref="Gaps"/> içinden süre dolduğu için bırakılan boşluklar.</summary>
+    public int TimedGaps { get; private set; }
+
+    private static readonly IReadOnlyList<(ReadOnlyMemory<byte> Frame, DateTime At)> NoFrames = Array.Empty<(ReadOnlyMemory<byte>, DateTime)>();
+
+    public IReadOnlyList<(ReadOnlyMemory<byte> Frame, DateTime At)> Push(TcpSegment segment, FrameLayout layout, IReadOnlySet<int>? syncOpcodes = null)
     {
         if (segment.Payload.Length == 0)
         {
-            return Array.Empty<ReadOnlyMemory<byte>>();
+            return NoFrames;
         }
 
         PruneIdle(segment.Timestamp);
@@ -41,8 +51,70 @@ public sealed class TcpReassembler
         }
 
         stream.LastSeen = segment.Timestamp;
-        Append(stream, segment.Sequence, segment.Payload);
-        return CutFrames(stream, layout, syncOpcodes);
+        var frames = new List<(ReadOnlyMemory<byte>, DateTime)>();
+        Append(stream, segment.Sequence, segment.Payload, segment.Timestamp);
+        if (stream.HoleSince is { } since && segment.Timestamp - since > GapTimeout)
+        {
+            // Değiştirildi (eklendi): boşluk süresinde dolmadı; önce boşluğa kadarki çerçeveler, sonra bekleyenlerden devam.
+            CutFrames(stream, layout, syncOpcodes, frames);
+            GiveUp(stream, timed: true);
+        }
+
+        CutFrames(stream, layout, syncOpcodes, frames);
+        return frames;
+    }
+
+    /// <summary>
+    /// Değiştirildi (eklendi): yeni parça gelmese de (trafik azaldı) <see cref="GapTimeout"/>'tan eski boşluklar bırakılır ve bekleyen
+    /// parçaların çerçeveleri kendi zamanlarıyla verilir. Yakalama işçisi boşta kaldıkça çağırır.
+    /// </summary>
+    public IReadOnlyList<(ReadOnlyMemory<byte> Frame, DateTime At)> Flush(DateTime now, FrameLayout layout, IReadOnlySet<int>? syncOpcodes = null)
+    {
+        List<(ReadOnlyMemory<byte>, DateTime)>? frames = null;
+        foreach (StreamState stream in _streams.Values)
+        {
+            if (stream.HoleSince is { } since && now - since > GapTimeout)
+            {
+                frames ??= new List<(ReadOnlyMemory<byte>, DateTime)>();
+                GiveUp(stream, timed: true);
+                CutFrames(stream, layout, syncOpcodes, frames);
+            }
+        }
+
+        return frames ?? NoFrames;
+    }
+
+    // Değiştirildi (eklendi): boşluk dolmayacak; tampondaki yarım çerçeve atılır, en eski bekleyen parçadan devam edilir.
+    private void GiveUp(StreamState stream, bool timed)
+    {
+        if (stream.Pending.Count == 0)
+        {
+            stream.HoleSince = null;
+            return;
+        }
+
+        Gaps++;
+        if (timed)
+        {
+            TimedGaps++;
+        }
+
+        stream.Buffer.Clear();
+        stream.Marks.Clear();
+        stream.Synced = false;
+        stream.NextSequence = stream.Pending.Keys.First();
+        DrainPending(stream);
+        if (stream.Pending.Count > 0)
+        {
+            // arkasında başka bir boşluk var: onun süresi kalan en eski parçadan başlar
+            DateTime oldest = DateTime.MaxValue;
+            foreach ((ReadOnlyMemory<byte> _, DateTime at) in stream.Pending.Values)
+            {
+                oldest = at < oldest ? at : oldest;
+            }
+
+            stream.HoleSince = oldest;
+        }
     }
 
     // Değiştirildi (eklendi): 60 sn'den uzun süredir parça gelmeyen akışlar (kapanmış bağlantılar) atılır.
@@ -63,12 +135,12 @@ public sealed class TcpReassembler
         }
     }
 
-    private void Append(StreamState stream, uint sequence, ReadOnlyMemory<byte> payload)
+    private void Append(StreamState stream, uint sequence, ReadOnlyMemory<byte> payload, DateTime at)
     {
         long delta = (int)(sequence - stream.NextSequence);
         if (delta == 0)
         {
-            stream.Buffer.AddRange(payload.Span);
+            stream.Add(payload.Span, at);
             stream.NextSequence = unchecked(sequence + (uint)payload.Length);
             DrainPending(stream);
             return;
@@ -85,29 +157,26 @@ public sealed class TcpReassembler
             }
 
             Retransmissions++;
-            stream.Buffer.AddRange(payload.Span[(int)overlap..]);
+            stream.Add(payload.Span[(int)overlap..], at);
             stream.NextSequence = unchecked(sequence + (uint)payload.Length);
             DrainPending(stream);
             return;
         }
 
         // A retransmission of a waiting segment replaces it: the byte count must follow the replacement, not grow by it.
-        if (stream.Pending.TryGetValue(sequence, out ReadOnlyMemory<byte> replaced))
+        if (stream.Pending.TryGetValue(sequence, out var replaced))
         {
-            stream.PendingBytes -= replaced.Length;
+            stream.PendingBytes -= replaced.Data.Length;
         }
 
-        stream.Pending[sequence] = payload;
+        stream.Pending[sequence] = (payload, at);
         stream.PendingBytes += payload.Length;
+        stream.HoleSince ??= at;
         if (stream.Pending.Count > MaxPendingSegments || stream.PendingBytes > MaxPendingBytes)
         {
             // The hole is not going to fill. Start over from the oldest waiting segment; whatever
             // half-frame sits in the buffer is unusable now.
-            Gaps++;
-            stream.Buffer.Clear();
-            stream.Synced = false;
-            stream.NextSequence = stream.Pending.Keys.First();
-            DrainPending(stream);
+            GiveUp(stream, timed: false);
         }
     }
 
@@ -122,25 +191,26 @@ public sealed class TcpReassembler
                 return;
             }
 
-            ReadOnlyMemory<byte> payload = stream.Pending[first];
+            (ReadOnlyMemory<byte> payload, DateTime at) = stream.Pending[first];
             stream.Pending.Remove(first);
             stream.PendingBytes -= payload.Length;
             long overlap = -delta;
             if (overlap < payload.Length)
             {
-                stream.Buffer.AddRange(payload.Span[(int)overlap..]);
+                stream.Add(payload.Span[(int)overlap..], at); // Değiştirildi: bekleyen parça kendi zamanıyla
                 stream.NextSequence = unchecked(first + (uint)payload.Length);
             }
         }
+
+        stream.HoleSince = null; // Değiştirildi (eklendi): boşluk doldu
     }
 
-    private List<ReadOnlyMemory<byte>> CutFrames(StreamState stream, FrameLayout layout, IReadOnlySet<int>? syncOpcodes)
+    private void CutFrames(StreamState stream, FrameLayout layout, IReadOnlySet<int>? syncOpcodes, List<(ReadOnlyMemory<byte>, DateTime)> frames)
     {
-        var frames = new List<ReadOnlyMemory<byte>>();
         if (layout.IsVarint)
         {
             CutVarintFrames(stream, layout, frames, syncOpcodes);
-            return frames;
+            return;
         }
 
         while (stream.Buffer.Count >= layout.HeaderSize)
@@ -151,7 +221,7 @@ public sealed class TcpReassembler
             {
                 // Not looking at a frame start - drop until the next plausible length prefix.
                 Desyncs++;
-                stream.Buffer.RemoveAt(0);
+                stream.Drop(1);
                 continue;
             }
 
@@ -160,18 +230,16 @@ public sealed class TcpReassembler
                 break;
             }
 
-            frames.Add(stream.Buffer.GetRange(0, total).ToArray());
-            stream.Buffer.RemoveRange(0, total);
+            frames.Add((stream.Buffer.GetRange(0, total).ToArray(), stream.TimeOf(total)));
+            stream.Drop(total);
             Frames++;
         }
-
-        return frames;
     }
 
     /// <summary>Varint framing: LEB128 length L, record = L + prefixBytes + bias bytes in total; the
     /// emitted frame is the record without its prefix. An implausible length means we are not at a
     /// record start (a capture that began mid-stream) - drop one byte and look again.</summary>
-    private void CutVarintFrames(StreamState stream, FrameLayout layout, List<ReadOnlyMemory<byte>> frames, IReadOnlySet<int>? syncOpcodes)
+    private void CutVarintFrames(StreamState stream, FrameLayout layout, List<(ReadOnlyMemory<byte>, DateTime)> frames, IReadOnlySet<int>? syncOpcodes)
     {
         while (stream.Buffer.Count > 0)
         {
@@ -191,7 +259,7 @@ public sealed class TcpReassembler
                     if (stream.Buffer.Count > SyncGiveUpBytes)
                     {
                         Desyncs++;
-                        stream.Buffer.RemoveRange(0, stream.Buffer.Count - SyncSearchWindow);
+                        stream.Drop(stream.Buffer.Count - SyncSearchWindow);
                     }
 
                     return;
@@ -200,7 +268,7 @@ public sealed class TcpReassembler
                 if (offset > 0)
                 {
                     Desyncs++;
-                    stream.Buffer.RemoveRange(0, offset);
+                    stream.Drop(offset);
                 }
 
                 stream.Synced = true;
@@ -218,7 +286,7 @@ public sealed class TcpReassembler
 
             if (zeros > 0)
             {
-                stream.Buffer.RemoveRange(0, zeros);
+                stream.Drop(zeros);
                 continue;
             }
 
@@ -229,7 +297,7 @@ public sealed class TcpReassembler
                     return; // the rest of the record is still to come
                 }
 
-                stream.Buffer.RemoveRange(0, tlsSize);
+                stream.Drop(tlsSize);
                 TlsRecords++;
                 continue;
             }
@@ -255,7 +323,7 @@ public sealed class TcpReassembler
                 {
                     Desyncs++;
                     stream.Synced = false;
-                    stream.Buffer.RemoveAt(0);
+                    stream.Drop(1);
                     continue;
                 }
 
@@ -287,7 +355,7 @@ public sealed class TcpReassembler
             {
                 Desyncs++;
                 stream.Synced = false;
-                stream.Buffer.RemoveAt(0);
+                stream.Drop(1);
                 continue;
             }
 
@@ -296,8 +364,8 @@ public sealed class TcpReassembler
                 return;
             }
 
-            frames.Add(stream.Buffer.GetRange(prefix, (int)total - prefix).ToArray());
-            stream.Buffer.RemoveRange(0, (int)total);
+            frames.Add((stream.Buffer.GetRange(prefix, (int)total - prefix).ToArray(), stream.TimeOf((int)total)));
+            stream.Drop((int)total);
             Frames++;
         }
     }
@@ -418,7 +486,57 @@ public sealed class TcpReassembler
         public DateTime LastSeen;
         public bool Synced;
         public readonly List<byte> Buffer = new();
-        public readonly SortedDictionary<uint, ReadOnlyMemory<byte>> Pending = new();
+        public readonly SortedDictionary<uint, (ReadOnlyMemory<byte> Data, DateTime At)> Pending = new();
         public int PendingBytes;
+
+        /// <summary>Değiştirildi (eklendi): ilk sıra dışı parçanın geliş zamanı (boşluk açık); boşluk yokken null.</summary>
+        public DateTime? HoleSince;
+
+        /// <summary>Değiştirildi (eklendi): tampondaki baytların zamanı: her parça için (bitiş konumu, parçanın zamanı); konumlar Buffer'a göredir.</summary>
+        public readonly List<(int End, DateTime At)> Marks = new();
+
+        public void Add(ReadOnlySpan<byte> bytes, DateTime at)
+        {
+            Buffer.AddRange(bytes);
+            if (Marks.Count > 0 && Marks[^1].At == at)
+            {
+                Marks[^1] = (Buffer.Count, at);
+            }
+            else
+            {
+                Marks.Add((Buffer.Count, at));
+            }
+        }
+
+        /// <summary>İlk <paramref name="length"/> baytın son baytını getiren parçanın zamanı.</summary>
+        public DateTime TimeOf(int length)
+        {
+            foreach ((int end, DateTime at) in Marks)
+            {
+                if (end >= length)
+                {
+                    return at;
+                }
+            }
+
+            return Marks.Count > 0 ? Marks[^1].At : LastSeen;
+        }
+
+        /// <summary>Tamponun başından <paramref name="count"/> bayt atılır; zaman işaretleri kaydırılır.</summary>
+        public void Drop(int count)
+        {
+            Buffer.RemoveRange(0, count);
+            int keep = 0;
+            for (int i = 0; i < Marks.Count; i++)
+            {
+                int end = Marks[i].End - count;
+                if (end > 0)
+                {
+                    Marks[keep++] = (end, Marks[i].At);
+                }
+            }
+
+            Marks.RemoveRange(keep, Marks.Count - keep);
+        }
     }
 }

@@ -66,7 +66,7 @@ public sealed class Aion2PacketCombatSource : IDisposable
             return;
         }
 
-        _capture = new Capture.NpcapCaptureService(_protocol.ServerPorts, Ingest, (state, message) => StatusChanged?.Invoke(state, message), _adapterId);
+        _capture = new Capture.NpcapCaptureService(_protocol.ServerPorts, Ingest, (state, message) => StatusChanged?.Invoke(state, message), _adapterId) { OnTick = Tick };
         _capture.Start();
     }
 
@@ -92,10 +92,52 @@ public sealed class Aion2PacketCombatSource : IDisposable
         lock (_reassembler)
         {
             // Değiştirildi: bölge değişimi segment sonunda değil, geldiği çerçeveden hemen sonra verilir (vuruşlarla aynı sırada).
-            foreach (ReadOnlyMemory<byte> frame in _reassembler.Push(segment, _protocol.FrameLayout, _protocol.SyncOpcodes))
+            // Değiştirildi: her çerçeve kendi parçasının zamanıyla (bekleyen parçalar boşluk dolunca kendi zamanlarıyla çıkar).
+            foreach ((ReadOnlyMemory<byte> frame, DateTime at) in _reassembler.Push(segment, _protocol.FrameLayout, _protocol.SyncOpcodes))
             {
-                _decoder.Decode(frame.Span, segment.Timestamp, _onHit, _onZone);
+                _decoder.Decode(frame.Span, at, _onHit, _onZone);
             }
         }
+    }
+
+    /// <summary>
+    /// Değiştirildi (eklendi): yakalama işçisi boşta kaldıkça (~100 ms) çağırır: süresi dolan TCP boşlukları bırakılır, Tanı açıksa dakikada
+    /// bir sayaçlar yazılır. Denetim aracı da sentetik zamanla çağırır.
+    /// </summary>
+    public void Tick(DateTime now)
+    {
+        lock (_reassembler)
+        {
+            foreach ((ReadOnlyMemory<byte> frame, DateTime at) in _reassembler.Flush(now, _protocol.FrameLayout, _protocol.SyncOpcodes))
+            {
+                _decoder.Decode(frame.Span, at, _onHit, _onZone);
+            }
+
+            if (MeterTani.Acik && now - _countersAt >= TimeSpan.FromMinutes(1))
+            {
+                WriteCounters(now);
+            }
+        }
+    }
+
+    private DateTime _countersAt = DateTime.Now;
+    private Counters _lastCounters;
+
+    private readonly record struct Counters(long Gaps, long TimedGaps, long Desyncs, long Retrans, long Tls, long QueueDrops, long KernelDrops, long IfDrops,
+        long BundleFailures, long Skipped, long Unknown, long CallbackErrors);
+
+    // Called under _reassembler. Son satırdan bu yana artışlar (Δ) ve toplamlar tek satırda.
+    private void WriteCounters(DateTime now)
+    {
+        _countersAt = now;
+        (long received, long kernelDrops, long ifDrops) = _capture?.KernelStatistics() ?? (0, 0, 0);
+        var c = new Counters(_reassembler.Gaps, _reassembler.TimedGaps, _reassembler.Desyncs, _reassembler.Retransmissions, _reassembler.TlsRecords,
+            _capture?.Dropped ?? 0, kernelDrops, ifDrops, _decoder.BundleFailures, _decoder.SkippedShortFrames, _decoder.UnknownOpcodes, _capture?.CallbackErrors ?? 0);
+        Counters p = _lastCounters;
+        _lastCounters = c;
+        MeterTani.Yaz?.Invoke($"{now:HH:mm:ss.fff} sayaç (son dakika): tcp boşluk +{c.Gaps - p.Gaps} (süreyle +{c.TimedGaps - p.TimedGaps}), desync +{c.Desyncs - p.Desyncs}, "
+            + $"yeniden iletim +{c.Retrans - p.Retrans}, tls +{c.Tls - p.Tls}, kuyruk taşması +{c.QueueDrops - p.QueueDrops}, ps_drop +{c.KernelDrops - p.KernelDrops}, "
+            + $"if_drop +{c.IfDrops - p.IfDrops}, lz4/paket hatası +{c.BundleFailures - p.BundleFailures}, atlanan çerçeve +{c.Skipped - p.Skipped}, "
+            + $"bilinmeyen opcode +{c.Unknown - p.Unknown}, işleyici hatası +{c.CallbackErrors - p.CallbackErrors}; alınan paket {received}");
     }
 }

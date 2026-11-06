@@ -60,6 +60,21 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         internal set => _explicitLocalId = value;
     }
 
+    /// <summary>Değiştirildi (eklendi): sunucunun kesin bildirdiği yerel kimlik (oturum çerçevesi ya da karakter kaydı); yoksa -1. Tahmin içermez.</summary>
+    public int ExplicitLocalPlayerId => _explicitLocalId;
+
+    /// <summary>Değiştirildi (eklendi): kayıtlı yerel adın (<see cref="SetConfiguredLocalName"/>) şu anki kimliği; ad yoksa ya da henüz bir kimliğe bağlı değilse null.</summary>
+    public int? ConfiguredLocalPlayerId
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _configuredLocalName is not null && _ids.TryGetValue(_configuredLocalName, out int byName) ? byName : null;
+            }
+        }
+    }
+
     /// <summary>The user's own Aion 2 character name from Settings (empty = none).</summary>
     public void SetConfiguredLocalName(string? name)
     {
@@ -148,6 +163,7 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
             _partyTargets.Clear();
             _fightingAlongside.Clear();
             _skillsSeen.Clear();
+            _markHits.Clear(); // Değiştirildi (eklendi): kimlikler bölgeyle değişir
             foreach (int faded in _detailedStats.Where(kv => kv.Value < 0.5).Select(kv => kv.Key).ToList())
             {
                 _detailedStats.Remove(faded);
@@ -434,7 +450,12 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         {
             _bossNpcs[entityId] = npcId;
         }
+
+        BossSpawned?.Invoke(entityId, npcId); // Değiştirildi (eklendi): kilit dışında
     }
+
+    /// <summary>Değiştirildi (eklendi): katalogdaki bir boss bu varlık kimliğiyle doğdu (aynı boss yeni kimlikle = wipe sonrası yeni deneme).</summary>
+    public event Action<int, int>? BossSpawned;
 
     /// <summary>Every entity's hit points as the server reports them, and when a monster was reset
     /// to full health (a wipe and retry under the same entity id).</summary>
@@ -579,6 +600,15 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         }
     }
 
+    /// <summary>Değiştirildi (eklendi): doğuş çerçevesinin taşıdığı sahip adı (henüz bir kimliğe bağlanmamış olsa da); yoksa null.</summary>
+    public string? SummonOwnerNameOf(int entityId)
+    {
+        lock (_gate)
+        {
+            return _summonOwnerNames.GetValueOrDefault(entityId);
+        }
+    }
+
     public int? SummonOwnerOf(int entityId)
     {
         lock (_gate)
@@ -589,9 +619,19 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
             }
 
             // Owner known by name: the player of that name, when it is a player and not the entity itself.
-            return _summonOwnerNames.TryGetValue(entityId, out string? name) && _ids.TryGetValue(name, out int byName) && byName != entityId
-                ? byName
-                : null;
+            if (!_summonOwnerNames.TryGetValue(entityId, out string? name))
+            {
+                return null;
+            }
+
+            if (_ids.TryGetValue(name, out int byName))
+            {
+                return byName != entityId ? byName : null;
+            }
+
+            // Değiştirildi (eklendi): kendi adı (yerel oyuncu kendine hiç duyurulmaz, adı ancak karakter kaydıyla bir kimliğe bağlanır):
+            // ayardaki ad ise çağrı yerel oyuncunundur.
+            return name == _configuredLocalName && LocalPlayerId is >= 0 and var local && local != entityId ? local : null;
         }
     }
 
@@ -908,7 +948,8 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
     public IReadOnlyList<int> PartyPlayerIdsOfClass(string className)
     {
         var ids = PartyMemberIdsOfClass(className).ToList();
-        if (InferLocalPlayer() is int local && !ids.Contains(local) && ClassOf(local) == className)
+        // Değiştirildi: açık yerel kimlik varken tahmine bakılmaz (LocalPlayerId önce açık kimliği, sonra kayıtlı adı verir).
+        if (LocalPlayerId is >= 0 and var local && !ids.Contains(local) && ClassOf(local) == className)
         {
             ids.Add(local);
         }
@@ -984,7 +1025,18 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         {
             bool partySide = _names.TryGetValue(playerId, out string? name)
                 ? CurrentPartyNames().Contains(name)
-                : IsLocalPlayer(playerId) || InferLocalPlayer() == playerId;
+                : IsLocalPlayer(playerId); // Değiştirildi: açık yerel kimlik varken tahmin ayrıca sayılmaz
+            if (!_names.ContainsKey(playerId) && _target is { } mark && mark.EntityId == monsterId)
+            {
+                // Değiştirildi (eklendi): yerel oyuncunun işaretlediği canavara vuran isimsiz oyuncular (yerel tahmini için, InferLocalPlayer)
+                if (_markHits.Count >= 256 && !_markHits.ContainsKey(playerId))
+                {
+                    _markHits.Clear();
+                }
+
+                _markHits[playerId] = _markHits.GetValueOrDefault(playerId) + 1;
+            }
+
             if (partySide)
             {
                 if (_partyTargets.Count > 4096)
@@ -1089,6 +1141,9 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         }
     }
 
+    // Değiştirildi (eklendi): isimsiz oyuncu -> yerel oyuncunun işaretlediği (hedef seçim çerçevesi yalnız yerel oyuncuya gelir) canavara vuruş sayısı.
+    private readonly Dictionary<int, int> _markHits = new();
+
     // Per entity: a decaying count of its detailed-stats frames (see NoteDetailedStats).
     private readonly Dictionary<int, double> _detailedStats = new();
 
@@ -1143,6 +1198,34 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
             if (_detailedStats.Count > 0 && bestStat >= 5 && (_detailedStats.Count == 1 || bestStat >= 3 * secondStat))
             {
                 return bestStatId;
+            }
+
+            // Değiştirildi (eklendi): işaretlenen canavara vuruşlar. Hedef seçim çerçevesi yalnız yerel oyuncuya gelir; partisiz, yan yana iki
+            // kişi iki ayrı kuklaya vurunca beceri sayısı (aşağıdaki kural) daha çok vuranı "sen" sayıyordu, işaretlediğin kuklaya vuran ise sensin.
+            // Partide herkes aynı canavara vurduğundan bu sayılar beceri sayısıyla aynı sıradadır; açık önde olan yoksa aşağıdaki kurala geçilir.
+            int markBest = 0, markSecond = 0, markBestId = 0;
+            foreach (KeyValuePair<int, int> mark in _markHits)
+            {
+                if (_names.ContainsKey(mark.Key) || !_classVotes.ContainsKey(mark.Key))
+                {
+                    continue;
+                }
+
+                if (mark.Value > markBest)
+                {
+                    markSecond = markBest;
+                    markBest = mark.Value;
+                    markBestId = mark.Key;
+                }
+                else if (mark.Value > markSecond)
+                {
+                    markSecond = mark.Value;
+                }
+            }
+
+            if (markBest >= 3 && markBest >= 3 * markSecond)
+            {
+                return markBestId;
             }
 
             int unnamed = 0, bestId = 0, bestVotes = int.MinValue, secondVotes = int.MinValue;
@@ -1328,7 +1411,8 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
             // stayed on the summon's own id ("Player #id"); now the owner is found, so they are handed over (see DrainResolvedOwners).
             foreach ((int summon, string ownerName) in _summonOwnerNames)
             {
-                if (ownerName == name && summon != id && !_summonOwners.ContainsKey(summon) && _resolvedOwners.Count < 4096)
+                // Değiştirildi: tahminle yazılmış bir sahip (tek aday kuralı) doğuş çerçevesindeki ada yenilir; ad kesin bilgidir.
+                if (ownerName == name && summon != id && (!_summonOwners.TryGetValue(summon, out int guessed) || guessed != id) && _resolvedOwners.Count < 4096)
                 {
                     _summonOwners[summon] = id;
                     _resolvedOwners.Add((summon, id));

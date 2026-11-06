@@ -538,6 +538,13 @@ public sealed class Aion2FrameDecoder
             return null;
         }
 
+        // Değiştirildi (eklendi): doğuşu sahibini adıyla taşıyorsa tahmin yapılmaz; ad bir kimliğe bağlanınca vuruşlar sahibine geçer
+        // (Register -> DrainResolvedOwners). Yabancının adı henüz gelmemiş rüzgârı "partideki tek Sorcerer" kuralıyla bize yazılıyordu.
+        if (_entities.SummonOwnerNameOf(actor) is not null)
+        {
+            return null;
+        }
+
         // A party member of the class who cast this variant just before (within 5 s); else any caster of
         // it within 2 s - a party member not named yet (the meter started inside a dungeon) or a player
         // outside the party, whose summon is theirs too (at a world boss the crowd is many small groups;
@@ -549,7 +556,8 @@ public sealed class Aion2FrameDecoder
             ?? OwnerByCast(actor, variant, TimeSpan.FromSeconds(2), _ => true);
         if (owner is null && party.Count == 1)
         {
-            owner = party[0];
+            // Değiştirildi: açık dünyada (zindan dışında) yabancıların çağrıları da etraftadır; tek aday yalnız güç çarpanı kanıtıyla kabul edilir.
+            owner = SingleCandidateAllowed() ? party[0] : OwnersByPower(actor, party, strict: true) is [int proven] ? proven : null;
         }
 
         if (owner is int found)
@@ -655,6 +663,49 @@ public sealed class Aion2FrameDecoder
     }
 
     /// <summary>
+    /// Değiştirildi (eklendi): vuruş sayısı işaretçisinin (1..9, 00 00 00) düzene göre yeri; orada geçerli bir işaretçi ve ardından
+    /// iki varint (güç çarpanı, tutar) yoksa -1. <paramref name="p"/> beceri kimliğinden sonraki bayttır (hasar türü).
+    /// </summary>
+    private static int ExpectedHitCountAt(ReadOnlySpan<byte> frame, int p, int flags)
+    {
+        int kind = flags & 0xf;
+        int at;
+        if (kind == 4)
+        {
+            at = p + 2 + 4;
+        }
+        else if (kind is >= 5 and <= 7 && p + 3 < frame.Length)
+        {
+            at = p + 3;
+            if ((frame[p + 2] & 0x20) != 0)
+            {
+                if (!TryReadVarint(frame, ref at, out _))
+                {
+                    return -1;
+                }
+            }
+            else
+            {
+                at++;
+            }
+
+            at += 1 + 4; // yön + float
+        }
+        else
+        {
+            return -1;
+        }
+
+        if (at + 4 > frame.Length || frame[at] is < 1 or > 9 || frame[at + 1] != 0 || frame[at + 2] != 0 || frame[at + 3] != 0)
+        {
+            return -1;
+        }
+
+        int q = at + 4;
+        return TryReadVarint(frame, ref q, out _) && q < frame.Length && TryReadVarint(frame, ref q, out long amount) && amount > 0 ? at : -1;
+    }
+
+    /// <summary>
     /// A summon that appeared before the meter started has no spawn frame on record, so neither its
     /// owner field nor its owner's name nor the cast before it is known. It still casts nothing but
     /// its summon attack (a spirit's "Fire Spirit: Leaping Slam", a Cleric's "Divine Aura", a
@@ -684,6 +735,16 @@ public sealed class Aion2FrameDecoder
         if (owners.Count > 1)
         {
             owners = OwnersByPower(actor, owners);
+        }
+        else if (owners.Count == 1 && !SingleCandidateAllowed())
+        {
+            // Değiştirildi (eklendi): açık dünyada tek aday kuralı yok (yabancının çağrısı bize ya da aynı sınıftan tek oyuncuya yazılıyordu);
+            // yalnız güç çarpanı kanıtı sayılır. Kanıt yoksa sonraki vuruşlarda yeniden denenir.
+            owners = OwnersByPower(actor, owners, strict: true);
+            if (owners.Count == 0)
+            {
+                return null;
+            }
         }
 
         if (owners.Count != 1)
@@ -716,7 +777,7 @@ public sealed class Aion2FrameDecoder
             }
 
             var owners = _entities.PartyPlayerIdsOfClass(className).Where(id => id != actor).ToList();
-            if (owners.Count == 1)
+            if (owners.Count == 1 && _entities.SummonOwnerNameOf(actor) is null && (SingleCandidateAllowed() || OwnersByPower(actor, owners, strict: true).Count == 1))
             {
                 _pendingSpawned.Remove(actor);
                 _entities.SetSummonOwner(actor, owners[0]);
@@ -732,13 +793,19 @@ public sealed class Aion2FrameDecoder
             }
 
             var owners = _entities.PartyPlayerIdsOfClass(className).Where(id => id != actor).ToList();
-            if (owners.Count == 1)
+            if (owners.Count == 1 && (SingleCandidateAllowed() || OwnersByPower(actor, owners, strict: true).Count == 1))
             {
                 _pendingLeftovers.Remove(actor);
                 _entities.SetSummonOwner(actor, owners[0]);
             }
         }
     }
+
+    /// <summary>
+    /// Değiştirildi (eklendi): "sınıfın tek oyuncusu sahibidir" kuralı yalnız zindanda (etrafta yalnız kendi parti) ya da bölge henüz
+    /// bilinmezken bir parti listesi varken geçerli. Açık dünyada aynı sınıftan yabancılar da çağırır.
+    /// </summary>
+    private bool SingleCandidateAllowed() => Aion2Zones.IsInstance(CurrentZoneId) || (CurrentZoneId == 0 && _entities.RosterKnown);
 
     // Per actor: the damage multipliers (power scalar, 1/100 %) and the distinct skills its hits carried.
     private readonly Dictionary<int, (HashSet<int> Scalars, HashSet<int> Skills)> _power = new();
@@ -773,16 +840,17 @@ public sealed class Aion2FrameDecoder
     /// exactly one remains, else the list unchanged. In the recordings of 2026-10-13/14 this was right 334 times and wrong 16 times
     /// with every same-class stranger of the zone as candidate, so it is only asked of the party's players.
     /// </summary>
-    private List<int> OwnersByPower(int summon, List<int> candidates)
+    // Değiştirildi: strict = kanıt yoksa aday listesi değil boş liste döner.
+    private List<int> OwnersByPower(int summon, List<int> candidates, bool strict = false)
     {
         if (!_power.TryGetValue(summon, out var mine))
         {
-            return candidates;
+            return strict ? new List<int>() : candidates;
         }
 
         var fits = candidates.Where(id => _power.TryGetValue(id, out var theirs)
             && theirs.Scalars.Overlaps(mine.Scalars) && theirs.Skills.Count >= 3 * Math.Max(mine.Skills.Count, 1)).ToList();
-        return fits.Count == 1 ? fits : candidates;
+        return fits.Count == 1 ? fits : strict ? new List<int>() : candidates;
     }
 
     // Player summon -> how often each player was the target of its effects, for summons whose spawn names no owner.
@@ -876,13 +944,21 @@ public sealed class Aion2FrameDecoder
         bool critical = frame[p + 1] == 3;
         HitKinds? kinds = ReadHitKinds(frame, p, flags);
 
-        int marker = -1;
-        for (int i = p + 2; i + 4 <= frame.Length; i++)
+        // Değiştirildi: önce işaretçinin düzene göre beklenen yeri denenir (ReadHitKinds ile aynı okuma: tür 4 = 4 baytlık float,
+        // tür 5-7 = bit baytı, 1 bayt ya da can emme varint'i, yön baytı, float). Upstream'in 35 gerçek hasar çerçevesinin hepsinde
+        // (SelfCheckAion2 + SelfCheckHitKinds, bit 0x10/0x20/0x40/0x80 dahil) bu yer ilk taramanın bulduğu yerle aynı. Tarama ise
+        // bit baytı 4/8 (perfect/double) ve yön 0 olduğunda "04 00 00 00" dizisine, ya da float'ın alt baytları sıfırken yön baytına
+        // oturup tutarı çöp okuyordu. Beklenen yerde geçerli bir işaretçi yoksa eski tarama kullanılır.
+        int marker = ExpectedHitCountAt(frame, p, flags);
+        if (marker < 0)
         {
-            if (frame[i] is >= 1 and <= 9 && frame[i + 1] == 0 && frame[i + 2] == 0 && frame[i + 3] == 0)
+            for (int i = p + 2; i + 4 <= frame.Length; i++)
             {
-                marker = i;
-                break;
+                if (frame[i] is >= 1 and <= 9 && frame[i + 1] == 0 && frame[i + 2] == 0 && frame[i + 3] == 0)
+                {
+                    marker = i;
+                    break;
+                }
             }
         }
 
@@ -1261,7 +1337,8 @@ public sealed class Aion2FrameDecoder
 
         for (int k = p; k < Math.Min(frame.Length - 4, p + 24); k++)
         {
-            if (TryReadName(frame, k, out string name))
+            // Upstream 847db0c: minLength 2 - iki harfli bir oyuncu ("sh") 3 sınırıyla bütün oturum "Player #id" kalıyordu.
+            if (TryReadName(frame, k, out string name, minLength: 2))
             {
                 _entities.Register((int)id, name);
                 _entities.NoteIdentity((int)id, name, 0);

@@ -24,13 +24,25 @@ public sealed class Aion2HitPoints
 
     public void Note(int entityId, DateTime at, long hp)
     {
+        bool died;
         lock (_gate)
         {
             Track track = TrackOf(entityId);
+            // Değiştirildi (eklendi): 0'dan büyük bir okumadan sonra 0 = ölüm (upstream Combat/Deaths.cs kuralı: "a death is a reading at 0
+            // after one above it"; sunucu tekrar eden 0 okumaları gönderir, onlar yeni ölüm değildir; diriliş canı yeniden 0'ın üstüne çıkarır).
+            died = hp == 0 && track.Latest is { Hp: > 0 };
             track.HighestSeen = Math.Max(track.HighestSeen, hp);
             track.Latest = new HpSample(at, hp);
         }
+
+        if (died)
+        {
+            Died?.Invoke(entityId, at); // kilit dışında
+        }
     }
+
+    /// <summary>Değiştirildi (eklendi): bir varlığın canı 0'ın üstündeki bir okumadan sonra 0'a indi (oyuncu ölümü sayacı için).</summary>
+    public event Action<int, DateTime>? Died;
 
     /// <summary>The highest value seen - the maximum once the entity has been seen at full health
     /// (at its first reading, or after a reset); a lower bound when the meter joined mid-fight.</summary>

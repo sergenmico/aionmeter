@@ -10,27 +10,45 @@ namespace AionMeter.Core;
 /// eklenmiş) ve o anki boss'un canını verir. Çözme yakalama işçi iş parçacığında yapılır; vuruş başına kayıt tutulmaz,
 /// kaynak başına yalnız sayaçlar tutulur.
 /// <para>Kilit sırası her yerde aynıdır: motorun <c>_gate</c>'i, sonra dizinin (Aion2EntityDirectory / Aion2HitPoints) kendi kilidi.
-/// Dizin olaylarını (LocalIdChanged, IdentityMoved) kendi kilidi dışında verir.</para>
+/// Dizin olaylarını (LocalIdChanged, IdentityMoved, Died, BossSpawned) kendi kilidi dışında verir.</para>
+/// <para>Deneme: bir dövüşün hasar tablosu. Wipe (boss herkesi öldürüp sıfırlandı) önceki denemeyi kapatır, yeni deneme sıfırdan başlar.</para>
 /// </summary>
 public sealed class Aion2MeterEngine : IMeterEngine
 {
     /// <summary>Boss tutmuyorsa bu kadar parti hasarı gelmezse dövüş biter; sonraki parti vuruşu yeni dövüş başlatır.</summary>
     private static readonly TimeSpan FightGap = TimeSpan.FromSeconds(20);
 
-    /// <summary>Son vuruştan bu kadar sonra dövüş süresi son vuruşta durur.</summary>
-    private static readonly TimeSpan IdleAfter = TimeSpan.FromSeconds(3);
+    /// <summary>Aktif süre: ardışık iki parti vuruşu arası bundan uzunsa o aralık süreye sayılmaz (DPS boşlukla düşmez).</summary>
+    private static readonly TimeSpan ActiveGap = TimeSpan.FromSeconds(3);
 
     /// <summary>Wipe: dövüş boss'u tam cana döndü ve bu kadar parti hasarı yok.</summary>
     private static readonly TimeSpan WipeIdle = TimeSpan.FromSeconds(10);
 
+    /// <summary>Wipe şüphesi: tutan boss dövüşünde bu kadar parti vuruşu yokken (takım ölü) vuruş yeniden başladı, taze can okuması yok.</summary>
+    private static readonly TimeSpan WipeSuspectGap = TimeSpan.FromSeconds(15);
+
+    /// <summary>Wipe: dövüş boss'unun yeni okuması öncekinden en az bu kadar (azami canın payı) yüksek ve en az <see cref="WipeHighShare"/>'de.
+    /// İkinci koşul boss'un kendini iyileştirmesini (bir okuma %10 kadar çıkabiliyor, upstream 2026-10-03 kaydı) wipe saymamak için.</summary>
+    private const double WipeRiseShare = 0.10;
+    private const double WipeHighShare = 0.85;
+
     /// <summary>
-    /// Boss'un son can okuması bundan eskiyse dövüşü tutmaz. Sadece yedek: ayrılan boss'u kaldırma kaydı, sıfırlananı wipe kuralı yakalar.
-    /// Uzun tutuldu çünkü takım ölü/dirilirken kimse vurmaz, can okuması gelmez ve dövüş bölünmemeli (kullanıcı kuralı).
+    /// Boss'un son can okuması bundan eskiyse dövüşü tutmaz. Yalnız katalog boss'u (ya da zindanda boss-benzeri) dövüşü tutar: takım
+    /// ölü/dirilirken kimse vurmaz, can okuması gelmez ve dövüş bölünmemeli (kullanıcı kuralı). Kukla/açık dünya canavarı tutmaz (<see cref="FightGap"/>).
     /// </summary>
     private static readonly TimeSpan BossStale = TimeSpan.FromMinutes(5);
 
     /// <summary>Ölen dövüş boss'una bu süre içinde gelen geç tikler yeni dövüş başlatmaz.</summary>
     private static readonly TimeSpan DeadBossGuard = TimeSpan.FromSeconds(30);
+
+    /// <summary>Katalog dışı dövüş boss'u öldüğünde bu süre içinde vurulmuş başka canlı aday varsa dövüş ona geçer (bitmez).</summary>
+    private static readonly TimeSpan CandidateRecent = TimeSpan.FromSeconds(10);
+
+    /// <summary>Aynı sınıftaki aday, son 30 sn'de dövüş boss'una vurulanın bu katı kadar parti hasarı alırsa dövüş boss'u o olur.</summary>
+    private const double SwitchFactor = 2.0;
+
+    /// <summary>Savaşta: yerel oyuncu ya da partisi son bu kadar sürede bir canavara vurdu.</summary>
+    private static readonly TimeSpan CombatWindow = TimeSpan.FromSeconds(8);
 
     /// <summary>Boss bu oranın üstündeyse tam canda sayılır (sıfırlanma / wipe).</summary>
     private const double FullHpShare = 0.995;
@@ -50,12 +68,16 @@ public sealed class Aion2MeterEngine : IMeterEngine
     /// <summary>Oyuncu başına en çok bu kadar beceri tutulur.</summary>
     private const int MaxSkillsPerPlayer = 200;
 
-    /// <summary>Kalan süre tahmini: son 30 sn, saniyelik kovalar; en çok bu kadar boss hedefi izlenir (oyuncu başına da).</summary>
+    /// <summary>Kalan süre tahmini: son 30 sn, saniyelik kovalar. Hedef başına hasar (canı okunmadan önceki vuruşlar dahil) en çok bu kadar
+    /// hedef için tutulur: kaynak başına ve partinin halkaları için.</summary>
     private const int TtkSeconds = 30;
-    private const int MaxBossTargets = 8;
+    private const int MaxTargets = 8;
 
     /// <summary>DPS grafiği: oyuncu başına en çok bu kadar kova; aşılınca ikişer birleştirilir, kova süresi iki katına çıkar.</summary>
     private const int MaxBuckets = 900;
+
+    /// <summary>Ölüm sayacında en çok bu kadar oyuncu (parti/yerel her zaman).</summary>
+    private const int MaxDeathRows = 64;
 
     // Upstream CombatOverlay (Ui/CombatOverlay.cs) sabitleri.
     private static readonly TimeSpan CastGrace = TimeSpan.FromMilliseconds(700);
@@ -64,21 +86,18 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
     private readonly string _assetsDir;
     private readonly object _gate = new(); // her şey: hasar toplamları, dövüş durumu, boss seçimi
-    private readonly Dictionary<int, Aggregate> _bySource = new();
     private readonly HashSet<int> _localTargets = new();
-    private readonly Dictionary<int, DamageRing> _bossDamage = new(); // boss adayı -> partinin ona hasarı
-    private DateTime? _fightStart;
-    private DateTime? _lastPartyHit;
+    private Attempt _cur = new();
     private int _fightEpoch;
 
-    // Detay kümesi: yabancılardan detay tutanların sayısı ve ilk 30'a girme eşiği (saniyede bir yeniden hesaplanır).
-    private int _detailedStrangers;
-    private long _detailThreshold = long.MaxValue;
-    private long _detailCheckedAt = -1_000_000;
+    // Wipe şüphesi: uzun aradan sonra taze can okuması olmadan vuruş başladı. Aradan önceki deneme bekletilir, vuruşlar yeni denemeye
+    // yazılır; taze okuma yüksekse wipe (bekleyen atılır), değilse ikisi birleşir.
+    private Attempt? _held;
 
-    // Dövüş boss'u: partinin hasar verdiği boss adaylarından en çok hasar alanı; ölene, ayrılana ya da sıfırlanana kadar değişmez.
+    // Dövüş boss'u: partinin hasar verdiği boss adaylarından seçilen; ölene, ayrılana, sıfırlanana ya da parti açıkça başkasına vurana kadar değişmez.
     private int? _fightBoss;
     private bool _fightBossWounded;
+    private long _bossCheckedAt = -1_000_000;
 
     // Dövüş bitti: anlık görüntü yeni dövüşün ilk parti vuruşuna kadar donar.
     private bool _fightOver;
@@ -91,15 +110,82 @@ public sealed class Aion2MeterEngine : IMeterEngine
     private (int Id, DateTime At, int Epoch)? _lastBoss;
 
     // Yerel oyuncu önbelleği (InferLocalPlayer O(n) olduğu için vuruş başına değil, saniyede bir).
-    private int _localId = -1;
-    private int? _inferredLocal;
+    private int? _localId;
+    private string _localSource = "yok";
     private long _localCheckedAt = -1_000_000;
+    private string? _configuredName;
+
+    // Savaşta: yerel oyuncunun ya da partinin bir canavara son vuruşu.
+    private DateTime? _lastEngaged;
 
     private volatile Aion2PacketCombatSource? _source;
     private volatile EngineState _state = EngineState.Starting;
     private volatile string? _message;
     private int _started;
     private bool _disposed;
+
+    /// <summary>Bir denemenin hasar tablosu ve süresi.</summary>
+    private sealed class Attempt
+    {
+        public readonly Dictionary<int, Aggregate> BySource = new();
+        public readonly Dictionary<int, DamageRing> Rings = new(); // hedef -> partinin ona hasarı (TTK, öfke, dövüş boss'u seçimi)
+        public readonly Dictionary<int, int> Deaths = new();       // oyuncu -> bu denemede ölüm sayısı
+        public DateTime? Start;
+        public DateTime? LastPartyHit;
+        public TimeSpan Active;
+        public HpSample? BossReading; // dövüş boss'unun motorun gördüğü son okuması (wipe: sıçrama)
+
+        // Detay kümesi: yabancılardan detay tutanların sayısı ve ilk 30'a girme eşiği (saniyede bir yeniden hesaplanır).
+        public int DetailedStrangers;
+        public long DetailThreshold = long.MaxValue;
+
+        /// <summary>Wipe şüphesi boşa çıktı: <paramref name="later"/> (aradan sonraki vuruşlar) buna eklenir.</summary>
+        public void Absorb(Attempt later, int? fightBoss)
+        {
+            long offset = Start is { } mine && later.Start is { } theirs ? (long)Math.Max(0, (theirs - mine).TotalSeconds) : 0;
+            foreach ((int id, Aggregate agg) in later.BySource)
+            {
+                if (!BySource.TryGetValue(id, out Aggregate? into))
+                {
+                    BySource[id] = into = new Aggregate { First = agg.First, Last = agg.Last };
+                    if (!agg.Party && agg.Detail is not null)
+                    {
+                        DetailedStrangers++;
+                    }
+                }
+
+                into.Absorb(agg, fightBoss, offset);
+            }
+
+            foreach ((int id, DamageRing ring) in later.Rings)
+            {
+                if (Rings.TryGetValue(id, out DamageRing? known))
+                {
+                    known.Absorb(ring);
+                }
+                else
+                {
+                    Rings[id] = ring;
+                }
+            }
+
+            foreach ((int id, int n) in later.Deaths)
+            {
+                Deaths[id] = Deaths.GetValueOrDefault(id) + n;
+            }
+
+            Active += later.Active;
+            if (later.LastPartyHit is { } last && (LastPartyHit is not { } before || last > before))
+            {
+                LastPartyHit = last;
+            }
+
+            if (later.BossReading is { } r && (BossReading is not { } b || r.At > b.At))
+            {
+                BossReading = r;
+            }
+        }
+    }
 
     private sealed class Aggregate
     {
@@ -108,17 +194,17 @@ public sealed class Aion2MeterEngine : IMeterEngine
         public DateTime Last;
         public bool SharesTarget; // yerel oyuncunun vurduğu bir hedefe vurdu (roster yokken parti tahmini)
         public bool Party;        // yerel oyuncu ya da parti üyesi olarak vurdu (atılmaz, detayı hep tutulur)
-        public readonly Dictionary<int, (long Amount, DateTime Last)> BossDamage = new(); // boss hedefi -> bu oyuncunun ona hasarı
+        public readonly Dictionary<int, (long Amount, DateTime Last)> Targets = new(); // hedef -> bu oyuncunun ona hasarı (boss sayılmadan öncesi dahil)
         public AggDetail? Detail;  // yalnız ilk 30 yabancı + yerel + parti
 
-        public void AddBossDamage(int target, long amount, DateTime at, int? fightBoss)
+        public void AddTarget(int target, long amount, DateTime at, int? fightBoss)
         {
-            if (!BossDamage.TryGetValue(target, out var known) && BossDamage.Count >= MaxBossTargets)
+            if (!Targets.TryGetValue(target, out var known) && Targets.Count >= MaxTargets)
             {
                 // en uzun süredir vurulmayan atılır; dövüş boss'u hiç atılmaz
                 int? oldest = null;
                 DateTime oldestAt = DateTime.MaxValue;
-                foreach ((int id, (long _, DateTime last)) in BossDamage)
+                foreach ((int id, (long _, DateTime last)) in Targets)
                 {
                     if (id != fightBoss && last < oldestAt)
                     {
@@ -129,29 +215,29 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
                 if (oldest is int drop)
                 {
-                    BossDamage.Remove(drop);
+                    Targets.Remove(drop);
                 }
             }
 
-            BossDamage[target] = (known.Amount + amount, at > known.Last ? at : known.Last);
+            Targets[target] = (known.Amount + amount, at > known.Last ? at : known.Last);
         }
 
-        /// <summary>Kimlik birleşmesi: <paramref name="other"/>'ın her şeyi buna eklenir.</summary>
-        public void Absorb(Aggregate other, int? fightBoss)
+        /// <summary>Kimlik birleşmesi ya da deneme birleşmesi: <paramref name="other"/>'ın her şeyi buna eklenir (kovaları <paramref name="bucketOffset"/> sn kaydırılır).</summary>
+        public void Absorb(Aggregate other, int? fightBoss, long bucketOffset = 0)
         {
             Total += other.Total;
             First = other.First < First ? other.First : First;
             Last = other.Last > Last ? other.Last : Last;
             SharesTarget |= other.SharesTarget;
             Party |= other.Party;
-            foreach ((int boss, (long amount, DateTime last)) in other.BossDamage)
+            foreach ((int target, (long amount, DateTime last)) in other.Targets)
             {
-                AddBossDamage(boss, amount, last, fightBoss);
+                AddTarget(target, amount, last, fightBoss);
             }
 
             if (other.Detail is { } theirs)
             {
-                (Detail ??= new AggDetail()).Absorb(theirs);
+                (Detail ??= new AggDetail()).Absorb(theirs, bucketOffset);
             }
         }
     }
@@ -193,7 +279,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
             Buckets[(int)index] += amount;
         }
 
-        public void Absorb(AggDetail other)
+        public void Absorb(AggDetail other, long bucketOffset = 0)
         {
             Hits += other.Hits;
             Crits += other.Crits;
@@ -223,7 +309,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 {
                     if (theirs[i] != 0)
                     {
-                        AddToBucket((long)i * other.BucketSeconds, theirs[i]);
+                        AddToBucket(bucketOffset + (long)i * other.BucketSeconds, theirs[i]);
                     }
                 }
             }
@@ -235,13 +321,13 @@ public sealed class Aion2MeterEngine : IMeterEngine
         public long Total, Hits, Crits, MaxHit;
     }
 
-    /// <summary>Bir boss adayına partinin hasarı: dövüş toplamı ve son <see cref="TtkSeconds"/> saniyenin saniyelik kovaları (halka).</summary>
+    /// <summary>Bir hedefe partinin hasarı: deneme toplamı ve son <see cref="TtkSeconds"/> saniyenin saniyelik kovaları (halka).</summary>
     private sealed class DamageRing
     {
         public readonly long[] Amount = new long[TtkSeconds];
         public readonly long[] Second = new long[TtkSeconds];
         public long Total;
-        public DateTime FirstAt = DateTime.MaxValue; // partinin bu bossa ilk / son vuruşu
+        public DateTime FirstAt = DateTime.MaxValue; // partinin bu hedefe ilk / son vuruşu
         public DateTime LastAt = DateTime.MinValue;
 
         public void Add(DateTime at, long amount)
@@ -258,6 +344,30 @@ public sealed class Aion2MeterEngine : IMeterEngine
             }
 
             Amount[slot] += amount;
+        }
+
+        public void Absorb(DamageRing other)
+        {
+            Total += other.Total;
+            FirstAt = other.FirstAt < FirstAt ? other.FirstAt : FirstAt;
+            LastAt = other.LastAt > LastAt ? other.LastAt : LastAt;
+            for (int i = 0; i < TtkSeconds; i++)
+            {
+                if (other.Amount[i] <= 0)
+                {
+                    continue;
+                }
+
+                if (Second[i] == other.Second[i])
+                {
+                    Amount[i] += other.Amount[i];
+                }
+                else if (other.Second[i] > Second[i])
+                {
+                    Second[i] = other.Second[i];
+                    Amount[i] = other.Amount[i];
+                }
+            }
         }
 
         /// <summary>Son 30 sn'deki toplam ve verinin kaç saniyeyi kapsadığı.</summary>
@@ -331,6 +441,8 @@ public sealed class Aion2MeterEngine : IMeterEngine
         source.ZoneChanged += OnZoneChanged;
         source.Entities.LocalIdChanged += MergeIds;
         source.Entities.IdentityMoved += MergeIds;
+        source.Entities.HitPoints.Died += OnDied;
+        source.Entities.BossSpawned += OnBossSpawned;
         lock (_gate)
         {
             if (_disposed)
@@ -338,6 +450,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 return false;
             }
 
+            source.Entities.SetConfiguredLocalName(_configuredName);
             _source = source;
             return true;
         }
@@ -348,6 +461,9 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
     /// <summary>Denetim aracı için: bir bölge değişimini yakalama yolu gibi verir.</summary>
     internal void InjectZone(ZoneChange zone) => OnZoneChanged(zone);
+
+    /// <summary>Denetim aracı için: <see cref="Snapshot"/>, saat yerine verilen anla (sentetik zamanlı senaryolar).</summary>
+    internal MeterSnapshot SnapshotAt(DateTime now) => SnapshotCore(now);
 
     private void OnStatus(EngineState state, string message)
     {
@@ -361,13 +477,26 @@ public sealed class Aion2MeterEngine : IMeterEngine
         _state = state;
     }
 
-    /// <summary>Kayıtlı yerel karakter adı (geçici: henüz kullanılmıyor; Uzman A bağlayacak).</summary>
-    public void YerelAdAyarla(string? ad) { }
+    /// <summary>Kayıtlı yerel karakter adı (ayardan): yerel kimlik kesin bilinmezken bu ada sahip oyuncu yerel sayılır (upstream SetConfiguredLocalName).</summary>
+    public void YerelAdAyarla(string? ad)
+    {
+        lock (_gate)
+        {
+            _configuredName = string.IsNullOrWhiteSpace(ad) ? null : ad.Trim();
+            _source?.Entities.SetConfiguredLocalName(_configuredName);
+            _localCheckedAt = -1_000_000;
+        }
+    }
 
     public void Reset()
     {
         lock (_gate)
         {
+            if (MeterTani.Acik && _cur.Start is not null)
+            {
+                Tani("dövüş bitti: kullanıcı sıfırladı");
+            }
+
             ClearFight();
         }
     }
@@ -375,28 +504,35 @@ public sealed class Aion2MeterEngine : IMeterEngine
     // Called under _gate.
     private void ClearFight()
     {
-        _bySource.Clear();
+        _cur = new Attempt();
+        _held = null;
         _localTargets.Clear();
-        _bossDamage.Clear();
-        _detailedStrangers = 0;
-        _detailThreshold = long.MaxValue;
-        _fightStart = null;
-        _lastPartyHit = null;
         _fightOver = false;
         _deadBoss = null;
         _frozen = null;
         _lastLive = null;
-        SetFightBoss(null);
+        SetFightBoss(null, null);
         _fightEpoch++;
     }
 
     // Called under _gate.
-    private void SetFightBoss(int? id)
+    private void SetFightBoss(int? id, string? why)
     {
         if (_fightBoss != id)
         {
+            if (MeterTani.Acik && why is not null)
+            {
+                Tani($"dövüş boss'u: {Describe(_fightBoss)} -> {Describe(id)} ({why})");
+            }
+
             _fightBoss = id;
             _fightBossWounded = false;
+            _cur.BossReading = null;
+            if (_held is { } held)
+            {
+                held.BossReading = null;
+            }
+
             if (_source is { } source)
             {
                 source.Entities.Pinned = id; // tablo sınırları dövüş boss'unu atmaz
@@ -415,6 +551,11 @@ public sealed class Aion2MeterEngine : IMeterEngine
         {
             // Sonuç bir sonraki parti vuruşuna kadar görünür kalır; iç dövüş durumu temizlenir (bölgenin kimlikleri geçersiz).
             MeterSnapshot? keep = _frozen ?? _lastLive;
+            if (MeterTani.Acik && _cur.Start is not null && !_fightOver)
+            {
+                Tani($"dövüş bitti: bölge değişti ({zone.ZoneId})");
+            }
+
             ClearFight();
             if (keep is not null)
             {
@@ -424,18 +565,40 @@ public sealed class Aion2MeterEngine : IMeterEngine
         }
     }
 
-    // Called under _gate. Upstream IsLocal: IsLocalPlayer(id) || InferLocalPlayer() == id, saniyede bir yenilenir.
+    // Called under _gate. Yerel oyuncu: açık kimlik (oturum çerçevesi / karakter kaydı) varken yalnız o; yoksa kayıtlı adın kimliği; o da
+    // yoksa akıştan tahmin (InferLocalPlayer). Saniyede bir yenilenir.
     private bool IsLocal(Aion2EntityDirectory dir, int id, bool refresh = false)
     {
         long nowMs = Environment.TickCount64;
-        if (refresh || nowMs - _localCheckedAt >= 1000 || (_localId < 0 && _inferredLocal is null))
+        if (refresh || nowMs - _localCheckedAt >= 1000 || _localId is null)
         {
             _localCheckedAt = nowMs;
-            _localId = dir.LocalPlayerId;
-            _inferredLocal = dir.InferLocalPlayer();
+            int explicitId = dir.ExplicitLocalPlayerId;
+            int? byName = explicitId >= 0 ? null : dir.ConfiguredLocalPlayerId;
+            int? local = explicitId >= 0 ? explicitId : byName ?? dir.InferLocalPlayer();
+            string from = explicitId >= 0 ? "açık" : byName is not null ? "ad" : local is not null ? "tahmin" : "yok";
+            if (local != _localId || from != _localSource)
+            {
+                if (MeterTani.Acik)
+                {
+                    Tani($"yerel kimlik: {_localId?.ToString() ?? "-"} -> {local?.ToString() ?? "-"} ({from})");
+                }
+
+                if (_localId is not null)
+                {
+                    _localTargets.Clear(); // önceki "yerel"in hedefleriydi: sözde parti onlara göre kurulmasın
+                    foreach (Aggregate agg in _cur.BySource.Values)
+                    {
+                        agg.SharesTarget = false;
+                    }
+                }
+
+                _localId = local;
+                _localSource = from;
+            }
         }
 
-        return id == _localId || id == _inferredLocal;
+        return id == _localId;
     }
 
     /// <summary>Yakalama işçi iş parçacığında, her çözülen olay için. Sıcak yol: bellek ayırmaz (yeni kaynak/beceri dışında).</summary>
@@ -453,6 +616,12 @@ public sealed class Aion2MeterEngine : IMeterEngine
         {
             bool local = IsLocal(dir, id);
             bool party = local || dir.IsPartyMemberId(id);
+            bool onPlayer = dir.IsKnownPlayer(target);
+            if (party && !onPlayer && (_lastEngaged is not { } engaged || ev.Timestamp > engaged))
+            {
+                _lastEngaged = ev.Timestamp;
+            }
+
             if (local)
             {
                 if (_localTargets.Count >= MaxLocalTargets)
@@ -464,49 +633,38 @@ public sealed class Aion2MeterEngine : IMeterEngine
             }
 
             bool sharesTarget = _localTargets.Contains(target);
-            bool partyHit = party || (sharesTarget && !dir.RosterKnown && dir.IsKnownPlayer(id));
+            // Roster yokken yerel oyuncunun hedefine vuran bilinen oyuncular sözde partidir: dövüşe hasarları yazılır ama dövüş başlatmaz,
+            // donmuş sonucu silmez, dövüşü canlı tutmaz (yan yana kuklada başkası benim kuklama vurunca sonucum gitmesin).
+            bool pseudo = !party && sharesTarget && !dir.RosterKnown && dir.IsKnownPlayer(id);
             if (_fightOver)
             {
                 // Donmuş sonuç: parti dışı vuruşlar ve ölen boss'a geç gelen tikler yeni dövüş başlatmaz.
                 bool lateOnDeadBoss = target == _deadBoss && ev.Timestamp - _deadBossAt < DeadBossGuard && DeadNow(dir, target);
-                if (!partyHit || lateOnDeadBoss)
+                if (!party || lateOnDeadBoss)
                 {
                     return;
                 }
             }
 
-            if (partyHit)
+            if (party)
             {
-                // Ölüm/diriliş dövüşü sıfırlamaz; dövüş boss'u canlı ve yaralıyken boşluk ne kadar uzun olursa olsun dövüş sürer.
-                if (_fightOver || _lastPartyHit is not { } last || (ev.Timestamp - last >= FightGap && !BossHoldsFight(dir, _fightBoss, ev.Timestamp)))
-                {
-                    ClearFight();
-                    _fightStart = ev.Timestamp;
-                    if (local)
-                    {
-                        _localTargets.Add(target);
-                    }
-                }
-
-                if (_lastPartyHit is not { } before || ev.Timestamp > before)
-                {
-                    _lastPartyHit = ev.Timestamp;
-                }
+                PartyHit(dir, ev.Timestamp, target, local);
             }
 
-            if (_fightStart is not { } fightStart)
+            Attempt a = _cur;
+            if (a.Start is not { } fightStart)
             {
                 return; // dövüş partinin ilk vuruşuyla başlar
             }
 
-            if (!_bySource.TryGetValue(id, out Aggregate? agg))
+            if (!a.BySource.TryGetValue(id, out Aggregate? agg))
             {
-                if (_bySource.Count >= MaxSources && !party && !EvictWeakestStranger(ev.Amount))
+                if (a.BySource.Count >= MaxSources && !party && !EvictWeakestStranger(a, ev.Amount))
                 {
                     return; // kalabalık: bu vuruş en zayıf yabancıdan da küçük
                 }
 
-                _bySource[id] = agg = new Aggregate { First = ev.Timestamp, Last = ev.Timestamp };
+                a.BySource[id] = agg = new Aggregate { First = ev.Timestamp, Last = ev.Timestamp };
             }
 
             agg.Party |= party;
@@ -523,13 +681,13 @@ public sealed class Aion2MeterEngine : IMeterEngine
             }
 
             agg.SharesTarget |= sharesTarget;
-            RefreshDetailSet();
-            if (agg.Detail is null && (agg.Party || _detailedStrangers < MaxDetailedStrangers || agg.Total >= _detailThreshold))
+            RefreshDetailSet(a);
+            if (agg.Detail is null && (agg.Party || a.DetailedStrangers < MaxDetailedStrangers || agg.Total >= a.DetailThreshold))
             {
                 agg.Detail = new AggDetail(); // ilk 30'a sonradan giren o andan itibaren detay toplar
                 if (!agg.Party)
                 {
-                    _detailedStrangers++;
+                    a.DetailedStrangers++;
                 }
             }
 
@@ -567,39 +725,186 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 det.AddToBucket((long)(ev.Timestamp - fightStart).TotalSeconds, ev.Amount);
             }
 
-            if (!IsBoss(dir, target))
+            if (onPlayer)
+            {
+                return; // oyuncuya vuruş (PvP): boss hasarına ve halkalara girmez
+            }
+
+            // Her hedef için (canı henüz okunmamış olsa da): hedef sonradan boss sayılınca önceki vuruşlar da BossTotal'a girer.
+            agg.AddTarget(target, ev.Amount, ev.Timestamp, _fightBoss);
+            if (!party && !pseudo)
             {
                 return;
             }
 
-            agg.AddBossDamage(target, ev.Amount, ev.Timestamp, _fightBoss);
-            if (!partyHit)
+            if (!a.Rings.TryGetValue(target, out DamageRing? ring))
             {
-                return;
-            }
-
-            if (!_bossDamage.TryGetValue(target, out DamageRing? ring))
-            {
-                if (_bossDamage.Count >= MaxBossTargets)
+                if (a.Rings.Count >= MaxTargets)
                 {
-                    int drop = _bossDamage.Where(kv => kv.Key != _fightBoss).MinBy(kv => kv.Value.LastAt).Key;
-                    _bossDamage.Remove(drop);
+                    int? drop = null;
+                    DateTime dropAt = DateTime.MaxValue;
+                    foreach ((int candidate, DamageRing r) in a.Rings)
+                    {
+                        if (candidate != _fightBoss && r.LastAt < dropAt)
+                        {
+                            drop = candidate;
+                            dropAt = r.LastAt;
+                        }
+                    }
+
+                    if (drop is int d)
+                    {
+                        a.Rings.Remove(d);
+                    }
                 }
 
-                _bossDamage[target] = ring = new DamageRing();
+                a.Rings[target] = ring = new DamageRing();
             }
 
             ring.Add(ev.Timestamp, ev.Amount);
-            UpdateFightBoss(dir, ev.Timestamp);
+            long nowMs = Environment.TickCount64;
+            if (_fightBoss is null || nowMs - _bossCheckedAt >= 250)
+            {
+                UpdateFightBoss(dir, ev.Timestamp);
+            }
         }
     }
 
+    // Called under _gate. Yerel oyuncu ya da roster'daki parti üyesi vurdu: yeni dövüş / wipe / şüphe kararları ve aktif süre.
+    private void PartyHit(Aion2EntityDirectory dir, DateTime at, int target, bool local)
+    {
+        string? why = null;
+        if (!_fightOver && _cur.Start is not null)
+        {
+            if (_fightBoss is int fb && target != fb && dir.BossNpcIdOf(fb) is int npc && dir.BossNpcIdOf(target) == npc)
+            {
+                why = $"wipe: aynı boss yeni kimlikle vuruldu ({fb} -> {target})";
+            }
+            else if (CheckWipeReading(dir) is { } rule)
+            {
+                why = rule;
+            }
+        }
+
+        Attempt a = _cur;
+        bool gap = a.LastPartyHit is { } last && at - last >= FightGap && !BossHoldsFight(dir, _fightBoss, at);
+        if (why is not null || _fightOver || a.LastPartyHit is null || gap)
+        {
+            if (MeterTani.Acik)
+            {
+                if (why is not null || (gap && !_fightOver))
+                {
+                    Tani($"dövüş bitti: {why ?? $"{FightGap.TotalSeconds:0} sn parti vuruşu yok"}");
+                }
+
+                Tani($"dövüş başladı: {why ?? (_fightOver ? "donmuş sonuçtan sonra ilk parti vuruşu" : gap ? "uzun aradan sonra" : "ilk parti vuruşu")} (hedef {target})");
+            }
+
+            ClearFight();
+            a = _cur;
+            a.Start = at;
+            if (local)
+            {
+                _localTargets.Add(target);
+            }
+        }
+        else if (_held is null && a.LastPartyHit is { } before && at - before >= WipeSuspectGap && _fightBoss is int boss
+            && BossHoldsFight(dir, boss, at) && !(dir.HitPoints.Latest(boss) is { } s && s.At > before + TimeSpan.FromSeconds(1)))
+        {
+            // (iii) Uzun aradan sonra vuruş, taze can okuması yok: boss sıfırlanmış olabilir (sunucu canı yalnız hedef alana gönderir).
+            _held = a;
+            _cur = a = new Attempt { Start = at, BossReading = _held.BossReading };
+            if (MeterTani.Acik)
+            {
+                Tani($"wipe şüphesi: {(at - before).TotalSeconds:0} sn aradan sonra vuruş, boss {boss} için taze can okuması yok (can bilinmiyor)");
+            }
+        }
+
+        if (a.LastPartyHit is { } prev)
+        {
+            if (at > prev)
+            {
+                TimeSpan step = at - prev;
+                if (step <= ActiveGap)
+                {
+                    a.Active += step;
+                }
+
+                a.LastPartyHit = at;
+            }
+        }
+        else
+        {
+            a.LastPartyHit = at;
+        }
+    }
+
+    /// <summary>
+    /// Wipe kural (i): dövüş boss'unun (katalogda ya da zindanda) yeni okuması öncekinden belirgin yüksek. Şüphe varken taze okuma şüpheyi
+    /// çözer (yüksekse bekleyen deneme atılır, değilse birleşir) ve null döner. Wipe ise sebep metni, değilse null. Called under _gate.
+    /// </summary>
+    private string? CheckWipeReading(Aion2EntityDirectory dir)
+    {
+        if (_fightBoss is not int fb || dir.HitPoints.Latest(fb) is not { } sample)
+        {
+            return null;
+        }
+
+        Attempt reference = _held ?? _cur;
+        if (reference.BossReading is not { } prev)
+        {
+            reference.BossReading = _cur.BossReading = sample;
+            return null;
+        }
+
+        if (sample.At <= prev.At)
+        {
+            return null;
+        }
+
+        long max = Aion2BossHp.RealMax(dir, fb) ?? 0;
+        // Şüphede aradan sonraki vuruşlar okumadan önce boss'u zaten indirmiş olabilir: o hasar okumaya geri eklenir (wipe yoksa boss
+        // "önceki - bu hasar" civarında olmalı, wipe varsa "tam can - bu hasar").
+        long since = _held is not null && _cur.Rings.TryGetValue(fb, out DamageRing? side) ? side.Total : 0;
+        bool high = HoldsKind(dir, fb) && max > 0 && sample.Hp + since - prev.Hp >= max * WipeRiseShare && sample.Hp + since >= max * WipeHighShare;
+        if (_held is { } held)
+        {
+            if (high)
+            {
+                // Wipe doğrulandı: aradan önceki deneme kapanır; aradan sonraki vuruşlar zaten yeni denemede.
+                if (MeterTani.Acik)
+                {
+                    Tani($"wipe doğrulandı (şüphe + taze okuma): boss {fb} {prev.Hp:N0} -> {sample.Hp:N0} / {max:N0}; önceki deneme kapandı");
+                }
+
+                _held = null;
+            }
+            else
+            {
+                if (MeterTani.Acik)
+                {
+                    Tani($"wipe değil: boss {fb} taze okuma {sample.Hp:N0} (önce {prev.Hp:N0}); denemeler birleşti");
+                }
+
+                held.Absorb(_cur, _fightBoss);
+                _cur = held;
+                _held = null;
+            }
+
+            _cur.BossReading = sample;
+            return null;
+        }
+
+        _cur.BossReading = sample;
+        return high ? $"wipe: boss {fb} canı {prev.Hp:N0} -> {sample.Hp:N0} / {max:N0} (sıfırlandı)" : null;
+    }
+
     // Called under _gate. Dolu tabloda yeni bir yabancı için en az hasarlı yabancı atılır; yalnız yeni vuruş ondan büyükse (sürekli giriş-çıkış olmasın).
-    private bool EvictWeakestStranger(long incoming)
+    private static bool EvictWeakestStranger(Attempt a, long incoming)
     {
         int? weakest = null;
         long weakestTotal = long.MaxValue;
-        foreach ((int id, Aggregate agg) in _bySource)
+        foreach ((int id, Aggregate agg) in a.BySource)
         {
             if (!agg.Party && agg.Total < weakestTotal)
             {
@@ -613,17 +918,20 @@ public sealed class Aion2MeterEngine : IMeterEngine
             return false;
         }
 
-        if (_bySource[drop].Detail is not null)
+        if (a.BySource[drop].Detail is not null)
         {
-            _detailedStrangers--;
+            a.DetailedStrangers--;
         }
 
-        _bySource.Remove(drop);
+        a.BySource.Remove(drop);
         return true;
     }
 
+    private long _detailCheckedAt = -1_000_000;
+    private readonly List<long> _strangerTotals = new();
+
     // Called under _gate. Saniyede bir: yabancılardan hasarda ilk 30'un eşiği bulunur, ilk 30 dışındakilerin detayı atılır.
-    private void RefreshDetailSet()
+    private void RefreshDetailSet(Attempt a)
     {
         long nowMs = Environment.TickCount64;
         if (nowMs - _detailCheckedAt < 1000)
@@ -633,7 +941,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
         _detailCheckedAt = nowMs;
         _strangerTotals.Clear();
-        foreach (Aggregate agg in _bySource.Values)
+        foreach (Aggregate agg in a.BySource.Values)
         {
             if (!agg.Party)
             {
@@ -643,49 +951,99 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
         if (_strangerTotals.Count <= MaxDetailedStrangers)
         {
-            _detailThreshold = long.MaxValue; // herkes zaten sığıyor (sayaç sınırı yeter)
+            a.DetailThreshold = long.MaxValue; // herkes zaten sığıyor (sayaç sınırı yeter)
             return;
         }
 
         _strangerTotals.Sort();
-        _detailThreshold = _strangerTotals[^MaxDetailedStrangers];
-        foreach (Aggregate agg in _bySource.Values)
+        a.DetailThreshold = _strangerTotals[^MaxDetailedStrangers];
+        foreach (Aggregate agg in a.BySource.Values)
         {
-            if (!agg.Party && agg.Detail is not null && agg.Total < _detailThreshold)
+            if (!agg.Party && agg.Detail is not null && agg.Total < a.DetailThreshold)
             {
                 agg.Detail = null;
-                _detailedStrangers--;
+                a.DetailedStrangers--;
             }
         }
     }
 
-    private readonly List<long> _strangerTotals = new();
-
-    // Called under _gate. Dövüş boss'u ölene, ayrılana ya da sıfırlanana kadar kalır; yoksa / gittiyse partinin en çok hasar verdiği aday olur.
+    /// <summary>
+    /// Dövüş boss'u seçimi. Aday: partinin (ya da sözde partinin) vurduğu, boss-benzeri (katalogda ya da canı 500.000+), gitmemiş ve ölmemiş hedef.
+    /// Öncelik: katalog boss'u, sonra yerel oyuncunun hedefi, sonra son 30 sn'deki parti hasarı. Seçilen boss kalır; değişir: öldüyse (katalog dışıysa
+    /// yakında vurulan başka canlı aday varsa ona), gittiyse, katalogdaki bir aday katalog dışı olanın yerine geçerse ya da aynı sınıftaki bir
+    /// adaya parti açıkça daha çok vuruyorsa (son 30 sn'de <see cref="SwitchFactor"/> katı; yerel hedefse eşitlik yeter). Called under _gate.
+    /// </summary>
     private void UpdateFightBoss(Aion2EntityDirectory dir, DateTime at)
     {
-        if (_fightBoss is int current && !BossGone(dir, current, at))
-        {
-            NoteWound(dir, current);
-            return;
-        }
-
+        _bossCheckedAt = Environment.TickCount64;
+        long second = at.Ticks / TimeSpan.TicksPerSecond;
+        int? marked = dir.LocalTarget?.EntityId;
         int? best = null;
-        long bestTotal = 0;
-        foreach ((int id, DamageRing ring) in _bossDamage)
+        int bestRank = -1;
+        long bestWindow = 0, bestTotal = 0;
+        int? current = _fightBoss;
+        foreach ((int id, DamageRing ring) in _cur.Rings)
         {
-            if (ring.Total > bestTotal && !BossGone(dir, id, at) && !DeadNow(dir, id))
+            if (id == current || !IsBoss(dir, id) || BossGone(dir, id, at) || FightBossDead(dir, id))
+            {
+                continue;
+            }
+
+            int rank = (IsCatalog(dir, id) ? 2 : 0) + (id == marked ? 1 : 0);
+            long window = ring.Window(second).Sum;
+            if (rank > bestRank || (rank == bestRank && (window > bestWindow || (window == bestWindow && ring.Total > bestTotal))))
             {
                 best = id;
+                bestRank = rank;
+                bestWindow = window;
                 bestTotal = ring.Total;
             }
         }
 
-        SetFightBoss(best);
-
-        if (_fightBoss is int chosen)
+        if (current is not int cur)
         {
-            NoteWound(dir, chosen);
+            SetFightBoss(best, "ilk aday");
+            if (_fightBoss is int chosen)
+            {
+                NoteWound(dir, chosen);
+            }
+
+            return;
+        }
+
+        bool curCatalog = IsCatalog(dir, cur);
+        bool curDead = FightBossDead(dir, cur);
+        if (BossGone(dir, cur, at) && !curDead)
+        {
+            SetFightBoss(best, "önceki boss ayrıldı");
+        }
+        else if (curDead)
+        {
+            // Katalog boss'u öldü: dövüş biter (Snapshot). Katalog dışı (mob, kukla, add) öldü: yakında vurulan başka canlı aday varsa ona geçilir.
+            if (!curCatalog && best is int other && _cur.Rings.TryGetValue(other, out DamageRing? o) && at - o.LastAt <= CandidateRecent)
+            {
+                SetFightBoss(other, "katalog dışı aday öldü, parti başka canlı adaya vuruyor");
+            }
+        }
+        else if (best is int other)
+        {
+            bool otherCatalog = IsCatalog(dir, other);
+            long curWindow = _cur.Rings.TryGetValue(cur, out DamageRing? cr) ? cr.Window(second).Sum : 0;
+            if (otherCatalog && !curCatalog)
+            {
+                SetFightBoss(other, "katalog boss'u öncelikli");
+            }
+            else if (otherCatalog == curCatalog && bestWindow > 0
+                && (bestWindow >= SwitchFactor * curWindow || (other == marked && bestWindow >= curWindow)))
+            {
+                SetFightBoss(other, other == marked && bestWindow < SwitchFactor * curWindow
+                    ? "yerel hedef, parti en az o kadar vuruyor" : $"parti açıkça daha çok vuruyor ({bestWindow:N0} / {curWindow:N0})");
+            }
+        }
+
+        if (_fightBoss is int chosenBoss)
+        {
+            NoteWound(dir, chosenBoss);
         }
     }
 
@@ -704,10 +1062,16 @@ public sealed class Aion2MeterEngine : IMeterEngine
         || dir.HitPoints.Latest(id) is not { } sample
         || now - sample.At > BossStale;
 
-    /// <summary>Dövüş boss'u canlı, yerinde ve yaralıysa (tam cana dönmediyse) dövüş boşta kalmakla bitmez.</summary>
-    private static bool BossHoldsFight(Aion2EntityDirectory dir, int? boss, DateTime now)
+    private static bool IsCatalog(Aion2EntityDirectory dir, int id) => dir.BossNpcIdOf(id) is not null;
+
+    /// <summary>Dövüşü tutabilen boss türü: katalogda, ya da zindanda boss-benzeri (kataloğa henüz girmemiş zindan boss'u).</summary>
+    private bool HoldsKind(Aion2EntityDirectory dir, int id) =>
+        IsCatalog(dir, id) || (_source is { } s && Aion2Zones.IsInstance(s.CurrentZoneId) && IsBoss(dir, id));
+
+    /// <summary>Dövüş boss'u (tutan türden) canlı, yerinde ve yaralıysa (tam cana dönmediyse) dövüş boşta kalmakla bitmez.</summary>
+    private bool BossHoldsFight(Aion2EntityDirectory dir, int? boss, DateTime now)
     {
-        if (boss is not int id || dir.RemovalOf(id) is not null || dir.HitPoints.Latest(id) is not { } sample
+        if (boss is not int id || !HoldsKind(dir, id) || dir.RemovalOf(id) is not null || dir.HitPoints.Latest(id) is not { } sample
             || now - sample.At > BossStale || IsDead(dir, id, sample.Hp))
         {
             return false;
@@ -717,10 +1081,15 @@ public sealed class Aion2MeterEngine : IMeterEngine
         return max > 0 && sample.Hp < max * FullHpShare;
     }
 
+    /// <summary>Dövüş boss'u öldü mü: katalog boss'u can okumasıyla (0) ya da kaldırma kaydıyla; katalog dışı hedef (kukla 0'a inip dolabiliyor)
+    /// yalnız sunucunun "öldü" kaldırma kaydıyla.</summary>
+    private static bool FightBossDead(Aion2EntityDirectory dir, int id) =>
+        IsCatalog(dir, id) ? DeadNow(dir, id) : dir.RemovalOf(id) is { Reason: Aion2EntityDirectory.RemovedDead };
+
     /// <summary>Kalan can ÷ son 30 sn'deki parti DPS'i (bossa); 3 sn'den az veri ya da hasar yoksa null. Called under _gate.</summary>
     private TimeSpan? TimeToKill(int boss, long hp, DateTime now)
     {
-        if (!_bossDamage.TryGetValue(boss, out DamageRing? ring))
+        if (!_cur.Rings.TryGetValue(boss, out DamageRing? ring))
         {
             return null;
         }
@@ -735,10 +1104,11 @@ public sealed class Aion2MeterEngine : IMeterEngine
         return TimeSpan.FromSeconds(hp / dps);
     }
 
-    /// <summary>Öfkeye kalan: boss_rage.json süresi − partinin bossa ilk vuruşundan beri geçen (ölüyse son vuruşta donar); ilk vuruş bilinmiyorsa null. Called under _gate.</summary>
+    /// <summary>Öfkeye kalan: boss_rage.json süresi − partinin bu denemede bossa ilk vuruşundan beri geçen (ölüyse son vuruşta donar); ilk vuruş
+    /// bilinmiyorsa null. Called under _gate.</summary>
     private TimeSpan? TimeToRage(Aion2EntityDirectory dir, int boss, bool dead, DateTime now)
     {
-        if (!_bossDamage.TryGetValue(boss, out DamageRing? ring) || ring.FirstAt == DateTime.MaxValue)
+        if (!_cur.Rings.TryGetValue(boss, out DamageRing? ring) || ring.FirstAt == DateTime.MaxValue)
         {
             return null;
         }
@@ -769,7 +1139,7 @@ public sealed class Aion2MeterEngine : IMeterEngine
         int bucketSeconds;
         lock (_gate)
         {
-            if (!_bySource.TryGetValue(id, out Aggregate? agg))
+            if (!_cur.BySource.TryGetValue(id, out Aggregate? agg))
             {
                 return new PlayerDetail(row.Id, row.Name, row.ClassName, row.CombatPower, 0, 0, TimeSpan.Zero, new HitStats(0, 0, 0, 0, 0, 0, 0), Array.Empty<SkillDamage>());
             }
@@ -801,23 +1171,101 @@ public sealed class Aion2MeterEngine : IMeterEngine
     // Called under _gate.
     private void Reattribute(int from, int to)
     {
-        if (from == to || !_bySource.Remove(from, out Aggregate? moved))
+        Reattribute(_cur, from, to);
+        if (_held is { } held)
+        {
+            Reattribute(held, from, to);
+        }
+    }
+
+    private void Reattribute(Attempt a, int from, int to)
+    {
+        if (from != to && a.Deaths.Remove(from, out int deaths))
+        {
+            a.Deaths[to] = a.Deaths.GetValueOrDefault(to) + deaths;
+        }
+
+        if (from == to || !a.BySource.Remove(from, out Aggregate? moved))
         {
             return;
         }
 
-        if (!_bySource.TryGetValue(to, out Aggregate? into))
+        if (!a.BySource.TryGetValue(to, out Aggregate? into))
         {
-            _bySource[to] = moved;
+            a.BySource[to] = moved;
             return;
+        }
+
+        if (moved.Detail is not null && into.Detail is not null && !moved.Party)
+        {
+            a.DetailedStrangers--; // iki detay tek satırda birleşti
         }
 
         into.Absorb(moved, _fightBoss);
     }
 
+    /// <summary>Oyuncu öldü (canı 0'ın üstünden 0'a indi; upstream Combat/Deaths.cs kuralı). Bu denemedeki ölüm sayısına eklenir.</summary>
+    private void OnDied(int id, DateTime at)
+    {
+        if (_source is not { } source)
+        {
+            return;
+        }
+
+        Aion2EntityDirectory dir = source.Entities;
+        lock (_gate)
+        {
+            if (_fightOver || _cur.Start is null)
+            {
+                return;
+            }
+
+            bool own = IsLocal(dir, id) || dir.IsPartyMemberId(id);
+            bool shown = !own && dir.IsKnownPlayer(id) && _cur.BySource.ContainsKey(id) && _cur.Deaths.Count < MaxDeathRows;
+            if (!own && !shown)
+            {
+                return;
+            }
+
+            int n = _cur.Deaths.GetValueOrDefault(id) + 1;
+            _cur.Deaths[id] = n;
+            if (MeterTani.Acik)
+            {
+                Tani($"ölüm: {DisplayName(dir.NameFor(id), id)} [{id}] {n}. kez ({at:HH:mm:ss.fff})");
+            }
+        }
+    }
+
+    /// <summary>Wipe kural (ii): dövüş boss'unun NPC'si yeni bir varlık kimliğiyle doğdu. Deneme kapanır (donmuş sonuç); sonraki parti vuruşu yenisini başlatır.</summary>
+    private void OnBossSpawned(int entityId, int npcId)
+    {
+        if (_source is not { } source)
+        {
+            return;
+        }
+
+        Aion2EntityDirectory dir = source.Entities;
+        lock (_gate)
+        {
+            if (_fightOver || _cur.Start is null || _fightBoss is not int fb || fb == entityId || dir.BossNpcIdOf(fb) != npcId)
+            {
+                return;
+            }
+
+            if (MeterTani.Acik)
+            {
+                Tani($"dövüş bitti: wipe: aynı boss yeni kimlikle doğdu ({fb} -> {entityId})");
+            }
+
+            Freeze(dir, DateTime.Now, Compose(dir, DateTime.Now, over: true));
+        }
+    }
+
     private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss);
 
-    public MeterSnapshot Snapshot()
+    public MeterSnapshot Snapshot() => SnapshotCore(DateTime.Now); // olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime)
+
+    private MeterSnapshot SnapshotCore(DateTime now)
     {
         EngineState state = _state;
         string? message = _message;
@@ -827,7 +1275,6 @@ public sealed class Aion2MeterEngine : IMeterEngine
         }
 
         Aion2EntityDirectory dir = source.Entities;
-        DateTime now = DateTime.Now; // olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime)
         lock (_gate)
         {
             // Sahibi sonradan bulunan çağrıların hasarı sahibine geçer (upstream MainWindow DrainResolvedOwners).
@@ -836,9 +1283,11 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 Reattribute(summon, owner);
             }
 
+            bool fighting = _lastEngaged is { } engaged && now - engaged <= CombatWindow;
+            string? ownName = dir.LearnedLocalName;
             if (_frozen is { } frozen)
             {
-                return frozen with { State = state, Message = message };
+                return frozen with { State = state, Message = message, Savasta = fighting, YerelAd = ownName };
             }
 
             if (_fightBoss is not null)
@@ -846,37 +1295,31 @@ public sealed class Aion2MeterEngine : IMeterEngine
                 UpdateFightBoss(dir, now);
             }
 
-            BossHp? boss = BuildBoss(dir, now);
-            int? bossId = boss is null ? null : (int)boss.Id;
-            var rows = new List<Row>(_bySource.Count);
-            foreach ((int id, Aggregate agg) in _bySource)
+            string? why = null;
+            if (_cur.Start is not null)
             {
-                rows.Add(new Row(id, agg.Total, agg.SharesTarget, bossId is int b ? agg.BossDamage.GetValueOrDefault(b).Amount : 0,
-                    _fightBoss is int f && agg.BossDamage.TryGetValue(f, out var onFightBoss) && onFightBoss.Amount > 0));
+                TimeSpan sinceHit = _cur.LastPartyHit is { } lastHit ? now - lastHit : TimeSpan.Zero;
+                bool fightBossDead = _fightBoss is int fb && FightBossDead(dir, fb);
+                bool fullWipe = !fightBossDead && _fightBossWounded && _fightBoss is int wb && HoldsKind(dir, wb) && dir.HitPoints.Latest(wb)?.Hp is long whp
+                    && Aion2BossHp.RealMax(dir, wb) is long wmax && wmax > 0 && whp >= wmax * FullHpShare && sinceHit >= WipeIdle;
+                why = fightBossDead ? $"boss öldü ({_fightBoss})"
+                    : CheckWipeReading(dir) is { } rule ? rule
+                    : fullWipe ? $"wipe: boss tam cana döndü, {WipeIdle.TotalSeconds:0} sn parti vuruşu yok"
+                    : !BossHoldsFight(dir, _fightBoss, now) && sinceHit >= FightGap ? $"{FightGap.TotalSeconds:0} sn parti vuruşu yok"
+                    : null;
             }
 
-            TimeSpan sinceHit = _lastPartyHit is { } lastHit ? now - lastHit : TimeSpan.Zero;
-            bool fightBossDead = _fightBoss is int fb && DeadNow(dir, fb);
-            bool wipe = !fightBossDead && _fightBossWounded && _fightBoss is int wb && dir.HitPoints.Latest(wb)?.Hp is long whp
-                && Aion2BossHp.RealMax(dir, wb) is long wmax && wmax > 0 && whp >= wmax * FullHpShare && sinceHit >= WipeIdle;
-            bool idle = !BossHoldsFight(dir, _fightBoss, now) && sinceHit >= FightGap;
-            bool over = _fightStart is not null && (fightBossDead || wipe || idle);
-            TimeSpan duration = _fightStart is not { } start || _lastPartyHit is not { } last ? TimeSpan.Zero
-                : !over && now - last <= IdleAfter ? now - start : last - start;
-            if (duration < TimeSpan.Zero)
+            MeterSnapshot snapshot = Compose(dir, now, over: why is not null) with { State = state, Message = message, Savasta = fighting, YerelAd = ownName };
+            if (why is not null)
             {
-                duration = TimeSpan.Zero;
-            }
+                if (MeterTani.Acik)
+                {
+                    Tani($"dövüş bitti: {why}");
+                }
 
-            var snapshot = new MeterSnapshot(state, message, BuildPlayers(dir, rows, duration), boss, duration, over);
-            if (over)
-            {
-                _fightOver = true;
-                _deadBoss = fightBossDead ? _fightBoss : null;
-                _deadBossAt = _lastPartyHit ?? now;
-                _frozen = snapshot;
+                Freeze(dir, now, snapshot);
             }
-            else if (rows.Count > 0)
+            else if (snapshot.Players.Count > 0)
             {
                 _lastLive = snapshot;
             }
@@ -885,11 +1328,39 @@ public sealed class Aion2MeterEngine : IMeterEngine
         }
     }
 
+    // Called under _gate. Deneme kapanır: görüntü yeni dövüşün ilk parti vuruşuna kadar donar.
+    private void Freeze(Aion2EntityDirectory dir, DateTime now, MeterSnapshot snapshot)
+    {
+        bool fightBossDead = _fightBoss is int fb && FightBossDead(dir, fb);
+        _fightOver = true;
+        _held = null;
+        _deadBoss = fightBossDead ? _fightBoss : null;
+        _deadBossAt = _cur.LastPartyHit ?? now;
+        _frozen = snapshot;
+    }
+
+    // Called under _gate. Canlı denemenin görüntüsü (State/Message/Savasta/YerelAd çağıran tarafından doldurulur).
+    private MeterSnapshot Compose(Aion2EntityDirectory dir, DateTime now, bool over)
+    {
+        BossHp? boss = BuildBoss(dir, now);
+        int? bossId = boss is null ? null : (int)boss.Id;
+        var rows = new List<Row>(_cur.BySource.Count);
+        foreach ((int id, Aggregate agg) in _cur.BySource)
+        {
+            rows.Add(new Row(id, agg.Total, agg.SharesTarget, bossId is int b ? agg.Targets.GetValueOrDefault(b).Amount : 0,
+                _fightBoss is int f && agg.Targets.TryGetValue(f, out var onFightBoss) && onFightBoss.Amount > 0));
+        }
+
+        // Aktif süre: uzun boşluklar (ölüm/diriliş, koşma) sayılmaz; DPS = hasar ÷ aktif süre.
+        TimeSpan duration = _cur.Start is null ? TimeSpan.Zero : _cur.Active;
+        return new MeterSnapshot(_state, _message, BuildPlayers(dir, rows, duration), boss, duration, over);
+    }
+
     // Called under _gate.
     private IReadOnlyList<PlayerDamage> BuildPlayers(Aion2EntityDirectory dir, List<Row> rows, TimeSpan fightDuration)
     {
         bool rosterKnown = dir.RosterKnown;
-        double seconds = Math.Max(1.0, fightDuration.TotalSeconds); // herkes için dövüş süresi (ölüyken DPS düşer, oyun içi ölçer gibi)
+        double seconds = Math.Max(1.0, fightDuration.TotalSeconds); // herkes için aynı aktif süre (ölüyken DPS düşer, oyun içi ölçer gibi)
         var byId = new Dictionary<int, PlayerDamage>();
         var pseudo = new List<Row>();
         IsLocal(dir, 0, refresh: true);
@@ -945,13 +1416,15 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
             int rowId = known ?? SyntheticId(name);
             bool local = known is int k ? IsLocal(dir, k) : name == dir.LocalCharacter?.Name;
-            byId[rowId] = new PlayerDamage(rowId, name, 0, 0, local, (known is int c ? dir.ClassOf(c) : null) ?? dir.PartyClassOf(name), dir.CombatPowerOf(name));
+            byId[rowId] = new PlayerDamage(rowId, name, 0, 0, local, (known is int c ? dir.ClassOf(c) : null) ?? dir.PartyClassOf(name), dir.CombatPowerOf(name),
+                Olum: known is int dead ? _cur.Deaths.GetValueOrDefault(dead) : 0);
         }
 
         // Solo, karakter kaydı henüz gelmemişken: çıkarılan yerel oyuncu.
-        if (byId.Count == 0 && dir.LocalPlayerId is >= 0 and var localId && dir.NameFor(localId) is string localName)
+        if (byId.Count == 0 && _localId is int localId && dir.NameFor(localId) is string localName)
         {
-            byId[localId] = new PlayerDamage(localId, DisplayName(localName, localId), 0, 0, true, dir.ClassOf(localId), dir.CombatPowerOf(localName));
+            byId[localId] = new PlayerDamage(localId, DisplayName(localName, localId), 0, 0, true, dir.ClassOf(localId), dir.CombatPowerOf(localName),
+                Olum: _cur.Deaths.GetValueOrDefault(localId));
         }
 
         var list = new List<PlayerDamage>(byId.Values);
@@ -962,16 +1435,17 @@ public sealed class Aion2MeterEngine : IMeterEngine
         return list;
     }
 
-    private static PlayerDamage Player(Aion2EntityDirectory dir, Row row, bool local, double seconds)
+    private PlayerDamage Player(Aion2EntityDirectory dir, Row row, bool local, double seconds)
     {
         string name = DisplayName(dir.NameFor(row.Id), row.Id);
-        return new PlayerDamage(row.Id, name, row.Total, row.Total / seconds, local, dir.ClassOf(row.Id) ?? dir.PartyClassOf(name), dir.CombatPowerOf(name), row.BossDamage / seconds);
+        return new PlayerDamage(row.Id, name, row.Total, row.Total / seconds, local, dir.ClassOf(row.Id) ?? dir.PartyClassOf(name), dir.CombatPowerOf(name),
+            row.BossDamage / seconds, row.BossDamage, _cur.Deaths.GetValueOrDefault(row.Id));
     }
 
     /// <summary>
     /// Gösterilen boss: dövüş boss'u varsa ve gitmediyse o (ölüyse Dead = true). Yoksa upstream CombatOverlayData.BossHp (Ui/CombatOverlay.cs):
     /// kendi hedefi boss ise o; yoksa 15 sn içinde vurulan son hedef boss ise o; yoksa en son büyü başlatan boss; hiçbiri yoksa son boss 15 sn
-    /// tutulur (canı > 0 ve aynı bölgeyse). Called under _gate.
+    /// tutulur (canı > 0 ve aynı bölgeyse). Wipe şüphesinde can bilinmiyor (son bilinen can, kalan süre yok). Called under _gate.
     /// </summary>
     private BossHp? BuildBoss(Aion2EntityDirectory dir, DateTime now)
     {
@@ -983,10 +1457,15 @@ public sealed class Aion2MeterEngine : IMeterEngine
 
         long max = Aion2BossHp.RealMax(dir, id) ?? 0;
         long current = max > 0 ? Math.Min(hp, max) : hp;
-        if (DeadNow(dir, id))
+        if (id == _fightBoss ? FightBossDead(dir, id) : DeadNow(dir, id))
         {
             _lastBoss = null; // upstream: ölü boss tutulmaz
             return new BossHp(id, BossName(dir, id), current, max, true, null, TimeToRage(dir, id, true, now));
+        }
+
+        if (_held is not null && id == _fightBoss)
+        {
+            return new BossHp(id, BossName(dir, id), current, max, false, null, TimeToRage(dir, id, false, now), CanBilinmiyor: true);
         }
 
         return new BossHp(id, BossName(dir, id), current, max, false, TimeToKill(id, current, now), TimeToRage(dir, id, false, now));
@@ -1042,6 +1521,22 @@ public sealed class Aion2MeterEngine : IMeterEngine
         name is null ? $"Oyuncu #{id}"
         : name.StartsWith("Player #", StringComparison.Ordinal) ? "Oyuncu #" + name["Player #".Length..]
         : name;
+
+    private string Describe(int? id) =>
+        id is not int e ? "-" : _source?.Entities.BossNpcIdOf(e) is int npc ? $"{e} ({Aion2BossCatalog.Find(npc)?.Name ?? npc.ToString()})" : e.ToString();
+
+    /// <summary>Tanı satırı: zaman damgalı, tek satır. Çağıran önce MeterTani.Acik'a bakar. Kayıt hatası motoru durdurmaz.</summary>
+    private static void Tani(string line)
+    {
+        try
+        {
+            MeterTani.Yaz?.Invoke($"{DateTime.Now:HH:mm:ss.fff} {line}");
+        }
+        catch (Exception)
+        {
+            // kayıt yazılamadı: ölçer çalışmaya devam eder
+        }
+    }
 
     /// <summary>Kimliği henüz bilinmeyen parti üyesi için isimden türetilen kararlı negatif kimlik (FNV-1a).</summary>
     private static int SyntheticId(string name)
