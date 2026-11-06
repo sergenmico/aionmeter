@@ -37,9 +37,19 @@ public sealed class NpcapCaptureService : IDisposable
     // The capture threads only parse and enqueue; decoding, the ring buffer and the debug file run on
     // one worker. Before this, all of that ran inside the Npcap callback, so a burst (a world boss)
     // overflowed the driver's buffer and packets were lost.
-    // Değiştirildi: düşük RAM için kuyruk 400.000 -> 20.000 parça, çekirdek tamponu 32 MB -> 4 MB.
+    // Değiştirildi: düşük RAM için kuyruk 400.000 -> 20.000 parça, çekirdek tamponu 32 MB -> 16 MB (sürücü belleği; 4 MB'ta dünya boss'u
+    // patlamalarında ps_drop görülebiliyordu).
     private const int MaxQueued = 20_000;
-    private const int KernelBufferBytes = 4 * 1024 * 1024;
+    private const int KernelBufferBytes = 16 * 1024 * 1024;
+
+    /// <summary>Değiştirildi (eklendi): kart seçilemeyip hepsi dinlenirken kart başına tampon (16 MB x kart sayısı olmasın).</summary>
+    private const int KernelBufferBytesEach = 4 * 1024 * 1024;
+
+    /// <summary>Değiştirildi (eklendi): işçi en çok bu aralıkla <see cref="OnTick"/> çağırır (parça gelmese de; TCP boşluk süresi için).</summary>
+    private const int TickMs = 100;
+
+    /// <summary>Değiştirildi (eklendi): işçi iş parçacığında, parça gelmese de ~100 ms'de bir (yerel saat).</summary>
+    public Action<DateTime>? OnTick { get; init; }
     private readonly System.Collections.Concurrent.BlockingCollection<TcpSegment> _queue = new(MaxQueued);
     private Thread? _worker;
     private long _dropped;
@@ -106,7 +116,17 @@ public sealed class NpcapCaptureService : IDisposable
                 // skipped rather than aborting the whole capture (VPN adapters do this).
                 try
                 {
-                    device.Open(new DeviceConfiguration { ReadTimeout = 250, Mode = DeviceModes.None, KernelBufferSize = KernelBufferBytes });
+                    // Değiştirildi: Immediate + MaxResponsiveness - sürücü paketi tampon dolmasını ya da okuma süresini beklemeden verir (gecikme düşer).
+                    var config = new DeviceConfiguration
+                    {
+                        ReadTimeout = 100,
+                        Mode = DeviceModes.MaxResponsiveness,
+                        Immediate = true,
+                        KernelBufferSize = selected.Count > 1 ? KernelBufferBytesEach : KernelBufferBytes,
+                    };
+                    // Desteklenmeyen bir ayar (eski sürücü) aygıtı açılmaz bırakmasın: ayar atlanır, yakalama varsayılanla sürer.
+                    config.ConfigurationFailed += (_, _) => { };
+                    device.Open(config);
                     device.Filter = Filter;
                     device.OnPacketArrival += OnPacketArrival;
                     device.StartCapture();
@@ -308,18 +328,58 @@ public sealed class NpcapCaptureService : IDisposable
         _onStatus(EngineState.WaitingGame, "Bilinen portlarda oyun trafiği yok - iki dakika boyunca diğer TCP portlarında aranıyor.");
     }
 
+    /// <summary>Değiştirildi (eklendi): açık aygıtların pcap sayaçlarının toplamı (alınan, ps_drop = çekirdek tamponu taşması, ps_ifdrop).</summary>
+    public (long Received, long Dropped, long InterfaceDropped) KernelStatistics()
+    {
+        long received = 0, dropped = 0, ifDropped = 0;
+        lock (_devices)
+        {
+            foreach (ILiveDevice device in _devices)
+            {
+                try
+                {
+                    if (device.Statistics is { } stats)
+                    {
+                        received += stats.ReceivedPackets;
+                        dropped += stats.DroppedPackets;
+                        ifDropped += stats.InterfaceDroppedPackets;
+                    }
+                }
+                catch (Exception)
+                {
+                    // aygıt gitti ya da sayaç desteklenmiyor
+                }
+            }
+        }
+
+        return (received, dropped, ifDropped);
+    }
+
     private Thread StartWorker()
     {
         var thread = new Thread(() =>
         {
-            foreach (TcpSegment segment in _queue.GetConsumingEnumerable())
+            // Değiştirildi: GetConsumingEnumerable yerine zaman aşımlı TryTake; boşta da OnTick çağrılır.
+            long lastTick = Environment.TickCount64;
+            while (!_queue.IsCompleted)
             {
                 try
                 {
-                    if (segment.Payload.Length > 0)
+                    if (_queue.TryTake(out TcpSegment? segment, TickMs) && segment.Payload.Length > 0)
                     {
                         _onSegment(segment);
                     }
+
+                    long nowMs = Environment.TickCount64;
+                    if (OnTick is { } tick && nowMs - lastTick >= TickMs)
+                    {
+                        lastTick = nowMs;
+                        tick(DateTime.Now);
+                    }
+                }
+                catch (InvalidOperationException) when (_queue.IsCompleted)
+                {
+                    break;
                 }
                 catch (Exception ex)
                 {
