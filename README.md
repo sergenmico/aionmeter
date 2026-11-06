@@ -33,7 +33,7 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
 Tepsi menüsünde **Ayarlar…**: boyut (%70–%125), saydamlık (kaydırırken canlı görünür), savaş dışında davranış, öfke uyarısı sesi, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
-**Savaş dışında** (Ayarlar): bir canavara vurunca overlay tam görünür; savaş bitince ~8 sn sonra `Soluk` (varsayılan), `Gizle` ya da `Hep görünür`.
+**Savaş dışında** (Ayarlar): bir canavara vurunca overlay tam görünür; savaş bitince ~8 sn sonra `Soluk` (varsayılan), `Gizle` ya da `Hep görünür`. Kilit açıkken de geçerlidir; fareyi overlay'in üstüne (`Gizle`'de eski yerine) getirince tam görünür, çekince ~1 sn sonra kurala döner. Kilitliyken `Alt` basılı tutup üstüne gel.
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapatılabilir).
 Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da Ayarlar'dan "Çeviri modeli: İndir").
 

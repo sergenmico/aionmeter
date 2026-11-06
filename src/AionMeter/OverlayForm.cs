@@ -345,7 +345,8 @@ internal sealed class OverlayForm : Form
     private bool TamGorunmeli()
     {
         if (_ayarlarFormu is not null) return true;                 // ayar yaparken nasıl görüneceği görünsün
-        if (!_kilitli || _altUstunde) return true;                  // konumlandırma / Alt ile göz atma
+        if (_altUstunde) return true;                               // kilitliyken Alt ile göz atma
+        if (!_kilitli && (_fareUstunde || _surukle)) return true;   // kilitsiz: fare üstündeyken / sürüklerken
         if (_sabit && _detay is { Visible: true }) return true;     // sabitlenmiş detay paneli
         if (_kukla.Etkin) return true;                              // kukla testi sürerken
         if (_kukla.Durum == KuklaTesti.Hal.Sonuc && DateTime.UtcNow - _kukla.SonucZamani < KartTamGorunur)
@@ -605,6 +606,7 @@ internal sealed class OverlayForm : Form
         {
             _tikSayaci++;
             if (_tikSayaci == 6) GC.Collect(); // açılıştan ~3 sn sonra bir kez: başlangıç çöplerini bırak
+            FareYokla();
             GorunurlukUygula();
             AltZamanlayiciGuncelle();
             if (!_sertGorunur) return; // gizliyken motor okunmaz, çizilmez
@@ -1965,6 +1967,13 @@ internal sealed class OverlayForm : Form
         {
             SaatUstundeAyarla(e.Location);
             Cursor = KenardaMi(e.X) ? Cursors.SizeWE : TiklanirAlan(e.Location) ? Cursors.Hand : Cursors.SizeAll;
+            if (!_fareUstunde || _fareCikis != DateTime.MinValue)
+            {
+                // Kilitsiz ve savaş dışında soluk: fare gelince hemen tam görünür.
+                _fareUstunde = true;
+                _fareCikis = DateTime.MinValue;
+                GorunurlukUygula();
+            }
             return;
         }
         var p = Cursor.Position;
@@ -2001,6 +2010,42 @@ internal sealed class OverlayForm : Form
     {
         base.OnMouseLeave(e);
         SaatUstundeAyarla(new Point(-1, -1));
+        if (_fareUstunde && _fareCikis == DateTime.MinValue) _fareCikis = DateTime.UtcNow; // ~1 sn sonra kurala dön
+    }
+
+    // Kilitsizken savaş dışı kuralı da geçerli; fare overlay'in (ya da açık detay panelinin) üstündeyken tam görünür.
+    private bool _fareUstunde;
+    private DateTime _fareCikis = DateTime.MinValue;
+    private static readonly TimeSpan FareCikisGecikmesi = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Ana zamanlayıcıdan (2 Hz) imleç yoklaması, sadece kilitsizken: "Gizle"de pencere gizliyken fare olayı gelmez,
+    /// imleç overlay'in kayıtlı sınırlarına girince yeniden görünür olsun. Çıkınca ~1 sn sonra kurala döner.
+    /// </summary>
+    private void FareYokla()
+    {
+        if (_kilitli)
+        {
+            _fareUstunde = false;
+            _fareCikis = DateTime.MinValue;
+            return;
+        }
+        var p = Cursor.Position;
+        bool ust = Bounds.Contains(p) || (_detay is { Visible: true } && _detay.Bounds.Contains(p));
+        if (ust)
+        {
+            _fareUstunde = true;
+            _fareCikis = DateTime.MinValue;
+        }
+        else if (_fareUstunde)
+        {
+            if (_fareCikis == DateTime.MinValue) _fareCikis = DateTime.UtcNow;
+            else if (DateTime.UtcNow - _fareCikis >= FareCikisGecikmesi)
+            {
+                _fareUstunde = false;
+                _fareCikis = DateTime.MinValue;
+            }
+        }
     }
 
     /// <summary>Saat ve kukla bloğu/kartı tıklanabilir (kilitsizken el imleci).</summary>
@@ -2295,7 +2340,9 @@ internal sealed class OverlayForm : Form
             _alfa = -1;
             AlfaUygula(Math.Max(0, a)); // stil değişiminden sonra katman opaklığını yeniden uygula
         }
-        _sonSavas = _kilitli ? DateTime.UtcNow : _sonSavas; // kilitleyince hemen soluklaşmasın: 8 sn tam görünür
+        _sonSavas = DateTime.UtcNow; // kilitleyince / kilidi açınca hemen soluklaşmasın: 8 sn tam görünür
+        _fareUstunde = false;
+        _fareCikis = DateTime.MinValue;
         Cursor = Cursors.Default;
         AltZamanlayiciGuncelle(); // kilitsizken Alt yoklaması durur
         TepsiGuncelle();
