@@ -212,6 +212,8 @@ internal sealed class DemoEngine : IMeterEngine
         lock (_kilit) _saat.Start();
     }
 
+    public void YerelAdAyarla(string? ad) { }
+
     public void Reset()
     {
         lock (_kilit)
@@ -346,5 +348,6 @@ internal sealed class HataliMotor(string mesaj) : IMeterEngine
     public MeterSnapshot Snapshot() => _anlik;
     public PlayerDetail? Detail(long playerId) => null;
     public void Reset() { }
+    public void YerelAdAyarla(string? ad) { }
     public void Dispose() { }
 }
