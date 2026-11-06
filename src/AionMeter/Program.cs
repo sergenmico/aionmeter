@@ -93,6 +93,7 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
         var ayar = Ayarlar.Yukle();
+        if (ayar.Tani) TaniKaydi.Baslat(Ayarlar.Klasor); // gizli: ayarlar.ini'de elle "Tani=1"
 
         // Güncelleme: kalan AionMeter.old.exe / geçici klasörler arka planda silinir; sonra (gerekirse) kontrol.
         Guncelleyici.Temizle(guncellendi);
@@ -119,12 +120,22 @@ internal static class Program
         bool demo = demoIstendi || EngineFactory is null;
         if (!demo) NpcapSetup.GerekirseKur(); // gerçek motor varsa: yakalama sürücüsünü ilk açılışta hallet
 
-        using IMeterEngine motor = MotorOlustur(demo);
-        using (var form = new OverlayForm(motor, ayar, demo) { AcilisBildirimi = bildirim })
+        try
         {
-            Application.Run(form);
+            using IMeterEngine motor = MotorOlustur(demo);
+            // Kayıtlı kendi karakter adın: motor "ben kimim" tahmini yerine bunu kullanır (Start'tan önce).
+            try { motor.YerelAdAyarla(ayar.YerelAd); }
+            catch (Exception ex) { HataLog.Yaz("Yerel ad motora verilemedi", ex); }
+            using (var form = new OverlayForm(motor, ayar, demo) { AcilisBildirimi = bildirim, Argumanlar = args })
+            {
+                Application.Run(form);
+            }
+            return 0;
         }
-        return 0;
+        finally
+        {
+            TaniKaydi.Kapat();
+        }
     }
 
     private static IMeterEngine MotorOlustur(bool demo)

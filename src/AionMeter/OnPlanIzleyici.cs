@@ -23,13 +23,18 @@ internal sealed class OnPlanIzleyici
         Native.GetWindowThreadProcessId(hwnd, out uint pid);
         if (pid == 0) return _sonSonuc;
         if (pid == _kendiPid) return true;     // overlay, detay paneli ya da tepsi menüsü
-        if (!_ilk && pid == _sonPid) return _sonSonuc;
-
-        _ilk = false;
-        _sonPid = pid;
-        _sonSonuc = SurecIzinli(pid);
+        if (_ilk || pid != _sonPid)
+        {
+            _ilk = false;
+            _sonPid = pid;
+            _sonSonuc = SurecIzinli(pid);
+        }
+        if (_sonSonuc) SonOyunPenceresi = hwnd; // ayarlar penceresi kapanınca odak buraya döner
         return _sonSonuc;
     }
+
+    /// <summary>En son önde görülen oyun penceresi (bizim pencerelerimiz hariç); bilinmiyorsa 0.</summary>
+    public IntPtr SonOyunPenceresi { get; private set; }
 
     private static bool SurecIzinli(uint pid)
     {

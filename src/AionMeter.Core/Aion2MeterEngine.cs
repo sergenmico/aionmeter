@@ -361,6 +361,9 @@ public sealed class Aion2MeterEngine : IMeterEngine
         _state = state;
     }
 
+    /// <summary>Kayıtlı yerel karakter adı (geçici: henüz kullanılmıyor; Uzman A bağlayacak).</summary>
+    public void YerelAdAyarla(string? ad) { }
+
     public void Reset()
     {
         lock (_gate)

@@ -19,6 +19,7 @@ internal sealed class DemoEngine : IMeterEngine
         public string? Sinif;
         public int? Cp;
         public double SessizSure; // dövüşün ilk bu kadar saniyesinde hasar vermez (zindanda bekleyen üye)
+        public double[] OlumAnlari = Array.Empty<double>(); // dövüşün bu saniyelerinde ölür (ölüm göstergesi görünsün)
         public double Toplam;
         public double BossToplam;                      // sadece bossa vurulan kısım
         public readonly List<long> Kovalar = new();    // saniye başına hasar (DPS grafiği)
@@ -56,8 +57,8 @@ internal sealed class DemoEngine : IMeterEngine
         new() { Id = 1, Ad = "Kaelith", TemelDps = 82_000, Yerel = true, Sinif = "Sorcerer", Cp = 752_340 },
         new() { Id = 2, Ad = "Vorn", TemelDps = 96_000, Yerel = false, Sinif = "Gladiator", Cp = 1_184_200 },
         new() { Id = 3, Ad = "Seraphine", TemelDps = 74_000, Yerel = false, Sinif = "Spiritmaster", Cp = 968_515 },
-        new() { Id = 4, Ad = "Draxis", TemelDps = 61_000, Yerel = false, Sinif = "Assassin", Cp = 611_090, SessizSure = 10 },
-        new() { Id = 5, Ad = "Lunea", TemelDps = 55_000, Yerel = false, Sinif = "Cleric", Cp = 534_870 },
+        new() { Id = 4, Ad = "Draxis", TemelDps = 61_000, Yerel = false, Sinif = "Assassin", Cp = 611_090, SessizSure = 10, OlumAnlari = new[] { 22.0 } },
+        new() { Id = 5, Ad = "Lunea", TemelDps = 55_000, Yerel = false, Sinif = "Cleric", Cp = 534_870, OlumAnlari = new[] { 30.0, 55.0 } },
     };
 
     private readonly Oyuncu[] _herkes;   // parti + yabancılar (dünya bossu evresi)
@@ -115,6 +116,7 @@ internal sealed class DemoEngine : IMeterEngine
             {
                 Id = 100 + i, Ad = YabanciAdlari[i], TemelDps = YabanciDpsleri[i], Yerel = false,
                 Sinif = Siniflar[(i * 3 + 1) % Siniflar.Length], Cp = 300_000 + rnd.Next(0, 1_000_001),
+                OlumAnlari = i % 7 == 3 ? new[] { 15.0 + i } : Array.Empty<double>(),
             };
         }
         _herkes = new Oyuncu[_oyuncular.Length + yabancilar.Length];
@@ -212,6 +214,16 @@ internal sealed class DemoEngine : IMeterEngine
         lock (_kilit) _saat.Start();
     }
 
+    /// <summary>Kayıtlı ad verildiyse demodaki kendi karakterin o adı alır (ayar → motor → Snapshot.YerelAd yolu görünsün).</summary>
+    public void YerelAdAyarla(string? ad)
+    {
+        lock (_kilit)
+        {
+            if (string.IsNullOrWhiteSpace(ad)) return;
+            foreach (var o in _oyuncular) if (o.Yerel) o.Ad = ad.Trim();
+        }
+    }
+
     public void Reset()
     {
         lock (_kilit)
@@ -238,22 +250,31 @@ internal sealed class DemoEngine : IMeterEngine
             double sn = Math.Max(1.0, sure.TotalSeconds);
 
             var liste = new List<PlayerDamage>(_aktif.Length);
+            string? yerelAd = null;
             foreach (var o in _aktif)
             {
                 long toplam = (long)o.Toplam;
-                liste.Add(new PlayerDamage(o.Id, o.Ad, toplam, toplam / sn, o.Yerel, o.Sinif, o.Cp, o.BossToplam / sn));
+                int olum = 0;
+                foreach (double an in o.OlumAnlari) if (sure.TotalSeconds >= an) olum++;
+                liste.Add(new PlayerDamage(o.Id, o.Ad, toplam, toplam / sn, o.Yerel, o.Sinif, o.Cp, o.BossToplam / sn,
+                    (long)o.BossToplam, olum));
+                if (o.Yerel) yerelAd = o.Ad;
             }
             liste.Sort(static (a, b) => b.Total.CompareTo(a.Total));
 
             // Kalan süre tahmini: kalan can ÷ partinin bossa ortalama DPS'i (ilk 3 sn tahmin yok)
             double bossaToplam = 0;
             foreach (var o in _aktif) bossaToplam += o.BossToplam;
+            // Dünya bossunda 18–24. saniyeler: can okuması yok (wipe şüphesi) → overlay "?" gösterir.
+            bool canBilinmiyor = !_bossOldu && _dovusNo % 2 == 1 && sure.TotalSeconds is >= 18 and < 24;
             TimeSpan? ttk = null;
-            if (!_bossOldu && sure.TotalSeconds >= 3 && bossaToplam > 0)
+            if (!_bossOldu && !canBilinmiyor && sure.TotalSeconds >= 3 && bossaToplam > 0)
                 ttk = TimeSpan.FromSeconds(_bossCan / (bossaToplam / sure.TotalSeconds));
             var ofke = TimeSpan.FromSeconds(_bossOfke - sure.TotalSeconds);
-            var boss = new BossHp(_bossId, _bossAd, _bossCan, _bossMax, _bossOldu, ttk, ofke);
-            return new MeterSnapshot(EngineState.Connected, null, liste, boss, sure, FightOver: _bossOldu);
+            var boss = new BossHp(_bossId, _bossAd, _bossCan, _bossMax, _bossOldu, ttk, ofke, canBilinmiyor);
+            // Savaşta: boss ölene dek. Ölümden sonraki ~10 sn'lik donmuş sonuçta overlay ~8 sn sonra soluklaşır.
+            return new MeterSnapshot(EngineState.Connected, null, liste, boss, sure, FightOver: _bossOldu,
+                Savasta: !_bossOldu, YerelAd: yerelAd);
         }
     }
 
@@ -346,5 +367,6 @@ internal sealed class HataliMotor(string mesaj) : IMeterEngine
     public MeterSnapshot Snapshot() => _anlik;
     public PlayerDetail? Detail(long playerId) => null;
     public void Reset() { }
+    public void YerelAdAyarla(string? ad) { }
     public void Dispose() { }
 }
