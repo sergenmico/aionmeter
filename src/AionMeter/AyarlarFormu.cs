@@ -28,6 +28,7 @@ internal sealed class AyarlarFormu : Form
         public Action GuncellemeDenetle { get; init; } = () => { };
         public Func<bool> Denetleniyor { get; init; } = () => false;
         public Action GorunumDegisti { get; init; } = () => { };   // renk, yazı, çubuk, sadece benim satırım
+        public Action YaziBitti { get; init; } = () => { };        // yazı kaydırıcısı bırakıldı (detay paneli yeniden açılır)
         public Action KuklaBaslat { get; init; } = () => { };
         public Action KuklaIptal { get; init; } = () => { };
         public Func<bool> KuklaEtkin { get; init; } = () => false;
@@ -212,12 +213,13 @@ internal sealed class AyarlarFormu : Form
         _ogeler.Add(new RenkSecim("Kendi satır rengim", null, () => Palet.YerelRenk, () => Palet.SabitSatir,
             () => _ayar.YerelRenk, Palet.Yerel, r => RenkDegisti(() => _ayar.YerelRenk = r), yarim: false));
         _ogeler.Add(new Bolum("Yazı ve çubuk"));
+        Action yaziBitti = () => { _ayar.Kaydet(); _b.YaziBitti(); };
         _ogeler.Add(new Kaydirici("Ad yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziAd,
-            v => { _ayar.YaziAd = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+            v => { _ayar.YaziAd = v; _b.GorunumDegisti(); }, yaziBitti));
         _ogeler.Add(new Kaydirici("DPS yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziDps,
-            v => { _ayar.YaziDps = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+            v => { _ayar.YaziDps = v; _b.GorunumDegisti(); }, yaziBitti));
         _ogeler.Add(new Kaydirici("Boss yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziBoss,
-            v => { _ayar.YaziBoss = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
+            v => { _ayar.YaziBoss = v; _b.GorunumDegisti(); }, yaziBitti));
         _ogeler.Add(new Kaydirici("Pay çubuğu opaklığı", 0, 100, () => _ayar.CubukOpaklik,
             v => { _ayar.CubukOpaklik = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
         _ogeler.Add(new Dugme(() => "Tüm renkler ve yazılar", () => "Varsayılana dön", () => RenkDegisti(_ayar.RenkSifirla))
@@ -286,6 +288,7 @@ internal sealed class AyarlarFormu : Form
         degistir();
         _ayar.Kaydet();
         _b.GorunumDegisti();
+        _b.YaziBitti(); // "Varsayılana dön" yazıyı da değiştirmiş olabilir
         Invalidate();
     }
 

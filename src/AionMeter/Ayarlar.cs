@@ -100,6 +100,16 @@ internal sealed class Ayarlar
         }
     }
 
+    // Kaydet'in yazdığı anahtarlar. Dosyada bunların dışında kalan satırlar (ör. başka sürümün ayarı) aynen korunur.
+    private static readonly HashSet<string> Bilinen = new(StringComparer.Ordinal)
+    {
+        "X", "Y", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
+        "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
+        "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
+    };
+
+    private readonly List<string> _bilinmeyen = new(); // tanınmayan satırlar, Kaydet'te sona aynen yazılır
+
     public static Ayarlar Yukle()
     {
         var a = new Ayarlar();
@@ -109,10 +119,20 @@ internal sealed class Ayarlar
             a.IlkAcilis = false;
             foreach (string ham in File.ReadAllLines(Dosya, Encoding.UTF8))
             {
+                if (ham.TrimStart().StartsWith(';')) continue; // açıklama satırı (Kaydet yeniden yazar)
                 int esit = ham.IndexOf('=');
-                if (esit <= 0) continue;
+                if (esit <= 0)
+                {
+                    if (ham.Trim().Length > 0) a._bilinmeyen.Add(ham);
+                    continue;
+                }
                 string anahtar = ham[..esit].Trim();
                 string deger = ham[(esit + 1)..].Trim();
+                if (!Bilinen.Contains(anahtar) && !anahtar.StartsWith("Renk.", StringComparison.Ordinal))
+                {
+                    a._bilinmeyen.Add(ham);
+                    continue;
+                }
                 bool sayi = int.TryParse(deger, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n);
                 switch (anahtar)
                 {
@@ -163,13 +183,23 @@ internal sealed class Ayarlar
         }
         catch (Exception ex)
         {
-            HataLog.Yaz("Ayarlar okunamadı", ex);
+            // Okunamayan dosya kaybolmasın: ayarlar.ini.bozuk olarak saklanır, sonra varsayılanlarla devam edilir.
+            HataLog.Yaz("Ayarlar okunamadı (ayarlar.ini.bozuk olarak saklanıyor)", ex);
+            try { File.Copy(Dosya, Dosya + ".bozuk", overwrite: true); }
+            catch (Exception ex2)
+            {
+                HataLog.Yaz("Bozuk ayar dosyası saklanamadı; üstüne yazılmayacak", ex2);
+                a._kaydetme = true;
+            }
         }
         return a;
     }
 
+    private bool _kaydetme; // okunamayan dosya saklanamadıysa üstüne yazma
+
     public void Kaydet()
     {
+        if (_kaydetme) return;
         try
         {
             var inv = CultureInfo.InvariantCulture;
@@ -202,7 +232,8 @@ internal sealed class Ayarlar
                 "KuklaOzel=" + (KuklaOzel ? "1" : "0") + Environment.NewLine +
                 "KuklaOzelSure=" + KuklaOzelSure.ToString(inv) + Environment.NewLine +
                 "AlarmSes=" + AlarmSes.ToString(inv) + Environment.NewLine +
-                "AlarmDk=" + AlarmDk.ToString(inv) + Environment.NewLine;
+                "AlarmDk=" + AlarmDk.ToString(inv) + Environment.NewLine +
+                (_bilinmeyen.Count > 0 ? string.Join(Environment.NewLine, _bilinmeyen) + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";
             File.WriteAllText(gecici, metin, Encoding.UTF8);

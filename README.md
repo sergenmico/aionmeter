@@ -7,6 +7,7 @@ Gösterdikleri:
 - **Parti:** sınıf ikonu ve rengi, isim, CP, Boss DPS, DPS, toplam hasar, katkı %, ölüm sayısı — en çok vuran en üstte (boss varken hasar ve pay bossa vurulandan)
 - **Satıra tıkla:** vuruş istatistikleri, beceri tablosu, DPS grafiği
 - Sayılar yuvarlanmaz. Ölüp dirilmek dövüşü sıfırlamaz; boss ölünce sonuç ekranda kalır.
+- Boss satırındaki süre **aktif süredir**: 3 sn'den uzun vurulmayan aralar sayılmaz (DPS de bu süreye bölünür).
 
 ## Kurulum
 1. Zip'i bir klasöre çıkar, `AionMeter.exe`'yi çalıştır.
@@ -39,7 +40,7 @@ Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapat
 - **Sadece benim satırım** (Ayarlar → Genel): overlay'de boss ve yalnız senin satırın (`#3` gibi sıranla) kalır; diğerleri arka planda sayılmaya devam eder.
 - **Renk ve yazı** (Ayarlar → Renk ve yazı): her sınıfın rengi, kendi satır rengin, ad / DPS / boss yazı boyutu (%80–%130) ve pay çubuğu opaklığı; değiştirdikçe overlay canlı değişir, "Varsayılana dön" ile geri alınır.
 - **Kukla testi** (tepsi menüsü ya da Ayarlar → Kukla ve alarm): süreyi seç (30 / 60 / 120 / 180 sn ya da özel 5–300 sn), kuklaya vurmaya başla; süre dolunca DPS, toplam, en çok vuran 3 beceri ve sınıfına göre kişisel en iyinle kıyas çıkar. Rekorlar `kukla-rekor.json`'da durur. Kart `Alt`+tıkla ya da yeni dövüşte kapanır.
-- **Alarm**: `Alt` basılı tutup overlay'deki saate tıkla, süreyi seç (1–30 dk, ±1 dk), Başlat. Süre dolunca kısa ve yumuşak bir ses, tepsi bildirimi; ses seviyesi Ayarlar'da.
+- **Alarm**: `Alt` basılı tutup overlay'deki saate tıkla, süreyi seç (hazır 1 / 3 / 5 / 10 / 15 / 30 dk; ±1 dk ile 1–180 dk), Başlat. Süre dolunca kısa ve yumuşak bir ses, tepsi bildirimi; ses seviyesi Ayarlar'da.
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini

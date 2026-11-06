@@ -19,6 +19,7 @@ internal sealed class OverlayForm : Form
     private static readonly string[] SiraMetni = { "1", "2", "3", "4", "5" };
     private const int KisayolKilit = 1, KisayolGoster = 2, KisayolSifirla = 3, KisayolDetayim = 4, KisayolCevir = 5;
     private static readonly TimeSpan SavasSonrasi = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan KartTamGorunur = TimeSpan.FromSeconds(20);
     private const string BossEtiketi = "boss/sn", DpsEtiketi = "/sn", CpEtiketi = "CP", HasarEtiketi = "hasar", PayEtiketi = "pay";
     private const string SonucEtiketi = "Sonuç", CpSablonu = "8.888.888";
 
@@ -101,7 +102,8 @@ internal sealed class OverlayForm : Form
     private int _bilgiSayisi;
     private TimeSpan _oncekiSure;
 
-    private MeterSnapshot? _onceki;
+    private MeterSnapshot? _onceki;   // modelin kurulduğu görüntü (yeniden kurmak için null'a çekilebilir)
+    private MeterSnapshot? _sonAnlik; // motordan alınan son görüntü (hiç null'a çekilmez: detay paneli bunu okur)
     private long _olumBossId = long.MinValue;
     private DateTime _olumZamani;
     private int _tikSayaci;
@@ -112,6 +114,7 @@ internal sealed class OverlayForm : Form
     private readonly Stopwatch _uyariSaat = new();
     private long _uyariBossId = long.MinValue;
     private bool _uyariOfkeVerildi, _uyariGecVerildi;
+    private TimeSpan _uyariSonSure; // dövüş süresi geri giderse (wipe / yeni deneme) uyarılar yeniden verilebilir
     private Rectangle _bossAlani;
     private const int UyariSuresiMs = 1200, UyariNabizMs = 400;
 
@@ -341,7 +344,9 @@ internal sealed class OverlayForm : Form
         if (_ayarlarFormu is not null) return true;                 // ayar yaparken nasıl görüneceği görünsün
         if (!_kilitli || _altUstunde) return true;                  // konumlandırma / Alt ile göz atma
         if (_sabit && _detay is { Visible: true }) return true;     // sabitlenmiş detay paneli
-        if (_kukla.Durum != KuklaTesti.Hal.Kapali) return true;    // kukla testi ve sonuç kartı
+        if (_kukla.Etkin) return true;                              // kukla testi sürerken
+        if (_kukla.Durum == KuklaTesti.Hal.Sonuc && DateTime.UtcNow - _kukla.SonucZamani < KartTamGorunur)
+            return true;                                            // sonuç kartı ilk ~20 sn; sonra normal kural
         if (_alarmSecici is not null || _alarmNabizSaat.IsRunning) return true; // alarm kurulurken / çalınca
         if (_durumHata) return true;                                // Npcap yok vb. sorunlar görünsün
         if (_savasta || DateTime.UtcNow - _sonSavas < SavasSonrasi) return true;
@@ -368,8 +373,9 @@ internal sealed class OverlayForm : Form
         {
             // Ctrl+Alt+H / oyun arkada: geçiş yok, hemen gizle.
             _gecisZamanlayici.Stop();
+            _alfa = -1;
+            AlfaUygula(0); // katman opaklığı gerçekten 0: geri gösterilince eski opaklıkla bir an parlamaz
             PencereGizle();
-            _alfa = 0;
             return;
         }
         _hedefAlfa = HedefAlfa();
@@ -380,7 +386,8 @@ internal sealed class OverlayForm : Form
         }
         if (_hedefAlfa > 0 && !_pencereAcik)
         {
-            AlfaUygula(0);
+            _alfa = -1;
+            AlfaUygula(0); // önbellekteki değer ne olursa olsun 0'dan başla
             PencereGoster();
         }
         _gecisZamanlayici.Start();
@@ -492,6 +499,7 @@ internal sealed class OverlayForm : Form
             GuncellemeDenetle = GuncellemeDenetle,
             Denetleniyor = () => _denetleniyor,
             GorunumDegisti = GorunumUygula,
+            YaziBitti = YaziBitti,
             KuklaBaslat = () => { KuklaBaslat(_ayar.KuklaSuresi); _ayarlarFormu?.Close(); }, // vurmaya gitsin
             KuklaIptal = KuklaIptal,
             KuklaEtkin = () => _kukla.Etkin,
@@ -500,7 +508,7 @@ internal sealed class OverlayForm : Form
             AlarmKalan = AlarmKalan,
             Ikonlar = _ikonlar,
         };
-        IntPtr oyun = _onPlan.SonOyunPenceresi;
+        IntPtr oyun = _onPlan.OyunOnde() ? _onPlan.SonOyunPenceresi : IntPtr.Zero; // oyun önde değilse odağa dokunma
         _ayarlarFormu = new AyarlarFormu(_ayar, baglanti, _dpiOlcek);
         _ayarlarFormu.FormClosed += (_, _) =>
         {
@@ -509,8 +517,9 @@ internal sealed class OverlayForm : Form
             f?.Dispose();
             _solukOnizlemeBitis = DateTime.MinValue;
             _sonSavas = DateTime.MinValue; // pencere kapanınca hemen kurala dön
-            Cevirmen.OdakYardimcisi.GeriVer(oyun); // odağı oyuna geri ver
+            Cevirmen.OdakYardimcisi.GeriVer(oyun); // açılırken oyun öndeyse odağı ona geri ver
             GorunurlukUygula();
+            TepsiGuncelle(); // ayarlar açıkken Ctrl+Alt+H basıldıysa tepsi metni güncel kalsın
         };
         // Ekranın ortasında, overlay'in bulunduğu monitörde
         var alan = Screen.FromRectangle(Bounds).WorkingArea;
@@ -594,6 +603,7 @@ internal sealed class OverlayForm : Form
             if (!_sertGorunur) return; // gizliyken motor okunmaz, çizilmez
 
             var s = _motor.Snapshot();
+            _sonAnlik = s;
             SavasDurumu(s);
             var kuklaOnce = _kukla.Durum;
             if (kuklaOnce != KuklaTesti.Hal.Kapali && _kukla.Ilerle(s, KuklaDetay))
@@ -801,11 +811,12 @@ internal sealed class OverlayForm : Form
         _bossAd = string.IsNullOrWhiteSpace(b.Name) ? "Boss" : b.Name;
         _bossOldu = b.Dead;
         _bossBilinmiyor = b.CanBilinmiyor && !b.Dead;
-        if (b.Id != _uyariBossId)
+        if (b.Id != _uyariBossId || s.FightDuration < _uyariSonSure)
         {
             _uyariBossId = b.Id;
             _uyariOfkeVerildi = _uyariGecVerildi = false;
         }
+        _uyariSonSure = s.FightDuration;
 
         BilgiEkle(Bicim.Sure(s.FightDuration), Palet.Soluk);
         if (!b.Dead)
@@ -829,6 +840,10 @@ internal sealed class OverlayForm : Form
                     {
                         if (yakin && !_uyariOfkeVerildi) { _uyariOfkeVerildi = true; UyariBaslat(); }
                         if (gec && !_uyariGecVerildi) { _uyariGecVerildi = true; UyariBaslat(); }
+                        // Histerezis: öfke yeniden 40 sn'nin üstüne çıkarsa / ekip 10 sn pay ile yetişir hale gelirse
+                        // uyarı yeniden kurulur (sınırda gidip gelirken her tikte yanıp sönmez).
+                        if (ofke.TotalSeconds > 40) _uyariOfkeVerildi = false;
+                        if (ttk is TimeSpan k3 && ofke - k3 > TimeSpan.FromSeconds(10)) _uyariGecVerildi = false;
                     }
                 }
                 else
@@ -927,18 +942,32 @@ internal sealed class OverlayForm : Form
         RenkleriUygula();
         if (_yaziImza != (_ayar.YaziAd, _ayar.YaziDps, _ayar.YaziBoss))
         {
-            // Yazı boyutu değişti: açık detay paneli yeni yazıyla yeniden açılır (aynı oyuncu, aynı sabitleme).
-            long? acik = _detay is { Visible: true } ? _detay.OyuncuId : null;
-            bool sabit = _sabit;
+            // Yazı boyutu değişti: overlay canlı değişir; açık detay paneli kapanır ve kaydırıcı bırakılınca
+            // (YaziBitti) aynı oyuncu ve aynı sabitlemeyle yeni yazıyla bir kez yeniden açılır.
+            if (_detay is { Visible: true } d)
+            {
+                _bekleyenDetay = d.OyuncuId;
+                _bekleyenSabit = _sabit;
+            }
             OlcekAyarla();
             BoyutAyarla();
-            if (acik is long id) DetayAc(id, sabit);
         }
         else _detay?.RenkYenile();
         GenislikleriSifirla();
         _onceki = null;
         Tick();
         Invalidate();
+    }
+
+    private long? _bekleyenDetay; // yazı kaydırılırken kapanan detay paneli (bırakınca yeniden açılır)
+    private bool _bekleyenSabit;
+
+    /// <summary>Yazı kaydırıcısı bırakıldı ya da renk/yazı sıfırlandı: bekleyen detay paneli yeni yazıyla açılır.</summary>
+    private void YaziBitti()
+    {
+        if (_bekleyenDetay is not long id) return;
+        _bekleyenDetay = null;
+        DetayAc(id, _bekleyenSabit);
     }
 
     // ---------------- Kukla testi ----------------
@@ -1029,8 +1058,16 @@ internal sealed class OverlayForm : Form
         {
             _kuklaSag = Bicim.Sure(TimeSpan.FromSeconds(_kukla.Sure));
             _kuklaOran = 0f;
-            _kuklaBilgi = "Vurmaya başla: ilk vuruşta sayım başlar";
-            _kuklaBilgiRenk = Palet.YerelYazi;
+            if (_kukla.YerelYok)
+            {
+                _kuklaBilgi = "Karakterin tanınmadı: bölge değiştir ya da vur";
+                _kuklaBilgiRenk = Palet.Soluk;
+            }
+            else
+            {
+                _kuklaBilgi = "Vurmaya başla: ilk vuruşta sayım başlar";
+                _kuklaBilgiRenk = Palet.YerelYazi;
+            }
         }
         else
         {
@@ -1069,7 +1106,7 @@ internal sealed class OverlayForm : Form
         }
         if (!k.Tamam)
         {
-            _kartKiyas = "Süre dolmadı, rekora sayılmadı";
+            _kartKiyas = k.Kesildi ? "Deneme sıfırlandı, rekora sayılmadı" : "Süre dolmadı, rekora sayılmadı";
             _kartKiyasRenk = Palet.Soluk;
             _kartKiyasDeger = "";
         }
@@ -1459,7 +1496,8 @@ internal sealed class OverlayForm : Form
                 adMaks = Math.Max(adMaks, Math.Min(Olc(_kartBeceri[i], _yazi), P(190)));
             }
             gerek = Math.Max(gerek, ic + Olc("3", _yaziKucuk) + P(8) + adMaks + P(14) + _kartHasarW + P(10) + _kartPayW);
-            gerek = Math.Max(gerek, ic + Olc(_kartKiyas, _yaziKucuk) + Olc(_kartKiyasDeger, _yaziYari));
+            bool rekor = _kukla.Sonuc?.YeniRekor == true; // CizKart ile aynı yazı tipleri
+            gerek = Math.Max(gerek, ic + Olc(_kartKiyas, rekor ? _yaziYari : _yaziKucuk) + Olc(_kartKiyasDeger, rekor ? _yaziKucuk : _yaziYari));
         }
         _sureW = _bossGoster || KuklaBlokVar || _durum != null ? 0 : Olc(_sure, _yaziKucuk); // boss varken süre boss bloğunda; durum mesajında süre yok
         _partiEtiketW = Olc(_partiEtiket, _yaziKucuk);
@@ -1962,7 +2000,7 @@ internal sealed class OverlayForm : Form
     /// <summary>Son anlık görüntüdeki oyuncu kaydı (detay paneli: ölüm sayısı, yerel mi).</summary>
     private PlayerDamage? OyuncuBul(long id)
     {
-        var liste = _onceki?.Players;
+        var liste = (_sonAnlik ?? _onceki)?.Players;
         if (liste is null) return null;
         foreach (var p in liste) if (p.Id == id) return p;
         return null;

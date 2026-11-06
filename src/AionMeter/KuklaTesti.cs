@@ -12,12 +12,17 @@ internal sealed record KuklaSonucu(
     double Dps,
     IReadOnlyList<(string Ad, long Hasar)> Beceriler, // en çok vuran 3 beceri
     long? OncekiRekor,        // aynı sınıf ve süredeki kişisel en iyi (test öncesi)
-    bool YeniRekor);
+    bool YeniRekor,
+    bool Kesildi = false);  // deneme sıfırlandı / birleşti (wipe, yeni deneme): sayılar son tutarlı yoklamadan
 
 /// <summary>
 /// Kukla DPS testi: Bekliyor (motor sıfırlandı, ilk yerel vuruş bekleniyor) → Sayiyor (FightDuration ilerledikçe geri sayım)
 /// → Sonuc (yerel satır ve detay anlık alınır, kart gösterilir). Overlay test sürerken ~100 ms'de bir yoklar.
-/// Süre motorun dövüş süresinden okunur: vuruş 3 sn kesilirse motor süreyi son vuruşta durdurur, geri sayım da durur.
+/// Süre motorun dövüş süresinden okunur: FightDuration aktif süredir (ardışık vuruşlar arası ≤ 3 sn olan aralıklar
+/// toplanır, deneme içinde azalmaz); vuruş kesilirse süre ilerlemez, geri sayım da durur.
+/// DPS = (toplam − başlangıçta görülen toplam) ÷ (süre − başlangıç süresi): ilk vuruşun hasarı sıfır süreyle sayılmasın
+/// diye başlangıç anındaki hasar paydan, o anki süre paydadan düşülür (n vuruş / n−1 aralık yanlılığı yok).
+/// Sonuç kartındaki "Toplam" ise gerçek toplamdır.
 /// </summary>
 internal sealed class KuklaTesti
 {
@@ -29,11 +34,17 @@ internal sealed class KuklaTesti
     public long Toplam { get; private set; }
     public double Dps { get; private set; }
     public bool Durdu { get; private set; }         // sayarken süre ilerlemiyor (vuruş yok)
+    public bool YerelYok { get; private set; }      // beklerken hasar var ama yerel karakter henüz tanınmadı
     public KuklaSonucu? Sonuc { get; private set; }
+    public DateTime SonucZamani { get; private set; } // kart ne zaman çıktı (savaş dışı kuralına dönmek için)
 
-    private TimeSpan _ofset;         // yerel vuruştan önce başka biri dövüşü başlattıysa o kadar düşülür
+    /// <summary>Motor aktif süreyi ancak yeni vuruş gelince ilerletir; 3 sn'ye kadar aralar sayılır. Bundan uzun durursa "durdu".</summary>
+    private static readonly TimeSpan DurduEsigi = TimeSpan.FromSeconds(3.5);
+
+    private TimeSpan _ofset;         // başlangıç anındaki motor süresi (paydadan düşülür)
+    private long _ilkToplam;         // başlangıç anında görülen yerel toplam (paydan düşülür)
     private TimeSpan _sonSure;
-    private DateTime _sonDegisim;
+    private DateTime _sonDegisim, _sonYoklama;
     private long _sonucToplam;      // sonuç anındaki (ve sonra görülen en büyük) yerel toplam
 
     public bool Etkin => Durum is Hal.Bekliyor or Hal.Sayiyor;
@@ -47,6 +58,7 @@ internal sealed class KuklaTesti
         Toplam = 0;
         Dps = 0;
         Durdu = false;
+        YerelYok = false;
     }
 
     public void Kapat()
@@ -62,8 +74,7 @@ internal sealed class KuklaTesti
         var yerel = Yerel(s);
         var sure = s.FightDuration;
 
-        // Not: motor, son vuruştan 3 sn sonra süreyi son vuruşa geri çeker (birkaç sn azalabilir); bu sıfırlama sayılmaz.
-        // Yeni dövüş / sıfırlama, yerel toplamın düşmesinden (ya da listeden çıkmasından) anlaşılır.
+        // Sonuç kartı: yeni dövüş / sıfırlama yerel toplamın düşmesinden (ya da listeden çıkmasından) anlaşılır.
         if (Durum == Hal.Sonuc)
         {
             long t = yerel?.Total ?? 0;
@@ -76,43 +87,68 @@ internal sealed class KuklaTesti
             return false;
         }
 
+        var simdi = DateTime.UtcNow;
         if (Durum == Hal.Bekliyor)
         {
-            if (yerel is null || yerel.Total <= 0) return false;
+            if (yerel is null || yerel.Total <= 0)
+            {
+                // Hasar akıyor ama "ben" bilinmiyor: kullanıcıya kısa bilgi (karakter tanınınca kendiliğinden başlar).
+                bool yok = yerel is null && HasarVar(s);
+                if (yok == YerelYok) return false;
+                YerelYok = yok;
+                return true;
+            }
+            YerelYok = false;
             Durum = Hal.Sayiyor;
-            _ofset = sure > TimeSpan.FromSeconds(1) ? sure : TimeSpan.Zero;
+            _ofset = sure;
+            _ilkToplam = yerel.Total;
             _sonSure = sure;
-            _sonDegisim = DateTime.UtcNow;
+            _sonDegisim = _sonYoklama = simdi;
+            Toplam = yerel.Total;
         }
 
-        // Sayıyor
-        if ((yerel?.Total ?? 0) < Toplam)
+        // Sayıyor. Toplam düştüyse (wipe / yeni deneme / sıfırlama), süre geri gittiyse ya da iki yoklama arasında geçen
+        // gerçek zamandan fazla ileri sıçradıysa (denemeler birleşti) test sessizce sürmez: "yarıda kaldı", rekora sayılmaz.
+        long yeniToplam = yerel?.Total ?? 0;
+        bool geriGitti = yeniToplam < Toplam || sure < _sonSure;
+        bool sicradi = sure - _sonSure > simdi - _sonYoklama + TimeSpan.FromSeconds(1.5);
+        _sonYoklama = simdi;
+        if (geriGitti || sicradi)
         {
-            // Dövüş sıfırlandı (yeni dövüş): baştan bekle.
-            Baslat(Sure);
+            // Motorun detayı artık yeni denemeye ait: beceri listesi karta konmaz, sayılar son tutarlı yoklamadan.
+            Bitir(yerel, null, tamam: false, kesildi: true);
             return true;
         }
+
         bool degisti = false;
         if (sure != _sonSure)
         {
             _sonSure = sure;
-            _sonDegisim = DateTime.UtcNow;
+            _sonDegisim = simdi;
         }
-        bool durdu = DateTime.UtcNow - _sonDegisim > TimeSpan.FromSeconds(1.5);
+        bool durdu = simdi - _sonDegisim > DurduEsigi;
         if (durdu != Durdu) { Durdu = durdu; degisti = true; }
 
         var gecen = sure - _ofset;
         if (gecen < TimeSpan.Zero) gecen = TimeSpan.Zero;
-        long toplam = Math.Max(0, yerel?.Total ?? 0);
+        long toplam = Math.Max(0, yeniToplam);
         if ((long)gecen.TotalSeconds != (long)Gecen.TotalSeconds || toplam != Toplam) degisti = true;
         Gecen = gecen;
         Toplam = toplam;
-        Dps = gecen.TotalSeconds >= 1 ? toplam / gecen.TotalSeconds : 0;
+        Dps = gecen.TotalSeconds >= 1 ? Math.Max(0, toplam - _ilkToplam) / gecen.TotalSeconds : 0;
 
         if (gecen.TotalSeconds >= Sure) Bitir(yerel, detay, tamam: true);
         else if (s.FightOver) Bitir(yerel, detay, tamam: false);
         else return degisti;
         return true;
+    }
+
+    private static bool HasarVar(MeterSnapshot s)
+    {
+        var l = s.Players;
+        if (l is null) return false;
+        for (int i = 0; i < l.Count; i++) if (l[i].Total > 0) return true;
+        return false;
     }
 
     private static PlayerDamage? Yerel(MeterSnapshot s)
@@ -123,10 +159,10 @@ internal sealed class KuklaTesti
         return null;
     }
 
-    private void Bitir(PlayerDamage? yerel, Func<long, PlayerDetail?> detay, bool tamam)
+    private void Bitir(PlayerDamage? yerel, Func<long, PlayerDetail?>? detay, bool tamam, bool kesildi = false)
     {
         PlayerDetail? d = null;
-        if (yerel is not null)
+        if (yerel is not null && detay is not null)
         {
             try { d = detay(yerel.Id); }
             catch (Exception ex) { HataLog.Yaz("Kukla detayı", ex); }
@@ -147,9 +183,10 @@ internal sealed class KuklaTesti
         bool yeni = tamam && dps > 0 && (onceki is null || dps > onceki.Value);
         if (yeni) KuklaRekorlari.Yaz(sinif, Sure, dps);
 
-        Sonuc = new KuklaSonucu(Sure, Gecen, tamam, sinif, Toplam, Dps, beceriler, onceki, yeni);
+        Sonuc = new KuklaSonucu(Sure, Gecen, tamam, sinif, Toplam, Dps, beceriler, onceki, yeni, kesildi);
         Durum = Hal.Sonuc;
-        _sonucToplam = Toplam;
+        SonucZamani = DateTime.UtcNow;
+        _sonucToplam = yerel?.Total ?? 0;
     }
 }
 
@@ -165,13 +202,14 @@ internal static class KuklaRekorlari
         (string.IsNullOrWhiteSpace(sinif) ? "Bilinmeyen" : sinif) + "|" + sure.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     public static long? Al(string? sinif, int sure) =>
-        Oku().TryGetValue(Anahtar(sinif, sure), out long v) && v > 0 ? v : null;
+        Oku() is { } d && d.TryGetValue(Anahtar(sinif, sure), out long v) && v > 0 ? v : null;
 
     public static void Yaz(string? sinif, int sure, long dps)
     {
         try
         {
             var d = Oku();
+            if (d is null) return; // okunamayan dosya kenara alınamadı: üstüne yazılmaz
             d[Anahtar(sinif, sure)] = dps;
             string gecici = Dosya + ".tmp";
             File.WriteAllText(gecici, JsonSerializer.Serialize(d, new JsonSerializerOptions { WriteIndented = true }));
@@ -183,7 +221,8 @@ internal static class KuklaRekorlari
         }
     }
 
-    private static Dictionary<string, long> Oku()
+    /// <summary>Rekorlar; dosya yoksa boş. Bozuksa .bozuk olarak kenara alınır ve boş döner; kenara alınamazsa null (yazılmaz).</summary>
+    private static Dictionary<string, long>? Oku()
     {
         try
         {
@@ -192,7 +231,14 @@ internal static class KuklaRekorlari
         }
         catch (Exception ex)
         {
-            HataLog.Yaz("Kukla rekorları okunamadı", ex);
+            // Bozuk dosyanın üstüne yazılmasın: kukla-rekor.json.bozuk olarak saklanır, yeni dosya baştan başlar.
+            HataLog.Yaz("Kukla rekorları okunamadı (kukla-rekor.json.bozuk olarak saklanıyor)", ex);
+            try { File.Move(Dosya, Dosya + ".bozuk", overwrite: true); }
+            catch (Exception ex2)
+            {
+                HataLog.Yaz("Bozuk rekor dosyası taşınamadı", ex2);
+                return null;
+            }
         }
         return new();
     }

@@ -3,23 +3,32 @@ using System.Media;
 namespace AionMeter;
 
 /// <summary>
-/// Alarm sesi: bellekte üretilen kısa, yumuşak iki notalık çan (E5 → C5, iki kez). Ses dosyası yok.
+/// Alarm sesi: kodla üretilen kısa, yumuşak iki notalık çan (E5 → C5, iki kez). Pakette ses dosyası yok.
 /// Her nota yavaş açılır ve üstel söner (tık sesi yok); tepe genliği ses ayarıyla ölçeklenir, en fazla tam ölçeğin ~%35'i.
-/// Dalga çalınırken tek bir SoundPlayer yaşar; bir sonraki çalışta eskisi bırakılır.
+/// Dalga %TEMP%\aionmeter-zil.wav dosyasına bir kez yazılır ve yoldan çalınır (eşzamansız çalarken bellek tamponunun
+/// ömrüne bağlı kalınmaz); ses seviyesi değişince dosya yeniden üretilir.
 /// </summary>
 internal static class Zil
 {
     private const int Ornek = 22050;
+    private static readonly string Dosya = Path.Combine(Path.GetTempPath(), "aionmeter-zil.wav");
     private static SoundPlayer? _oynatici;
-    private static MemoryStream? _akis;
+    private static int _sonSes = -1;
 
     public static void Cal(int sesYuzde)
     {
         try
         {
-            Birak();
-            _akis = new MemoryStream(Dalga(Math.Clamp(sesYuzde, 0, 100) / 100.0));
-            _oynatici = new SoundPlayer(_akis);
+            sesYuzde = Math.Clamp(sesYuzde, 0, 100);
+            if (sesYuzde != _sonSes || !File.Exists(Dosya))
+            {
+                Birak(); // çalan dosyanın üstüne yazmadan önce dur
+                string gecici = Dosya + ".tmp";
+                File.WriteAllBytes(gecici, Dalga(sesYuzde / 100.0));
+                File.Move(gecici, Dosya, overwrite: true);
+                _sonSes = sesYuzde;
+            }
+            _oynatici ??= new SoundPlayer(Dosya);
             _oynatici.Play(); // eşzamansız; arayüz beklemez
         }
         catch (Exception ex)
@@ -33,8 +42,6 @@ internal static class Zil
         try { _oynatici?.Stop(); } catch { /* önemsiz */ }
         _oynatici?.Dispose();
         _oynatici = null;
-        _akis?.Dispose();
-        _akis = null;
     }
 
     /// <summary>16 bit mono PCM WAV: [E5 · C5] · ara · [E5 · C5].</summary>
