@@ -168,6 +168,27 @@ internal static class Palet
         return 0;
     }
 
+    /// <summary>
+    /// Sayı yazı tipi: Windows 10/11 ile gelen Bahnschrift (DIN çizgisinde, oyun arayüzlerine yakışan dar ve net rakamlar).
+    /// Ana sayılar için SemiBold, küçük sayılar için normal ağırlık; ikisi de normal genişlikte (SemiCondensed 11–13 px'te
+    /// 3/6/8'i kapatıyor, yarı saydam overlay'de okunurluk düşüyor). Bahnschrift yoksa Segoe UI'ye sessizce düşer.
+    /// Rakamlar orantılıdır; sabit genişlik <see cref="RakamYazisi"/> ile sağlanır.
+    /// </summary>
+    public static Font RakamTipi(float piksel, bool yariKalin = false)
+    {
+        string ad = yariKalin ? "Bahnschrift SemiBold" : "Bahnschrift";
+        var f = new Font(ad, Math.Max(6f, piksel), FontStyle.Regular, GraphicsUnit.Pixel);
+        if (string.Equals(f.Name, ad, StringComparison.OrdinalIgnoreCase)) return f;
+        f.Dispose();
+        return YaziTipi(piksel, yariKalin);
+    }
+
+    /// <summary>Gizli Küp rozeti (sıcak altın: hazine; alarm mavisi ve öfke kırmızısından ayrı).</summary>
+    public static readonly Color Kup = Color.FromArgb(236, 204, 122);
+
+    /// <summary>Boss can çubuğunda yeni alınan hasarın kısa süre kalan açık izi.</summary>
+    public static readonly Color BossHasarIzi = Color.FromArgb(222, 136, 112);
+
     /// <summary>Segoe UI (yarı kalın istenirse Segoe UI Semibold; yoksa kalın Segoe UI). Boyut piksel.</summary>
     public static Font YaziTipi(float piksel, bool yariKalin = false, bool kalin = false)
     {

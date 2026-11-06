@@ -84,12 +84,186 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         }
     }
 
-    // Gizli Küp: gerçek sayaçlar küp çözücüsüyle gelir (şimdilik yer tutucu).
-    /// <summary>Açılıştan beri menzile giren Gizli Küp sayısı (aynı küpün tekrar duyurulması sayılmaz).</summary>
-    public int CubeArrivals => 0;
+    // ---- Gizli Küp (Hidden Cube) ----
+    // Değiştirildi (eklendi): kaynak SkeeveAN/Aion-DPS-Meter (MIT), Client/Aion2/Aion2EntityDirectory.cs NoteEnv / ForgetEnv /
+    // NoteEnvOpening / CubeArrivals / LiveEnv ve bölge değişiminde _env.Clear(). Sadece küpler tutulur (toplama kaynakları, konum
+    // gösterimi, harita yok). Küpün duyurudan tanınması (şablon listesi, 3836 açma çerçevesi, kaldırma nedeni 04 açıldı / 01 menzil
+    // dışı) dr89mh/aion2-cube-radar (docs/FINDINGS.md B5-B12) bulgularına dayanır; o projenin kodu kullanılmadı.
+    //
+    // Fark: referans menzilden çıkıp (neden 01) geri gelen küpü her seferinde yeniden "geliş" sayar. Menzil sınırında gidip gelen
+    // oyuncuda bu, aynı küp başında sesin tekrar tekrar çalması demek. Burada menzil dışına çıkan küp hatırlanır ve ancak
+    // CubeReturnCountsAfter kadar uzakta kaldıysa dönüşü yeni geliş sayılır (yakına gelince bir kez duyulur; çok sonra dönünce
+    // yeniden hatırlatır). Oyun aynı küpü yeni bir varlık kimliğiyle duyurursa aynı yerdeki (CubeSamePlace birim içinde)
+    // hatırlanan küp aynı küp sayılır.
 
-    /// <summary>Şu an menzilde olan, açılmamış Gizli Küp sayısı.</summary>
-    public int CubesInRange => 0;
+    private enum CubeState { InSight, Opening, OutOfSight }
+
+    private sealed class Cube
+    {
+        public float X, Y;
+        public CubeState State;
+        public DateTime LeftAt;   // menzilden çıktığı çerçevenin zamanı (OutOfSight iken)
+        public long SeenTick;     // son duyuru/durum değişimi (Environment.TickCount64): kaybolan kaldırmaya karşı bayatlama
+    }
+
+    private readonly Dictionary<int, Cube> _cubes = new();
+    private int _cubeArrivals;
+
+    /// <summary>Menzil dışına çıkan küpün dönüşü bu kadar uzak kaldıktan sonra yeniden geliş sayılır.</summary>
+    internal static readonly TimeSpan CubeReturnCountsAfter = TimeSpan.FromMinutes(3);
+
+    /// <summary>Kaldırması hiç gelmeyen küp (kayıp çerçeve) bu kadar sonra unutulur; menzil dışı hatırlanan küp için de üst sınır.</summary>
+    private const long CubeStaleMs = 15 * 60 * 1000;
+    private const float CubeSamePlace = 3f;
+    private const int MaxCubes = 512;
+
+    /// <summary>Açılıştan beri menzile giren Gizli Küp sayısı (aynı küpün tekrar duyurulması sayılmaz).</summary>
+    public int CubeArrivals
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cubeArrivals;
+            }
+        }
+    }
+
+    /// <summary>Şu an menzilde olan, açılmamış Gizli Küp sayısı (açılmakta olan dahil: açma kesilebilir, küp 04 gelene kadar oradadır).</summary>
+    public int CubesInRange
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_cubes.Count == 0)
+                {
+                    return 0;
+                }
+
+                long now = Environment.TickCount64;
+                int count = 0;
+                List<int>? stale = null;
+                foreach ((int id, Cube cube) in _cubes)
+                {
+                    if (now - cube.SeenTick > CubeStaleMs)
+                    {
+                        (stale ??= new List<int>()).Add(id);
+                    }
+                    else if (cube.State != CubeState.OutOfSight)
+                    {
+                        count++;
+                    }
+                }
+
+                if (stale is not null)
+                {
+                    foreach (int id in stale)
+                    {
+                        _cubes.Remove(id);
+                    }
+                }
+
+                return count;
+            }
+        }
+    }
+
+    /// <summary>Oyun bir Gizli Küp duyurdu (env doğuş çerçevesi: menzilde ve orada).</summary>
+    public void NoteCube(int entityId, float x, float y, DateTime at)
+    {
+        lock (_gate)
+        {
+            long tick = Environment.TickCount64;
+            if (_cubes.TryGetValue(entityId, out Cube? known))
+            {
+                if (known.State == CubeState.OutOfSight)
+                {
+                    if (at - known.LeftAt >= CubeReturnCountsAfter)
+                    {
+                        _cubeArrivals++; // uzun süre sonra geri döndü: yeniden hatırlat
+                    }
+
+                    known.State = CubeState.InSight;
+                }
+
+                known.X = x;
+                known.Y = y;
+                known.SeenTick = tick;
+                return; // menzildeyken tekrar duyuruldu: sayılmaz
+            }
+
+            // Yeni kimlik: aynı yerde hatırlanan (menzil dışı) bir küp varsa o küptür.
+            int? samePlace = null;
+            foreach ((int id, Cube cube) in _cubes)
+            {
+                if (cube.State == CubeState.OutOfSight && Math.Abs(cube.X - x) <= CubeSamePlace && Math.Abs(cube.Y - y) <= CubeSamePlace)
+                {
+                    samePlace = id;
+                    break;
+                }
+            }
+
+            bool counts = true;
+            if (samePlace is int oldId)
+            {
+                counts = at - _cubes[oldId].LeftAt >= CubeReturnCountsAfter;
+                _cubes.Remove(oldId);
+            }
+
+            if (counts)
+            {
+                _cubeArrivals++;
+            }
+
+            if (_cubes.Count >= MaxCubes)
+            {
+                _cubes.Clear(); // bu kadarı hiç yakında olmaz: kaldırmalar kaybolmuş
+            }
+
+            _cubes[entityId] = new Cube { X = x, Y = y, State = CubeState.InSight, SeenTick = tick };
+        }
+    }
+
+    /// <summary>Bir env nesnesi kayboldu: <paramref name="reason"/> 1 = menzil dışı (küp hatırlanır), 4 = açıldı/toplandı, diğerleri de silinir.
+    /// Küp olmayan kimlikler yok sayılır.</summary>
+    public void ForgetCube(int entityId, int reason, DateTime at)
+    {
+        lock (_gate)
+        {
+            if (!_cubes.TryGetValue(entityId, out Cube? cube))
+            {
+                return;
+            }
+
+            if (reason == 1)
+            {
+                if (cube.State != CubeState.OutOfSight)
+                {
+                    cube.State = CubeState.OutOfSight;
+                    cube.LeftAt = at;
+                }
+
+                cube.SeenTick = Environment.TickCount64;
+                return;
+            }
+
+            _cubes.Remove(entityId);
+        }
+    }
+
+    /// <summary>Bir oyuncu env nesnesini açmaya başladı (0x3836). Küp 04 kaldırması gelene kadar menzilde sayılır.</summary>
+    public void NoteCubeOpening(int entityId)
+    {
+        lock (_gate)
+        {
+            if (_cubes.TryGetValue(entityId, out Cube? cube) && cube.State == CubeState.InSight)
+            {
+                cube.State = CubeState.Opening;
+                cube.SeenTick = Environment.TickCount64;
+            }
+        }
+    }
 
     /// <summary>The local player's name as its own character record states it - what the meter then
     /// remembers in Settings so the next session knows it from the start. It used to be the party
@@ -171,6 +345,9 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
             _fightingAlongside.Clear();
             _skillsSeen.Clear();
             _markHits.Clear(); // Değiştirildi (eklendi): kimlikler bölgeyle değişir
+            // Gizli Küp: duyurulan küpler terk edilen yerindir (oyun sonlarını her zaman duyurmaz), yeni yerinkiler bu çerçeveden sonra gelir
+            // (referans NoteSpawnPosition/ForgetPlace: _env.Clear()). Geliş sayacı sıfırlanmaz.
+            _cubes.Clear();
             foreach (int faded in _detailedStats.Where(kv => kv.Value < 0.5).Select(kv => kv.Key).ToList())
             {
                 _detailedStats.Remove(faded);

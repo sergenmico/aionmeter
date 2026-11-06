@@ -3,52 +3,86 @@ using System.Media;
 namespace AionMeter;
 
 /// <summary>
-/// Alarm sesi: kodla üretilen kısa, yumuşak iki notalık çan (E5 → C5, iki kez). Pakette ses dosyası yok.
-/// Her nota yavaş açılır ve üstel söner (tık sesi yok); tepe genliği ses ayarıyla ölçeklenir, en fazla tam ölçeğin ~%35'i.
-/// Dalga %TEMP%\aionmeter-zil.wav dosyasına bir kez yazılır ve yoldan çalınır (eşzamansız çalarken bellek tamponunun
-/// ömrüne bağlı kalınmaz); ses seviyesi değişince dosya yeniden üretilir.
+/// Kodla üretilen kısa, yumuşak sesler (pakette ses dosyası yok):
+/// - Alarm: iki notalık çan (E5 → C5, iki kez).
+/// - Gizli Küp: yükselen üç nota (E5 · G#5 · B5, majör arpej), daha kısa ve daha hafif; alarmdan inişle değil çıkışla ayrılır.
+/// Her nota yavaş açılır ve üstel söner (tık sesi yok); tepe genliği ses ayarıyla ölçeklenir.
+/// Dalga %TEMP% altında bir kez dosyaya yazılır ve yoldan çalınır (eşzamansız çalarken bellek tamponunun ömrüne bağlı
+/// kalınmaz); ses seviyesi değişince dosya yeniden üretilir. Windows aynı anda tek bir PlaySound çalar: yenisi eskisini keser.
 /// </summary>
 internal static class Zil
 {
     private const int Ornek = 22050;
-    private static readonly string Dosya = Path.Combine(Path.GetTempPath(), "aionmeter-zil.wav");
-    private static SoundPlayer? _oynatici;
-    private static int _sonSes = -1;
 
-    public static void Cal(int sesYuzde)
+    private sealed class Ses
+    {
+        public required string Dosya;
+        public required string Ad;
+        public required Func<double, byte[]> Uret;
+        public SoundPlayer? Oynatici;
+        public int SonSes = -1;
+    }
+
+    private static readonly Ses AlarmSesi = new()
+    {
+        Dosya = Path.Combine(Path.GetTempPath(), "aionmeter-zil.wav"),
+        Ad = "Alarm sesi",
+        Uret = ses => Dalga(new (double, double)[] { (659.25, 0.00), (523.25, 0.24), (659.25, 0.70), (523.25, 0.94) },
+            notaSure: 0.42, toplam: 1.40, sonum: 7.0, tepe: 0.35 * ses),
+    };
+
+    private static readonly Ses KupSesi = new()
+    {
+        Dosya = Path.Combine(Path.GetTempPath(), "aionmeter-kup.wav"),
+        Ad = "Küp sesi",
+        Uret = ses => Dalga(new (double, double)[] { (659.25, 0.00), (830.61, 0.11), (987.77, 0.22) },
+            notaSure: 0.50, toplam: 0.75, sonum: 9.0, tepe: 0.24 * ses),
+    };
+
+    /// <summary>Alarm çanı.</summary>
+    public static void Cal(int sesYuzde) => Oynat(AlarmSesi, sesYuzde);
+
+    /// <summary>Gizli Küp yakında: yükselen üç nota.</summary>
+    public static void Kup(int sesYuzde) => Oynat(KupSesi, sesYuzde);
+
+    private static void Oynat(Ses s, int sesYuzde)
     {
         try
         {
             sesYuzde = Math.Clamp(sesYuzde, 0, 100);
-            if (sesYuzde != _sonSes || !File.Exists(Dosya))
+            if (sesYuzde != s.SonSes || !File.Exists(s.Dosya))
             {
-                Birak(); // çalan dosyanın üstüne yazmadan önce dur
-                string gecici = Dosya + ".tmp";
-                File.WriteAllBytes(gecici, Dalga(sesYuzde / 100.0));
-                File.Move(gecici, Dosya, overwrite: true);
-                _sonSes = sesYuzde;
+                Durdur(s); // çalan dosyanın üstüne yazmadan önce dur
+                string gecici = s.Dosya + ".tmp";
+                File.WriteAllBytes(gecici, s.Uret(sesYuzde / 100.0));
+                File.Move(gecici, s.Dosya, overwrite: true);
+                s.SonSes = sesYuzde;
             }
-            _oynatici ??= new SoundPlayer(Dosya);
-            _oynatici.Play(); // eşzamansız; arayüz beklemez
+            s.Oynatici ??= new SoundPlayer(s.Dosya);
+            s.Oynatici.Play(); // eşzamansız; arayüz beklemez
         }
         catch (Exception ex)
         {
-            HataLog.Yaz("Alarm sesi", ex);
+            HataLog.Yaz(s.Ad, ex);
         }
     }
 
     public static void Birak()
     {
-        try { _oynatici?.Stop(); } catch { /* önemsiz */ }
-        _oynatici?.Dispose();
-        _oynatici = null;
+        Durdur(AlarmSesi);
+        Durdur(KupSesi);
     }
 
-    /// <summary>16 bit mono PCM WAV: [E5 · C5] · ara · [E5 · C5].</summary>
-    private static byte[] Dalga(double ses)
+    private static void Durdur(Ses s)
     {
-        (double hz, double bas)[] notalar = { (659.25, 0.00), (523.25, 0.24), (659.25, 0.70), (523.25, 0.94) };
-        const double notaSure = 0.42, toplam = 1.40;
+        try { s.Oynatici?.Stop(); } catch { /* önemsiz */ }
+        s.Oynatici?.Dispose();
+        s.Oynatici = null;
+    }
+
+    /// <summary>16 bit mono PCM WAV: verilen notalar (frekans, başlangıç sn), her biri 12 ms açılış + üstel sönüş, hafif çan rengi.</summary>
+    private static byte[] Dalga((double hz, double bas)[] notalar, double notaSure, double toplam, double sonum, double tepe)
+    {
         int n = (int)(Ornek * toplam);
         var ornekler = new double[n];
         foreach (var (hz, bas) in notalar)
@@ -57,12 +91,16 @@ internal static class Zil
             for (int i = 0; i < adet && i0 + i < n; i++)
             {
                 double t = (double)i / Ornek;
-                double zarf = Math.Min(1.0, t / 0.012) * Math.Exp(-t * 7.0);                    // 12 ms açılış, üstel sönüş
+                double zarf = Math.Min(1.0, t / 0.012) * Math.Exp(-t * sonum);                     // 12 ms açılış, üstel sönüş
                 double v = Math.Sin(2 * Math.PI * hz * t) + 0.18 * Math.Sin(2 * Math.PI * hz * 2 * t); // hafif çan rengi
                 ornekler[i0 + i] += v * zarf;
             }
         }
-        double tepe = 0.35 * ses / 1.18;
+        // Son 30 ms'yi sıfıra indir: dosya sonu kesik bitmesin (tık yok).
+        int kuyruk = Math.Min(n, Ornek * 30 / 1000);
+        for (int i = 0; i < kuyruk; i++) ornekler[n - 1 - i] *= (double)i / kuyruk;
+
+        double olcek = tepe / 1.18;
         using var ms = new MemoryStream(44 + n * 2);
         using (var w = new BinaryWriter(ms, System.Text.Encoding.ASCII, leaveOpen: true))
         {
@@ -71,7 +109,7 @@ internal static class Zil
             w.Write(Ornek); w.Write(Ornek * 2); w.Write((short)2); w.Write((short)16);
             w.Write("data"u8.ToArray()); w.Write(n * 2);
             for (int i = 0; i < n; i++)
-                w.Write((short)Math.Clamp(ornekler[i] * tepe * short.MaxValue, short.MinValue, short.MaxValue));
+                w.Write((short)Math.Clamp(ornekler[i] * olcek * short.MaxValue, short.MinValue, short.MaxValue));
         }
         return ms.ToArray();
     }

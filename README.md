@@ -42,6 +42,7 @@ Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapat
 - **Renk ve yazı** (Ayarlar → Renk ve yazı): her sınıfın rengi, kendi satır rengin, ad / DPS / boss yazı boyutu (%80–%130) ve pay çubuğu opaklığı; değiştirdikçe overlay canlı değişir, "Varsayılana dön" ile geri alınır.
 - **Kukla testi** (tepsi menüsü ya da Ayarlar → Kukla ve alarm): süreyi seç (30 / 60 / 120 / 180 sn ya da özel 5–300 sn), kuklaya vurmaya başla; süre dolunca DPS, toplam, en çok vuran 3 beceri ve sınıfına göre kişisel en iyinle kıyas çıkar. Rekorlar `kukla-rekor.json`'da durur. Kart `Alt`+tıkla ya da yeni dövüşte kapanır.
 - **Alarm**: `Alt` basılı tutup overlay'deki saate tıkla, süreyi seç (hazır 1 / 3 / 5 / 10 / 15 / 30 dk; ±1 dk ile 1–180 dk), Başlat. Süre dolunca kısa ve yumuşak bir ses, tepsi bildirimi; ses seviyesi Ayarlar'da.
+- **Gizli Küp** (Hidden Cube): yakına bir küp gelince kısa, yumuşak bir ses çalar (overlay savaş dışında gizliyken de); küp menzildeyken alt satırda "Küp yakında" yazar. Aynı küpün başında dururken tekrar çalmaz. Ayarlar → Kukla ve alarm → Gizli Küp'ten açılıp kapatılır, ses düzeyi ayarlanır, "Dene" ile dinlenir.
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini

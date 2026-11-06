@@ -266,6 +266,15 @@ public sealed class Aion2FrameDecoder
             case OpcodeFamily.Nickname:
                 DecodeNickname(frame, fields, layout.LittleEndian);
                 return Array.Empty<DamageEvent>();
+            case OpcodeFamily.EnvSpawn: // Değiştirildi: env çerçevelerinden sadece Gizli Küp okunur
+                DecodeEnvSpawn(frame, timestamp);
+                return Array.Empty<DamageEvent>();
+            case OpcodeFamily.EnvRemove:
+                DecodeEnvRemove(frame, timestamp);
+                return Array.Empty<DamageEvent>();
+            case OpcodeFamily.EnvOpenStart:
+                DecodeEnvOpenStart(frame);
+                return Array.Empty<DamageEvent>();
             case OpcodeFamily.Session:
                 if (TryReadInt(frame, fields, "localPlayerId", layout.LittleEndian, out long localId))
                 {
@@ -1302,6 +1311,59 @@ public sealed class Aion2FrameDecoder
         if (TryReadVarint(frame, ref p, out long entityId) && frame.Length - p <= 3)
         {
             _entities.SetLocalTarget(unchecked((int)entityId));
+        }
+    }
+
+    // ---- Gizli Küp (Hidden Cube) ----
+    // Kaynak: SkeeveAN/Aion-DPS-Meter (MIT), Client/Aion2/Protocol/Aion2FrameDecoder.cs IsHiddenCube / DecodeEnvSpawn / DecodeEnvRemove /
+    // DecodeEnvOpenStart. Değiştirildi: toplama kaynakları (Aion2Gather), yükseklik ve doğuş zamanı okunmaz; sadece küpler dizine gider.
+    // Çerçeve anlamları dr89mh/aion2-cube-radar (docs/FINDINGS.md B6) bulgularıyla aynıdır.
+
+    /// <summary>İstemcinin "Hidden Cube" adını verdiği env nesne kimlikleri: Verteron 1200036-41, 1200667, Altgard 1301199/1301200, Abyss ve alan olayı küpleri.</summary>
+    internal static bool IsHiddenCube(long envId) =>
+        envId is >= 1200036 and <= 1200041 or 1200667 or 1200707 or >= 1201502 and <= 1201505 or >= 1300081 and <= 1300083 or 1300754
+            or 1301199 or 1301200 or >= 1301242 and <= 1301245 or 1100056 or 1100094;
+
+    /// <summary>"Bir env nesnesi göründü": opcode | varlık (varint) | tür baytı | 00 | env kimliği u32 | x, y, z float ...</summary>
+    private void DecodeEnvSpawn(ReadOnlySpan<byte> frame, DateTime timestamp)
+    {
+        int p = 2;
+        if (!TryReadVarint(frame, ref p, out long entityId) || frame.Length < p + 18)
+        {
+            return;
+        }
+
+        long envId = BinaryPrimitives.ReadUInt32LittleEndian(frame[(p + 2)..]);
+        if (!IsHiddenCube(envId))
+        {
+            return;
+        }
+
+        float x = BinaryPrimitives.ReadSingleLittleEndian(frame[(p + 6)..]);
+        float y = BinaryPrimitives.ReadSingleLittleEndian(frame[(p + 10)..]);
+        if (float.IsFinite(x) && float.IsFinite(y) && Math.Abs(x) < 1_000_000 && Math.Abs(y) < 1_000_000)
+        {
+            _entities.NoteCube(unchecked((int)entityId), x, y, timestamp);
+        }
+    }
+
+    /// <summary>"Bir env nesnesi kayboldu": varlık (varint), neden baytı (04 = toplandı/açıldı, 01 = oyuncunun menzilinden çıktı), iki bayt daha.</summary>
+    private void DecodeEnvRemove(ReadOnlySpan<byte> frame, DateTime timestamp)
+    {
+        int p = 2;
+        if (TryReadVarint(frame, ref p, out long entityId))
+        {
+            _entities.ForgetCube(unchecked((int)entityId), p < frame.Length ? frame[p] : 0, timestamp);
+        }
+    }
+
+    /// <summary>"Bir oyuncu env nesnesini açmaya başladı" (0x3836): nesne varlığı (varint), açan varlık (varint), 01. Küpte ardından 0x3a36 ve neden 04'lü kaldırma gelir.</summary>
+    private void DecodeEnvOpenStart(ReadOnlySpan<byte> frame)
+    {
+        int p = 2;
+        if (TryReadVarint(frame, ref p, out long entityId) && TryReadVarint(frame, ref p, out _))
+        {
+            _entities.NoteCubeOpening(unchecked((int)entityId));
         }
     }
 

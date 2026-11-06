@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace AionMeter;
 
 /// <summary>
-/// Sahte motor: 5 kişilik parti, artan hasar, eriyen boss canı; boss ölür, kısa süre sonra yeni dövüş başlar.
+/// Sahte motor: 5 kişilik parti, artan hasar, eriyen boss canı; boss ölür, kısa süre sonra yeni dövüş başlar. Arada bir Gizli Küp gelir.
 /// Beceri adları ve ikon jetonları gerçek oyun verisinden (assets/aion2/skills) okunur; dosyalar yoksa yedek adlar kullanılır.
 /// İş parçacığı kullanmaz: her Snapshot() çağrısında geçen süre kadar ilerler.
 /// </summary>
@@ -272,9 +272,12 @@ internal sealed class DemoEngine : IMeterEngine
                 ttk = TimeSpan.FromSeconds(_bossCan / (bossaToplam / sure.TotalSeconds));
             var ofke = TimeSpan.FromSeconds(_bossOfke - sure.TotalSeconds);
             var boss = new BossHp(_bossId, _bossAd, _bossCan, _bossMax, _bossOldu, ttk, ofke, canBilinmiyor);
+            // Gizli Küp: 20. saniyeden sonra her 60 sn'de bir küp gelir ve 25 sn menzilde kalır (ses ve rozet görünsün).
+            int kupGelis = t < 20 ? 0 : (int)((t - 20) / 60) + 1;
+            int kupYakinda = t >= 20 && (t - 20) % 60 < 25 ? 1 : 0;
             // Savaşta: boss ölene dek. Ölümden sonraki ~10 sn'lik donmuş sonuçta overlay ~8 sn sonra soluklaşır.
             return new MeterSnapshot(EngineState.Connected, null, liste, boss, sure, FightOver: _bossOldu,
-                Savasta: !_bossOldu, YerelAd: yerelAd);
+                Savasta: !_bossOldu, YerelAd: yerelAd, KupGelis: kupGelis, KupYakinda: kupYakinda);
         }
     }
 
