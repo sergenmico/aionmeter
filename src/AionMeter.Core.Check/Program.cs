@@ -37,6 +37,7 @@ FrameChecks();
 TcpChecks();
 OtherChecks();
 AuditChecks();
+PlayerTargetChecks();
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif
@@ -1096,5 +1097,58 @@ void AuditChecks()
 
         MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(20));
         Check("D11: sözde parti dövüş boss'unu ve BossTotal'ımı değiştirmez", s.Boss?.Id == world && P(s, me)?.BossTotal == 100_000, Show(s));
+    }
+}
+
+// Gerçek tanı kaydı (06:16:45): hedefi oyuncu olan vuruş (yerel oyuncunun kendisine) donmuş sonuçtan sonra yeni dövüş başlatmıştı. Ölçer PvE.
+void PlayerTargetChecks()
+{
+    Console.WriteLine("[oyuncuya vuruşlar (PvE)]");
+    const int me = 4409, friend = 600, stranger = 777, boss = 900, mySummon = 7000;
+    DateTime t = DateTime.Now;
+    DamageEvent H(int src, DateTime at, int target, long amount, int skill = 11010000) => new(at, src, target, amount, false, SkillId: skill);
+    PlayerDamage? P(MeterSnapshot s, int id) => s.Players.FirstOrDefault(p => p.Id == id);
+
+    // a) Boss öldü, donmuş sonuç; sonra yerel oyuncuya (kendine), parti üyesine ve bir yabancı oyuncuya vuruşlar, çağrımın arkadaşa vuruşu.
+    {
+        var (e, d, _) = New();
+        d.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, t));
+        d.NoteClass(me, "Gladiator");
+        d.Register(friend, "Arkadas"); d.NoteClass(friend, "Cleric");
+        d.NoteParty(new[] { "Ben", "Arkadas" }, t);
+        d.Register(stranger, "Yabanci"); d.NoteClass(stranger, "Ranger");
+        d.NoteSpawned(mySummon); d.SetSummonOwner(mySummon, me);
+        d.RegisterNpc(boss, 2300708);
+        d.HitPoints.Note(boss, t.AddSeconds(-60), 5_000_000);
+        e.InjectHit(H(me, t.AddSeconds(-59), boss, 300_000));
+        d.HitPoints.Note(boss, t.AddSeconds(-58), 0);
+        MeterSnapshot dead = e.SnapshotAt(t.AddSeconds(-58));
+        e.InjectHit(H(me, t.AddSeconds(-30), me, 5_000));        // kendine gelen hasar
+        e.InjectHit(H(friend, t.AddSeconds(-30), me, 5_000, 17010000));
+        e.InjectHit(H(me, t.AddSeconds(-30), friend, 5_000));
+        e.InjectHit(H(me, t.AddSeconds(-30), stranger, 5_000));  // PvP
+        e.InjectHit(H(me, t.AddSeconds(-30), mySummon, 5_000));  // bir oyuncunun çağrısı
+        MeterSnapshot after = e.SnapshotAt(t.AddSeconds(-29));
+        Check("oyuncuya vuruşlar donmuş sonucu silmez, Savasta'yı tetiklemez", dead.FightOver && after.FightOver && P(after, me)?.Total == 300_000 && !after.Savasta,
+            Show(after));
+    }
+
+    // b) Dövüş yokken PvP / kendine hasar dövüş başlatmaz; dövüş varken tabloya ve BossTotal'a girmez, dövüşü uzatmaz.
+    {
+        var (e, d, _) = New();
+        d.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, t));
+        d.NoteClass(me, "Gladiator");
+        d.Register(stranger, "Yabanci"); d.NoteClass(stranger, "Ranger");
+        e.InjectHit(H(me, t.AddSeconds(-50), stranger, 50_000));
+        e.InjectHit(H(stranger, t.AddSeconds(-50), me, 50_000, 13010000));
+        MeterSnapshot none = e.SnapshotAt(t.AddSeconds(-49));
+        d.HitPoints.Note(boss, t.AddSeconds(-45), 5_000_000);
+        e.InjectHit(H(me, t.AddSeconds(-44), boss, 100_000));
+        d.HitPoints.Note(boss, t.AddSeconds(-44), 4_900_000);
+        for (int i = 0; i < 10; i++) { e.InjectHit(H(me, t.AddSeconds(-40 + i * 2), me, 1_000)); } // kendine hasar 20 sn boyunca
+        MeterSnapshot s = e.SnapshotAt(t.AddSeconds(-15));
+        Check("oyuncuya vuruş dövüş başlatmaz, tabloya girmez, dövüşü uzatmaz",
+            none.Players.All(p => p.Total == 0) && !none.Savasta && s.FightOver && P(s, me) is { Total: 100_000, BossTotal: 100_000 } && s.FightDuration == TimeSpan.Zero,
+            Show(none) + " >> " + Show(s));
     }
 }
