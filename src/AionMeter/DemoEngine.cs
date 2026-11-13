@@ -185,7 +185,8 @@ internal sealed class DemoEngine : IMeterEngine
             double bitis = _bossOldu ? _olumZamani : t;
             double sure = Math.Max(0, bitis - _dovusBaslangic);
             var aktif = TimeSpan.FromSeconds(Math.Max(0, sure - o.SessizSure));
-            long toplam = (long)o.Toplam;
+            // Gerçek motor gibi: boss varken (demoda her zaman) toplam ve beceriler bossa vurulandan; grafik bütün hasardan.
+            long toplam = (long)o.BossToplam;
             double kritikOrani = 0.18 + 0.04 * (o.Id % 4);
 
             DemoBeceri[] adlar = o.Sinif is not null && _sinifBecerileri.TryGetValue(o.Sinif, out var a) ? a : _genelBeceriler;
@@ -251,13 +252,22 @@ internal sealed class DemoEngine : IMeterEngine
 
             var liste = new List<PlayerDamage>(_aktif.Length);
             string? yerelAd = null;
+            int sonKova = (int)(t - _dovusBaslangic) - 1; // son tamamlanmış saniye (anlık DPS oku)
             foreach (var o in _aktif)
             {
                 long toplam = (long)o.Toplam;
                 int olum = 0;
                 foreach (double an in o.OlumAnlari) if (sure.TotalSeconds >= an) olum++;
+                double? son = null;
+                if (!_bossOldu && sonKova >= 0)
+                {
+                    int ilk = Math.Max(0, sonKova - 9);
+                    long top = 0;
+                    for (int i = ilk; i <= sonKova && i < o.Kovalar.Count; i++) top += o.Kovalar[i];
+                    son = top / (double)(sonKova - ilk + 1);
+                }
                 liste.Add(new PlayerDamage(o.Id, o.Ad, toplam, toplam / sn, o.Yerel, o.Sinif, o.Cp, o.BossToplam / sn,
-                    (long)o.BossToplam, olum));
+                    (long)o.BossToplam, olum, son));
                 if (o.Yerel) yerelAd = o.Ad;
             }
             liste.Sort(static (a, b) => b.Total.CompareTo(a.Total));

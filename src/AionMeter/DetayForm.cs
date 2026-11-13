@@ -29,6 +29,8 @@ internal sealed class DetayForm : Form
     private readonly float _olcek;
     private byte _alfa;
     private readonly Font _yazi, _yaziYari, _yaziBuyuk, _yaziKucuk, _yaziAd;
+    // Sayılar overlay gibi Bahnschrift, sabit genişlikli rakamla (sütunlar hizalı, akan sayı yana kaymaz)
+    private readonly RakamYazisi _rYazi, _rYari, _rBuyuk;
     private readonly Pen _kalemCizgi = new(Palet.Cizgi);
     private readonly Pen _kalemKenar = new(Palet.Cizgi);
     private readonly Pen _kalemKapat = new(Palet.Soluk, 1.5f);
@@ -62,7 +64,7 @@ internal sealed class DetayForm : Form
     private string? _sinif;
 
     // Değişiklik kontrolü
-    private long _sonToplam = -1, _sonVurus = -1, _sonAktifSn = -1, _sonKovaDeger = -1;
+    private long _sonToplam = -1, _sonVurus = -1, _sonAktifSn = -1, _sonKovaDeger = -1, _sonDps = -1;
     private int _sonBeceri = -1, _sonKovaSayisi = -1, _sonOlum = -1;
 
     // Ölçüler (fiziksel px; açık kaldığı sürece sadece büyür)
@@ -72,6 +74,8 @@ internal sealed class DetayForm : Form
     private Rectangle _sonOverlay;
 
     public long OyuncuId { get; private set; }
+    /// <summary>Overlay boss modunda mı (satırdaki ana sayı boss/sn). Başlıktaki DPS satırdakiyle aynı kaynaktan okunur.</summary>
+    public Func<bool>? BossModu; // alan (özellik değil): tasarımcı serileştirmesi yok
     private bool _tiklanmaz; // kilitli overlay'de sabit panel: Alt basılı değilken tıklamalar oyuna geçer
     public event Action? KapatIstendi;
 
@@ -102,17 +106,20 @@ internal sealed class DetayForm : Form
         // Ad ve DPS yazıları Ayarlar → Renk ve yazı'daki yüzdelerle (overlay ile aynı)
         _yaziAd = Palet.YaziTipi(14f * olcek * adOlcek, yariKalin: true);
         _yaziBuyuk = Palet.YaziTipi(16f * olcek * dpsOlcek, yariKalin: true);
+        _rYazi = new RakamYazisi(Palet.RakamTipi(12f * olcek));
+        _rYari = new RakamYazisi(Palet.RakamTipi(12f * olcek, yariKalin: true));
+        _rBuyuk = new RakamYazisi(Palet.RakamTipi(16f * olcek * dpsOlcek, yariKalin: true));
         _baslikH = Math.Max(P(26), Olc("Ag", _yaziAd, dikey: true) + P(4));
-        _dpsH = Math.Max(P(24), Olc("Ag", _yaziBuyuk, dikey: true) + P(2));
+        _dpsH = Math.Max(P(24), Math.Max(Olc("Ag", _yaziBuyuk, dikey: true), _rBuyuk.Yukseklik) + P(2));
         _yaziKucuk = Palet.YaziTipi(11f * olcek);
         _kalemGrafik.Width = Math.Max(1f, 1.5f * olcek);
 
-        // Sayı sütunları şablonla bir kez ölçülür; her yenilemede tekrar ölçülmez.
-        _hasarW = Math.Max(Olc("99.999.999", _yaziYari), Olc("Hasar", _yaziKucuk));
-        _payW = Math.Max(Olc("%100,0", _yazi), Olc("Pay", _yaziKucuk));
-        _vurusW = Math.Max(Olc("99.999", _yazi), Olc("Vuruş", _yaziKucuk));
-        _kritikW = Math.Max(Olc("%100,0", _yazi), Olc("Kritik", _yaziKucuk));
-        _maksW = Math.Max(Olc("9.999.999", _yazi), Olc("En yüksek", _yaziKucuk));
+        // Sayı sütunları şablonla (rakam yazısıyla, sabit genişlikli rakam) bir kez ölçülür; her yenilemede tekrar ölçülmez.
+        _hasarW = Math.Max(_rYari.Genislik("99.999.999"), Olc("Hasar", _yaziKucuk));
+        _payW = Math.Max(_rYazi.Genislik("%100,0"), Olc("Pay", _yaziKucuk));
+        _vurusW = Math.Max(_rYazi.Genislik("99.999"), Olc("Vuruş", _yaziKucuk));
+        _kritikW = Math.Max(_rYazi.Genislik("%100,0"), Olc("Kritik", _yaziKucuk));
+        _maksW = Math.Max(_rYazi.Genislik("9.999.999"), Olc("En yüksek", _yaziKucuk));
         _adSutunW = P(110);
         _beceriIkonlari = new BeceriIkonlari(P(16));
     }
@@ -207,7 +214,7 @@ internal sealed class DetayForm : Form
         if (oyuncuId != OyuncuId)
         {
             OyuncuId = oyuncuId;
-            _sonToplam = _sonVurus = _sonAktifSn = _sonKovaDeger = -1;
+            _sonToplam = _sonVurus = _sonAktifSn = _sonKovaDeger = _sonDps = -1;
             _sonBeceri = _sonKovaSayisi = _sonOlum = -1;
             _adSutunW = P(110);
             _icerikW = 0;
@@ -231,10 +238,11 @@ internal sealed class DetayForm : Form
         int kovaSayisi = kovalar?.Count ?? -2;
         long kovaDeger = kovaSayisi > 0 ? kovalar![kovaSayisi - 1] : -2;
         int olum = p?.Olum ?? 0;
+        long dps = (long)Math.Round(BaslikDps(d, p)); // satırdaki sayı (gösterilen tam sayı) değişince de yeniden kurulur
         if (toplam == _sonToplam && vurus == _sonVurus && aktif == _sonAktifSn && beceri == _sonBeceri &&
-            kovaSayisi == _sonKovaSayisi && kovaDeger == _sonKovaDeger && olum == _sonOlum) return;
+            kovaSayisi == _sonKovaSayisi && kovaDeger == _sonKovaDeger && olum == _sonOlum && dps == _sonDps) return;
         _sonToplam = toplam; _sonVurus = vurus; _sonAktifSn = aktif; _sonBeceri = beceri;
-        _sonKovaSayisi = kovaSayisi; _sonKovaDeger = kovaDeger; _sonOlum = olum;
+        _sonKovaSayisi = kovaSayisi; _sonKovaDeger = kovaDeger; _sonOlum = olum; _sonDps = dps;
 
         ModelKur(d, p);
         Yerlestir(_sonOverlay);
@@ -259,6 +267,13 @@ internal sealed class DetayForm : Form
 
     // ---------------- Model ----------------
 
+    /// <summary>Başlıktaki DPS: satırda gösterilen sayının aynısı (boss modunda boss/sn, değilse /sn); satır yoksa detayın DPS'i.</summary>
+    private double BaslikDps(PlayerDetail? d, PlayerDamage? p)
+    {
+        if (p is not null) return BossModu?.Invoke() == true ? p.BossDps : p.Dps;
+        return d?.Dps ?? 0;
+    }
+
     private void ModelKur(PlayerDetail? d, PlayerDamage? p)
     {
         _veriVar = d is not null;
@@ -273,7 +288,7 @@ internal sealed class DetayForm : Form
         _sinif = d.ClassName;
         _yerel = p?.IsLocal ?? false;
         _cp = d.CombatPower is int cp ? Bicim.Tam(cp) + " CP" : "— CP";
-        _dps = Bicim.Dps(d.Dps);
+        _dps = Bicim.Dps(BaslikDps(d, p));
         _ozet = "Toplam " + Bicim.Tam(Math.Max(0, d.Total)) + "   Aktif " + Bicim.Sure(d.Active);
         RenkleriAyarla();
 
@@ -314,8 +329,8 @@ internal sealed class DetayForm : Form
         int pad = Pad, b = Bosluk;
         int tablo = 2 * pad + _adSutunW + b + _hasarW + b + _payW + b + _vurusW + b + _kritikW + b + _maksW;
         int baslik = 2 * pad + _ikonlar.Boyut + P(8) + Math.Min(Olc(_ad, _yaziAd), P(200)) + P(10) + Olc(_cp, _yaziKucuk) + P(30);
-        int ikinci = 2 * pad + Olc(_dps, _yaziBuyuk) + P(14) + Olc(_ozet, _yaziKucuk);
-        int istat = 2 * pad + IstatSutun * (Olc("Perfect", _yaziKucuk) + P(10) + Olc("%100,0", _yazi)) + (IstatSutun - 1) * P(20);
+        int ikinci = 2 * pad + _rBuyuk.Genislik(_dps) + P(14) + Olc(_ozet, _yaziKucuk);
+        int istat = 2 * pad + IstatSutun * (Olc("Perfect", _yaziKucuk) + P(10) + _rYazi.Genislik("9.999.999")) + (IstatSutun - 1) * P(20);
         _icerikW = Math.Max(_icerikW, Math.Max(Math.Max(tablo, istat), Math.Max(baslik, ikinci)));
     }
 
@@ -358,7 +373,8 @@ internal sealed class DetayForm : Form
         _grafikN = n;
         _grafikMaks = (float)maks;
         _grafikOrt = (float)(hepsi / ((double)n * bs));
-        _grafikMaksMetin = "maks " + Bicim.Dps(maks);
+        // Birim başlıkta ("DPS · 5 sn ortalama"): maks ve ort. aynı biçimde, birimsiz
+        _grafikMaksMetin = "maks " + Bicim.Sayi(maks);
         _grafikOrtMetin = "ort. " + Bicim.Sayi(_grafikOrt);
         _grafikOrta = Bicim.Sure(TimeSpan.FromSeconds((double)n * bs / 2));
         _grafikSon = Bicim.Sure(TimeSpan.FromSeconds((double)n * bs));
@@ -415,8 +431,8 @@ internal sealed class DetayForm : Form
         y += BaslikH;
 
         // Satır 2: DPS (birincil) · toplam · aktif süre
-        int dpsW = Olc(_dps, _yaziBuyuk);
-        TextRenderer.DrawText(g, _dps, _yaziBuyuk, new Rectangle(x0, y, dpsW, DpsH), Palet.Dps, Sol);
+        int dpsW = _rBuyuk.Genislik(_dps);
+        _rBuyuk.Ciz(g, _dps, new Rectangle(x0, y, dpsW, DpsH), Palet.Dps, sag: false);
         x = x0 + dpsW + P(14);
         TextRenderer.DrawText(g, _ozet, _yaziKucuk, new Rectangle(x, y, Math.Max(0, x1 - x), DpsH), Palet.Soluk, Sol);
         y += DpsH;
@@ -430,7 +446,7 @@ internal sealed class DetayForm : Form
         GrafikCiz(g, new Rectangle(x0, y, x1 - x0, GrafikH));
         y += GrafikH;
         int ucte = (x1 - x0) / 3;
-        TextRenderer.DrawText(g, "00:00", _yaziKucuk, new Rectangle(x0, y, ucte, EtiketH), Palet.CokSoluk, Sol);
+        TextRenderer.DrawText(g, "0:00", _yaziKucuk, new Rectangle(x0, y, ucte, EtiketH), Palet.CokSoluk, Sol);
         if (_grafikN > 1)
         {
             TextRenderer.DrawText(g, _grafikOrta, _yaziKucuk, new Rectangle(x0 + ucte, y, x1 - x0 - 2 * ucte, EtiketH), Palet.CokSoluk,
@@ -448,11 +464,22 @@ internal sealed class DetayForm : Form
         for (int i = 0; i < IstatEtiketleri.Length; i++)
         {
             int sutun = i / IstatSatir, satir = i % IstatSatir;
-            int cx = x0 + sutun * (sutunW + araSutun);
-            int cy = y + satir * IstatH;
-            TextRenderer.DrawText(g, IstatEtiketleri[i], _yaziKucuk, new Rectangle(cx, cy, sutunW, IstatH), Palet.Soluk, Sol);
-            var renk = i == 8 && _oldu ? Palet.Kirmizi : Palet.Yazi;
-            TextRenderer.DrawText(g, _istatDeger[i], _yazi, new Rectangle(cx, cy, sutunW, IstatH), renk, Sag);
+            TextRenderer.DrawText(g, IstatEtiketleri[i], _yaziKucuk,
+                new Rectangle(x0 + sutun * (sutunW + araSutun), y + satir * IstatH, sutunW, IstatH), Palet.Soluk, Sol);
+        }
+        IntPtr hdc = RakamYazisi.Ac(g); // değerler tek HDC oturumunda (arada Graphics'e çizilmez)
+        try
+        {
+            for (int i = 0; i < IstatEtiketleri.Length; i++)
+            {
+                int sutun = i / IstatSatir, satir = i % IstatSatir;
+                var renk = i == 8 && _oldu ? Palet.Kirmizi : Palet.Yazi;
+                _rYazi.Ciz(hdc, _istatDeger[i], new Rectangle(x0 + sutun * (sutunW + araSutun), y + satir * IstatH, sutunW, IstatH), renk, sag: true);
+            }
+        }
+        finally
+        {
+            RakamYazisi.Kapat(g, hdc);
         }
         y += IstatSatir * IstatH;
 
@@ -489,11 +516,19 @@ internal sealed class DetayForm : Form
             g.DrawImage(_beceriIkonlari.Al(m.Ikon), x0 + P(2), y + (SatirH - bi) / 2, bi, bi);
             int adX = x0 + P(2) + bi + P(6);
             TextRenderer.DrawText(g, m.Ad, _yazi, new Rectangle(adX, y, Math.Max(0, Math.Min(P(200), adSutun - (adX - x0) - P(4))), SatirH), Palet.Yazi, Sol);
-            TextRenderer.DrawText(g, m.Hasar, _yaziYari, new Rectangle(hasarX, y, _hasarW, SatirH), Palet.Dps, Sag);
-            TextRenderer.DrawText(g, m.Pay, _yazi, new Rectangle(payX, y, _payW, SatirH), Palet.Soluk, Sag);
-            TextRenderer.DrawText(g, m.Vurus, _yazi, new Rectangle(vurusX, y, _vurusW, SatirH), Palet.Soluk, Sag);
-            TextRenderer.DrawText(g, m.Kritik, _yazi, new Rectangle(kritikX, y, _kritikW, SatirH), Palet.Soluk, Sag);
-            TextRenderer.DrawText(g, m.Maks, _yazi, new Rectangle(maksX, y, _maksW, SatirH), Palet.Soluk, Sag);
+            hdc = RakamYazisi.Ac(g); // satırın sayıları tek HDC oturumunda
+            try
+            {
+                _rYari.Ciz(hdc, m.Hasar, new Rectangle(hasarX, y, _hasarW, SatirH), Palet.Dps, sag: true);
+                _rYazi.Ciz(hdc, m.Pay, new Rectangle(payX, y, _payW, SatirH), Palet.Soluk, sag: true);
+                _rYazi.Ciz(hdc, m.Vurus, new Rectangle(vurusX, y, _vurusW, SatirH), Palet.Soluk, sag: true);
+                _rYazi.Ciz(hdc, m.Kritik, new Rectangle(kritikX, y, _kritikW, SatirH), Palet.Soluk, sag: true);
+                _rYazi.Ciz(hdc, m.Maks, new Rectangle(maksX, y, _maksW, SatirH), Palet.Soluk, sag: true);
+            }
+            finally
+            {
+                RakamYazisi.Kapat(g, hdc);
+            }
             y += SatirH;
         }
 
@@ -543,15 +578,16 @@ internal sealed class DetayForm : Form
         g.DrawLines(_kalemGrafik, _cizgi);
         g.SmoothingMode = eski;
 
-        // Ortalama DPS: kesikli çizgi + "ort." etiketi (etiket grafik içinde kalacak şekilde sınırlanır)
+        // Ortalama DPS: kesikli çizgi + "ort." etiketi. Etiket solda (en eski saniyeler): sağ uç en yeni saniyelerdir, örtülmesin.
+        // Etiket grafik içinde kalacak şekilde sınırlanır.
         float oy = alt - Math.Clamp(_grafikOrt / _grafikMaks, 0f, 1f) * yukseklik;
         g.DrawLine(_kalemOrtalama, r.Left, oy, r.Right - 1, oy);
         int etiketH = P(14);
         int etiketW = Olc(_grafikOrtMetin, _yaziKucuk);
         int ey = Math.Clamp((int)oy - etiketH - P(1), r.Top, r.Bottom - etiketH);
-        var etiket = new Rectangle(r.Right - P(4) - etiketW, ey, etiketW, etiketH);
+        var etiket = new Rectangle(r.Left + P(4), ey, etiketW, etiketH);
         g.FillRectangle(_fircaGrafikArka, Rectangle.Inflate(etiket, P(3), 0)); // çizginin üstünde okunsun
-        TextRenderer.DrawText(g, _grafikOrtMetin, _yaziKucuk, etiket, Palet.Soluk, Sag);
+        TextRenderer.DrawText(g, _grafikOrtMetin, _yaziKucuk, etiket, Palet.Soluk, Sol);
     }
 
     // ---------------- Fare ----------------
@@ -573,6 +609,7 @@ internal sealed class DetayForm : Form
         if (disposing)
         {
             _yazi.Dispose(); _yaziYari.Dispose(); _yaziAd.Dispose(); _yaziBuyuk.Dispose(); _yaziKucuk.Dispose();
+            _rYazi.Dispose(); _rYari.Dispose(); _rBuyuk.Dispose();
             _kalemCizgi.Dispose(); _kalemKenar.Dispose(); _kalemKapat.Dispose(); _kalemReferans.Dispose(); _kalemOrtalama.Dispose();
             _kalemGrafik.Dispose(); _fircaGrafik.Dispose(); _fircaGrafikArka.Dispose(); _fircaBeceri.Dispose();
             _beceriIkonlari.Dispose();
