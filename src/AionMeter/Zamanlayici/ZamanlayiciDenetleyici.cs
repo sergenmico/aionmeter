@@ -238,6 +238,9 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             var p = new Point(_ayar.ZamanlayiciX, _ayar.ZamanlayiciY);
             foreach (var e in Screen.AllScreens)
                 if (e.Bounds.Contains(p)) return p;
+            // Eski sürümün kaydettiği kenar dışı nokta: en yakın ekrana kenetle (ekran kaldırıldıysa da makul yer)
+            var y = Screen.FromPoint(p).Bounds;
+            return new Point(Math.Clamp(p.X, y.Left, y.Right - 1), Math.Clamp(p.Y, y.Top, y.Bottom - 1));
         }
         Screen ekran;
         IntPtr oyun = _oyunPenceresi();
@@ -258,8 +261,11 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     private void GeriTasindi()
     {
         if (_geri is null) return;
-        _ayar.ZamanlayiciX = _geri.Left + _geri.Width / 2;
-        _ayar.ZamanlayiciY = _geri.Top;
+        // Önce ekrana sığdır, sonra kaydet: üst kenardan birkaç px taşan bırakış kaydedilirse Capa onu hiçbir ekranda bulamaz
+        // ve panel varsayılan yere sıçrar (denetim bulgusu 1).
+        var r = EkranaSigdir(new Rectangle(_geri.Left, _geri.Top, _geri.Width, _geri.Height));
+        _ayar.ZamanlayiciX = r.Left + r.Width / 2;
+        _ayar.ZamanlayiciY = r.Top;
         _ayar.Kaydet();
         GeriYerlestir(); // ekran dışına bırakıldıysa içeri al
     }

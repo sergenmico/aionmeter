@@ -267,7 +267,7 @@ internal sealed class OverlayForm : Form
         _kareZamanlayici = new System.Windows.Forms.Timer { Interval = 15 }; // ~60 fps, sadece geçiş sürerken
         _kareZamanlayici.Tick += (_, _) => KareTick();
         _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _dpiOlcek, BizimPencereler, m => _tepsi?.Bildir(m));
-        _etkinlik = new Zamanlayici.ZamanlayiciDenetleyici(ayar, () => _olcek, () => _onPlan.SonOyunPenceresi);
+        _etkinlik = new Zamanlayici.ZamanlayiciDenetleyici(ayar, () => _olcek, () => _onPlan.OyunPenceresi);
         _cevirmen.DurumDegisti += () =>
         {
             TepsiGuncelle();
@@ -353,6 +353,7 @@ internal sealed class OverlayForm : Form
             sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc, KuklaKisayolBasildi);
         _tepsi.Menu.Opening += (_, _) => TepsiGuncelle(); // alarmın kalan süresi menü açılırken güncellenir
         _tepsi.BossZamanlari = () => { _etkinlik.BossListesiDegistir(); EtkinlikTick(); };
+        if (!_demo) OnPlanKancasiKur();
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -622,7 +623,8 @@ internal sealed class OverlayForm : Form
     /// <summary>Fare düğmesi şu an basılı ve imleç menünün, açık alt menülerin ve kenar düğmesinin dışında mı?</summary>
     private bool MenuDisinaTiklandi(ContextMenuStrip menu)
     {
-        if (!TusBasili(Native.VK_LBUTTON) && !TusBasili(Native.VK_RBUTTON)) return false;
+        // 0x8000 şu an basılı, 0x0001 son yoklamadan beri basıldı: 200 ms arası kısa tık da kaçmasın (denetim bulgusu 6)
+        if (!TusBasildi(Native.VK_LBUTTON) && !TusBasildi(Native.VK_RBUTTON)) return false;
         var imlec = Cursor.Position;
         if (menu.Bounds.Contains(imlec)) return false;
         if (_kenar is { Acik: true } && _kenar.Alan.Contains(imlec)) return false;
@@ -661,6 +663,7 @@ internal sealed class OverlayForm : Form
     {
         if (IsHandleCreated && _pencereAcik && _alfa > 0) yield return Bounds;
         foreach (var r in _etkinlik.Pencereler) yield return r;
+        if (_kupAfisi is { Acik: true }) yield return _kupAfisi.Alan; // OCR "Küp var" yazısını çevirmeye çalışmasın
         if (_kenar is { Acik: true }) yield return _kenar.Alan;
         if (_detay is { Visible: true }) yield return _detay.Bounds;
         if (_ayarlarFormu is { Visible: true }) yield return _ayarlarFormu.Bounds;
@@ -801,6 +804,7 @@ internal sealed class OverlayForm : Form
             FareYokla();
             GorunurlukUygula();
             EtkinlikTick(); // overlay savaş dışında gizli/soluk olsa da geri sayım çalışır; tam ekranda/gizliyken kapalı
+            MenuyuGerekirseKapat(); // overlay gizlense de menü oyunun üstünde asılı kalmasın (denetim bulgusu 6)
             AltZamanlayiciGuncelle();
             if (!_sertGorunur)
             {
@@ -839,7 +843,6 @@ internal sealed class OverlayForm : Form
                 _kenar?.EnUsteAl();
             }
 
-            MenuyuGerekirseKapat();
             if (_detay is { Visible: true } && (_tikSayaci & 1) == 0) _detay.Yenile(); // detay sadece açıkken ~2,5 Hz
 
             bool bossGoster = _kukla.Durum == KuklaTesti.Hal.Kapali && BossGosterilsinMi(s); // test ve kart sürerken boss bloğu yok
@@ -884,7 +887,7 @@ internal sealed class OverlayForm : Form
             if (!IsHandleCreated || _tamEkran) return;
             if (!_demo && (_onPlan.OzelTamEkran() || !_onPlan.OyunOnde())) return;
             Rectangle hedef = Rectangle.Empty;
-            IntPtr oyun = _demo ? IntPtr.Zero : _onPlan.SonOyunPenceresi;
+            IntPtr oyun = _demo ? IntPtr.Zero : _onPlan.OyunPenceresi; // alıntı aracının penceresi değil (denetim bulgusu 10)
             if (oyun != IntPtr.Zero && Native.IsWindow(oyun) && Native.GetWindowRect(oyun, out Native.RECT r))
             {
                 // Pencereli oyunda pencerenin ortası; ekran dışına taşan kısımlar sayılmaz.
@@ -2813,6 +2816,7 @@ internal sealed class OverlayForm : Form
     }
 
     private static bool TusBasili(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
+    private static bool TusBasildi(int vk) => (Native.GetAsyncKeyState(vk) & 0x8001) != 0;
 
     private void AltBirakildi()
     {
@@ -2970,6 +2974,28 @@ internal sealed class OverlayForm : Form
         catch (Exception ex) { HataLog.Yaz("Etkinlik zamanlayıcısı", ex); }
     }
 
+    // Ön plan değişince beklemeden görünürlüğü yeniden hesapla: Alt+Tab ile özel tam ekran oyuna dönülürken pencerelerimiz
+    // 5 Hz tiki beklerken (≤200 ms) oyunun üstünde kalmasın (denetim bulgusu 5). Temsilci alanda tutulur (GC toplamasın).
+    private Native.WinEventProc? _onPlanGeriCagri;
+    private IntPtr _onPlanKancasi;
+
+    private void OnPlanKancasiKur()
+    {
+        _onPlanGeriCagri = (_, _, _, _, _, _, _) =>
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try
+            {
+                GorunurlukUygula();
+                EtkinlikTick();
+                MenuyuGerekirseKapat();
+            }
+            catch (Exception ex) { HataLog.Yaz("Ön plan değişimi", ex); }
+        };
+        _onPlanKancasi = Native.SetWinEventHook(Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero,
+            _onPlanGeriCagri, 0, 0, Native.WINEVENT_OUTOFCONTEXT | Native.WINEVENT_SKIPOWNPROCESS);
+    }
+
     private void GosterDegistir()
     {
         _kullaniciGizledi = !_kullaniciGizledi;
@@ -3022,6 +3048,8 @@ internal sealed class OverlayForm : Form
         if (disposing)
         {
             SystemEvents.DisplaySettingsChanged -= EkranDegisti;
+            if (_onPlanKancasi != IntPtr.Zero) Native.UnhookWinEvent(_onPlanKancasi);
+            _onPlanKancasi = IntPtr.Zero;
             _zamanlayici.Dispose();
             _altZamanlayici.Dispose();
             _gecisZamanlayici.Dispose();

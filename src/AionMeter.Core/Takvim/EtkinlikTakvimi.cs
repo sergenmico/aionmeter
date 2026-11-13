@@ -208,11 +208,26 @@ public sealed class EtkinlikTakvimi
             int adim = k.PeriyotDk > 0 ? k.PeriyotDk : 24 * 60;
             for (int dk = k.IlkDk; dk < 24 * 60; dk += adim)
             {
-                DateTime utc = YereldenUtc(gun.AddMinutes(dk));
+                DateTime yerel = gun.AddMinutes(dk);
+                DateTime utc = YereldenUtc(yerel);
                 if (utc > enAz) return utc;
+                // Saat geri alınan gece iki kez yaşanan saat: saatlik etkinlik gerçek zamanda iki kez olur (denetim bulgusu 2).
+                // Seyrek kalemlerde (3 saatte bir vb.) ilk yaşanış yeter.
+                if (k.PeriyotDk is > 0 and <= 60 && IkinciYasanis(yerel) is { } ikinci && ikinci > enAz) return ikinci;
             }
         }
         return DateTime.MaxValue; // olmaz: her kalem haftada en az bir kez
+    }
+
+    /// <summary>İki kez yaşanan yerel saatin ikinci yaşanışı (UTC); saat belirsiz değilse null.</summary>
+    private DateTime? IkinciYasanis(DateTime yerel)
+    {
+        yerel = DateTime.SpecifyKind(yerel, DateTimeKind.Unspecified);
+        if (!SaatDilimi.IsAmbiguousTime(yerel)) return null;
+        TimeSpan ofset = TimeSpan.MaxValue;
+        foreach (var o in SaatDilimi.GetAmbiguousTimeOffsets(yerel))
+            if (o < ofset) ofset = o; // küçük ofset = daha geç UTC (ikinci yaşanış)
+        return DateTime.SpecifyKind(yerel - ofset, DateTimeKind.Utc);
     }
 
     /// <summary>Bölge yerel saati → UTC. Olmayan saat ileri kayar, iki kez yaşanan saat ilk anıyla alınır.</summary>

@@ -51,6 +51,13 @@ internal abstract class KatmanPencere : Form
         }
     }
 
+    /// <summary>Başka DPI'lı ekrana geçişte Windows'un önerdiği boyutu alma: boyutu Bas belirler (denetim bulgusu 4).</summary>
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        e.Cancel = true;
+        base.OnDpiChanged(e);
+    }
+
     protected override void WndProc(ref Message m)
     {
         switch (m.Msg)

@@ -96,6 +96,13 @@ internal abstract class KatmanliPanel : Form
         base.WndProc(ref m);
     }
 
+    /// <summary>Başka DPI'lı ekrana geçişte Windows'un önerdiği boyutu alma: boyutu ve ölçeği denetleyici belirler.</summary>
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        e.Cancel = true;
+        base.OnDpiChanged(e);
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);

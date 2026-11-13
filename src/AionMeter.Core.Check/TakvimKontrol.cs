@@ -58,7 +58,9 @@ internal static class TakvimKontrol
         Sonraki(avrupa, "Argo, the Spirit King", U(2026, 10, 24, 7, 0), U(2026, 10, 24, 8, 30), "Ekim geçişi öncesi Argo 10:30 CEST");
         Sonraki(avrupa, "Argo, the Spirit King", U(2026, 10, 25, 7, 0), U(2026, 10, 25, 9, 30), "Ekim geçişi sonrası Argo 10:30 CET");
         Sonraki(avrupa, "Shugo Festival", U(2026, 10, 24, 23, 30), U(2026, 10, 25, 0, 0), "iki kez yaşanan 02:00 ilk anıyla (CEST = 00:00Z)");
-        Sonraki(avrupa, "Shugo Festival", U(2026, 10, 25, 0, 0), U(2026, 10, 25, 2, 0), "sonra 03:00 CET = 02:00Z (02:00 ikinci kez yok)");
+        Sonraki(avrupa, "Shugo Festival", U(2026, 10, 25, 0, 0), U(2026, 10, 25, 1, 0), "saatlik: 02:00 ikinci kez (CET = 01:00Z)");
+        Sonraki(avrupa, "Shugo Festival", U(2026, 10, 25, 1, 0), U(2026, 10, 25, 2, 0), "sonra 03:00 CET = 02:00Z");
+        Sonraki(avrupa, "Dimensional Invasion", U(2026, 10, 25, 0, 45), U(2026, 10, 25, 1, 30), "saatlik: 02:30 ikinci kez (CET = 01:30Z)");
         Sonraki(avrupa, "Guardian Lord Nahma", U(2026, 10, 23, 12, 0), U(2026, 10, 23, 19, 0), "Nahma Cuma yaz saatinde 19:00Z");
         Sonraki(avrupa, "Guardian Lord Nahma", U(2026, 10, 24, 12, 0), U(2026, 10, 25, 20, 0), "Nahma Pazar kış saatinde 20:00Z");
 

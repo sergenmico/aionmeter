@@ -30,11 +30,15 @@ internal sealed class OnPlanIzleyici
             (_sonSonuc, _sonOyun) = SurecIzinli(pid);
         }
         if (_sonSonuc) SonOyunPenceresi = hwnd; // ayarlar penceresi kapanınca odak buraya döner
+        if (_sonOyun) OyunPenceresi = hwnd;
         return _sonSonuc;
     }
 
-    /// <summary>En son önde görülen oyun penceresi (bizim pencerelerimiz hariç); bilinmiyorsa 0.</summary>
+    /// <summary>En son önde görülen oyun penceresi (bizim pencerelerimiz hariç; ekran alıntısı araçları dahil); bilinmiyorsa 0.</summary>
     public IntPtr SonOyunPenceresi { get; private set; }
+
+    /// <summary>En son önde görülen, gerçekten oyunun (AION2) penceresi; alıntı aracı sayılmaz. Konumlandırma için.</summary>
+    public IntPtr OyunPenceresi { get; private set; }
 
     /// <summary>(izinli mi, oyunun kendisi mi)</summary>
     private static (bool Izinli, bool Oyun) SurecIzinli(uint pid)
@@ -65,8 +69,9 @@ internal sealed class OnPlanIzleyici
     private bool _iniTamEkran;
 
     /// <summary>
-    /// Oyun önde ve özel tam ekranda mı? Windows'un bildirimi (QUNS_RUNNING_D3D_FULL_SCREEN) ya da, o gelmezse,
-    /// oyunun kendi ayarı (GameUserSettings.ini FullscreenMode=0) + pencerenin ekranı tam kaplaması. Ayar dosyası sadece okunur.
+    /// Oyun önde ve özel tam ekranda mı? Windows'un bildirimi (QUNS_RUNNING_D3D_FULL_SCREEN) ya da oyunun kendi ayarı
+    /// (GameUserSettings.ini FullscreenMode=0). Ayar dosyası sadece okunur. Ekranı kaplama şartı aranmaz: Alt+Tab ile oyuna dönülürken
+    /// pencere henüz ekranı kaplamadan da (ön plan olayı anında) tam ekran sayılmalı ki pencerelerimiz bir an bile üstte kalmasın.
     /// </summary>
     public bool OzelTamEkran()
     {
@@ -76,7 +81,7 @@ internal sealed class OnPlanIzleyici
         if (pid == 0 || pid == _kendiPid) return _sonTamEkran; // bizim pencerede karar değişmez
         if (!OyunOnde() || !_sonOyun) return _sonTamEkran = false; // alıntı aracı ya da başka program
         bool d3d = Native.SHQueryUserNotificationState(out int durum) == 0 && durum == Native.QUNS_RUNNING_D3D_FULL_SCREEN;
-        return _sonTamEkran = d3d || (IniTamEkran() && EkraniKapliyor(hwnd));
+        return _sonTamEkran = d3d || IniTamEkran();
     }
 
     private bool IniTamEkran()
@@ -108,12 +113,5 @@ internal sealed class OnPlanIzleyici
         {
             return _iniTamEkran; // oyun o an yazıyor olabilir: önceki sonuç, 2 sn sonra yeniden
         }
-    }
-
-    private static bool EkraniKapliyor(IntPtr hwnd)
-    {
-        if (!Native.GetWindowRect(hwnd, out Native.RECT r)) return false;
-        Rectangle ekran = Screen.FromHandle(hwnd).Bounds;
-        return r.Left <= ekran.Left && r.Top <= ekran.Top && r.Right >= ekran.Right && r.Bottom >= ekran.Bottom;
     }
 }

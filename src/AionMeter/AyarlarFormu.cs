@@ -195,7 +195,7 @@ internal sealed class AyarlarFormu : Form
             _ayar.Zamanlayici = !_ayar.Zamanlayici;
             _ayar.Kaydet();
         }));
-        _ogeler.Add(new Secim("Sunucu bölgesi", EtkinlikTakvimi.BolgeAdlari, () => (int)_ayar.Bolge,
+        _ogeler.Add(new Secim("Bölge", EtkinlikTakvimi.BolgeAdlari, () => (int)_ayar.Bolge,
             i => { _ayar.Bolge = (SunucuBolgesi)i; _ayar.Kaydet(); }));
         _ogeler.Add(new Anahtar("Sadece benim satırım", "Diğerleri arka planda sayılır; sıran #3 gibi görünür", () => _ayar.SadeceBen, () =>
         {
