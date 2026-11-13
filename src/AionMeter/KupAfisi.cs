@@ -31,14 +31,14 @@ internal static class KupSimgesi
 
 /// <summary>
 /// Gizli Küp afişi: küp sesiyle aynı anda, oyunun bulunduğu ekranın yatay ortasında, üstten ~%30'da büyük
-/// "Yakınlarda Gizli Küp var" yazısı. Her zaman tıklanmaz (WS_EX_TRANSPARENT), odak çalmaz, piksel başına saydam.
+/// "Küp var" yazısı. Her zaman tıklanmaz (WS_EX_TRANSPARENT), odak çalmaz, piksel başına saydam.
 /// ~150 ms belirir, ~4 sn bekler, ~600 ms'de söner; sonra gizlenir ve zamanlayıcı durur (boşta CPU/RAM yok:
 /// yüzey bitmap'i çizimden hemen sonra bırakılır). Oyun özel tam ekrandayken ya da önde değilken overlay hiç göstermez,
 /// gösterirken bu duruma geçilirse <see cref="Kapat"/> ile hemen kapanır.
 /// </summary>
 internal sealed class KupAfisi : KatmanPencere
 {
-    public const string Metin = "Yakınlarda Gizli Küp var";
+    public const string Metin = "Küp var";
     private const int BelirmeMs = 150, BeklemeMs = 4000, SonmeMs = 600;
 
     private readonly System.Windows.Forms.Timer _zamanlayici = new() { Interval = 16 };

@@ -868,7 +868,7 @@ internal sealed class OverlayForm : Form
     }
 
     /// <summary>
-    /// Ekranın ortasında (oyun penceresinin, yoksa overlay'in ekranının) "Yakınlarda Gizli Küp var" afişi.
+    /// Ekranın ortasında (oyun penceresinin, yoksa overlay'in ekranının) "Küp var" afişi.
     /// Oyun özel tam ekrandayken ya da önde değilken gösterilmez (tam ekranda pencere açmak oyunu çökertebilir).
     /// Overlay gizli/soluk olsa da gösterilir: sesle birlikte haber verir.
     /// </summary>
