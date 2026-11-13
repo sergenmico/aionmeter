@@ -446,8 +446,8 @@ internal sealed class OverlayForm : Form
             _cevirmen.PencereleriKapat();
             TamEkranUyar();
         }
-        // Küp afişi: tam ekrana geçildi ya da oyun arkaya düştüyse hemen kapanır.
-        if (_kupAfisi is { Acik: true } && (tamEkran || !(_demo || _onPlan.OyunOnde()))) _kupAfisi.Kapat();
+        // Küp afişi / çipi: tam ekrana geçildi ya da oyun arkaya düştüyse hemen kapanır (küp yakında kalırsa çip sonra döner).
+        if (_kupAfisi is { Gorunur: true } && (tamEkran || !(_demo || _onPlan.OyunOnde()))) _kupAfisi.Kapat();
         if (sert != _sertGorunur || tamEkranDegisti)
         {
             _sertGorunur = sert;
@@ -672,7 +672,7 @@ internal sealed class OverlayForm : Form
     {
         if (IsHandleCreated && _pencereAcik && _alfa > 0) yield return Bounds;
         foreach (var r in _etkinlik.Pencereler) yield return r;
-        if (_kupAfisi is { Acik: true }) yield return _kupAfisi.Alan; // OCR "Küp var" yazısını çevirmeye çalışmasın
+        if (_kupAfisi is not null) foreach (var r in _kupAfisi.Alanlar()) yield return r; // OCR "Küp var" / çipi çevirmeye çalışmasın
         if (_kenar is { Acik: true }) yield return _kenar.Alan;
         if (_detay is { Visible: true }) yield return _detay.Bounds;
         if (_ayarlarFormu is { Visible: true }) yield return _ayarlarFormu.Bounds;
@@ -881,18 +881,32 @@ internal sealed class OverlayForm : Form
         }
     }
 
-    /// <summary>Gizli Küp: açılıştan beri gelen küp sayısı arttıysa (ayar açıksa) kısa küp sesi; menzildeki küp sayısı rozet içindir.</summary>
+    /// <summary>
+    /// Gizli Küp: açılıştan beri gelen küp sayısı arttıysa (ayar açıksa) kısa küp sesi + afiş; afiş sonra küp yakında kaldıkça
+    /// küçük çipe döner. Menzildeki küp sayısı rozet ve çip içindir.
+    /// </summary>
     private void KupDenetle(MeterSnapshot s)
     {
         // Ses kapalıyken sayaç izlenmez (gizliyken motor okunmaz): ses açılınca ilk okuma yalnız eşitler, birikmiş küpler için çalmaz.
-        if (!_ayar.KupSesi) { _kupGelisSon = -1; return; }
+        if (!_ayar.KupSesi)
+        {
+            _kupGelisSon = -1;
+            _kupAfisi?.Bitir(); // ayar kapandı: çip de kalmaz
+            return;
+        }
         int gelis = s.KupGelis;
+        var yon = KupYonu.Den(s);
+        bool menzilde = s.KupYakinda > 0;
         if (_kupGelisSon >= 0 && gelis > _kupGelisSon)
         {
             Zil.Kup(_ayar.KupSes);
-            KupAfisiGoster(KupYonu.Den(s)); // ses ve yazı aynı anda
+            KupAfisiGoster(yon, menzilde); // ses ve yazı aynı anda
         }
-        else if (_kupAfisi is { Acik: true }) _kupAfisi.YonGuncelle(KupYonu.Den(s)); // afiş görünürken yön/mesafe canlı (değişince çizilir)
+        else if (_kupAfisi is not null)
+        {
+            _kupAfisi.Guncelle(yon, menzilde); // yön/mesafe canlı (değişince çizilir); küp gidince çip söner
+            if (_kupAfisi.CipBekliyor && KupHedefi(out var hedef)) _kupAfisi.CipGoster(hedef, yon); // oyun öne döndü, küp hâlâ yakında
+        }
         _kupGelisSon = gelis;
     }
 
@@ -917,29 +931,38 @@ internal sealed class OverlayForm : Form
     /// Oyun özel tam ekrandayken ya da önde değilken gösterilmez (tam ekranda pencere açmak oyunu çökertebilir).
     /// Overlay gizli/soluk olsa da gösterilir: sesle birlikte haber verir.
     /// </summary>
-    private void KupAfisiGoster(KupYonu? yon)
+    private void KupAfisiGoster(KupYonu? yon, bool menzilde)
     {
         try
         {
-            if (!IsHandleCreated || _tamEkran) return;
-            if (!_demo && (_onPlan.OzelTamEkran() || !_onPlan.OyunOnde())) return;
-            Rectangle hedef = Rectangle.Empty;
-            IntPtr oyun = _demo ? IntPtr.Zero : _onPlan.OyunPenceresi; // alıntı aracının penceresi değil (denetim bulgusu 10)
-            if (oyun != IntPtr.Zero && Native.IsWindow(oyun) && Native.GetWindowRect(oyun, out Native.RECT r))
-            {
-                // Pencereli oyunda pencerenin ortası; ekran dışına taşan kısımlar sayılmaz.
-                var ekran = Screen.FromHandle(oyun).Bounds;
-                hedef = Rectangle.Intersect(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom), ekran);
-                if (hedef.Width < 200 || hedef.Height < 120) hedef = ekran;
-            }
-            if (hedef.IsEmpty) hedef = Screen.FromRectangle(Bounds).Bounds;
+            if (!KupHedefi(out var hedef)) return;
             _kupAfisi ??= new KupAfisi();
-            _kupAfisi.Goster(hedef, yon);
+            _kupAfisi.Goster(hedef, yon, menzilde);
         }
         catch (Exception ex)
         {
             HataLog.Yaz("Küp afişi", ex);
         }
+    }
+
+    /// <summary>
+    /// Afişin ve çipin ortalanacağı alan: oyun penceresi (ekran dışına taşan kısmı sayılmaz), yoksa overlay'in ekranı.
+    /// Oyun özel tam ekrandayken ya da önde değilken false: hiçbir küp penceresi açılmaz.
+    /// </summary>
+    private bool KupHedefi(out Rectangle hedef)
+    {
+        hedef = Rectangle.Empty;
+        if (!IsHandleCreated || _tamEkran) return false;
+        if (!_demo && (_onPlan.OzelTamEkran() || !_onPlan.OyunOnde())) return false;
+        IntPtr oyun = _demo ? IntPtr.Zero : _onPlan.OyunPenceresi; // alıntı aracının penceresi değil (denetim bulgusu 10)
+        if (oyun != IntPtr.Zero && Native.IsWindow(oyun) && Native.GetWindowRect(oyun, out Native.RECT r))
+        {
+            var ekran = Screen.FromHandle(oyun).Bounds;
+            hedef = Rectangle.Intersect(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom), ekran);
+            if (hedef.Width < 200 || hedef.Height < 120) hedef = ekran;
+        }
+        if (hedef.IsEmpty) hedef = Screen.FromRectangle(Bounds).Bounds;
+        return true;
     }
 
     // ---------------- Akıcılık: kare zamanlayıcısı ----------------

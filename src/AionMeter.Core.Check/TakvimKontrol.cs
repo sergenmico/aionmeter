@@ -72,7 +72,8 @@ internal static class TakvimKontrol
         avrupa.Yaklasanlar(U(2026, 11, 13, 17, 21), on, liste);
         Bak("17:21Z: Invasion 9 dk kala listede", liste.Count == 1 && liste[0].Ad == "Dimensional Invasion" && !liste[0].BasladiMi(U(2026, 11, 13, 17, 21)), Adlar(liste));
         avrupa.Yaklasanlar(U(2026, 11, 13, 17, 55), on, liste);
-        Bak("17:55Z: Shugo ve Kaira (eşit saatte takvim sırası)", liste.Count == 2 && liste[0].Ad == "Shugo Festival" && liste[1].Ad == "Watcher Kaira", Adlar(liste));
+        Bak("17:55Z: Shugo, Kaira ve akşam Arena'sı (eşit saatte takvim sırası)", liste.Count == 3 && liste[0].Ad == "Shugo Festival"
+            && liste[1].Ad == "Watcher Kaira" && liste[2].Ad == "Arena of Tactics", Adlar(liste));
 
         DateTime iki = U(2026, 11, 13, 18, 2);
         avrupa.Yaklasanlar(iki, on, liste);
@@ -113,6 +114,59 @@ internal static class TakvimKontrol
         var asya = new EtkinlikTakvimi(SunucuBolgesi.Asya);
         Sonraki(asya, "Argo, the Spirit King", r, U(2026, 11, 14, 1, 30), "Asya Argo 10:30 JST = 01:30Z");
 
+        // Sıfırlamalar: her bölgede Kore saatiyle 16:00 (yaz saati yok) = 07:00Z. Çarşamba günlük yerine haftalık.
+        // Kanıt: kisk.app/timers/naw 2026-11-13: günlük 2026-11-14T07:00Z, haftalık 2026-11-18T07:00Z.
+        Bak("Kore saat dilimi sistemde, UTC+9, yaz saati yok", TimeZoneInfo.FindSystemTimeZoneById(EtkinlikTakvimi.KoreSaatDilimi) is var kst
+            && kst.BaseUtcOffset == TimeSpan.FromHours(9) && !kst.SupportsDaylightSavingTime, EtkinlikTakvimi.KoreSaatDilimi);
+        Sonraki(avrupa, "Günlük sıfırlama", r, U(2026, 11, 14, 7, 0), "günlük: Cumartesi 16:00 KST = 07:00Z");
+        Sonraki(avrupa, "Haftalık sıfırlama", r, U(2026, 11, 18, 7, 0), "haftalık: Çarşamba 16:00 KST = 07:00Z");
+        Sonraki(avrupa, "Haftalık sıfırlama", U(2026, 11, 17, 23, 30), U(2026, 11, 18, 7, 0), "haftalık: KST Çarşamba sabahı (UTC Salı) aynı gün 07:00Z");
+        Sonraki(avrupa, "Haftalık sıfırlama", U(2026, 11, 18, 7, 0), U(2026, 11, 25, 7, 0), "haftalık: bir sonraki Çarşamba");
+        Sonraki(avrupa, "Günlük sıfırlama", U(2026, 11, 17, 7, 0), U(2026, 11, 19, 7, 0), "günlük: Salıdan sonra Perşembe (Çarşamba haftalıkta)");
+        Sonraki(avrupa, "Günlük sıfırlama", U(2026, 11, 13, 6, 59, 59), U(2026, 11, 13, 7, 0), "günlük: 07:00Z'den 1 sn önce");
+        foreach (SunucuBolgesi b in Enum.GetValues<SunucuBolgesi>())
+        {
+            var t = new EtkinlikTakvimi(b);
+            Sonraki(t, "Günlük sıfırlama", r, U(2026, 11, 14, 7, 0), $"{b}: günlük sıfırlama bölgeden bağımsız 07:00Z");
+            Sonraki(t, "Haftalık sıfırlama", r, U(2026, 11, 18, 7, 0), $"{b}: haftalık sıfırlama bölgeden bağımsız 07:00Z");
+        }
+        // Avrupa yaz/kış saati ve geçiş günleri: sıfırlama hep 07:00Z (yerel saat kayar, an kaymaz).
+        Sonraki(avrupa, "Günlük sıfırlama", U(2026, 6, 30, 0, 0), U(2026, 6, 30, 7, 0), "Avrupa yaz saati (CEST), Salı: 07:00Z = 09:00 Berlin");
+        Sonraki(avrupa, "Haftalık sıfırlama", U(2026, 7, 1, 0, 0), U(2026, 7, 1, 7, 0), "Avrupa yaz saati: 1 Temmuz Çarşamba 07:00Z");
+        Sonraki(avrupa, "Günlük sıfırlama", U(2026, 3, 29, 0, 30), U(2026, 3, 29, 7, 0), "Mart geçiş günü (Pazar): 07:00Z");
+        Sonraki(avrupa, "Günlük sıfırlama", U(2026, 10, 25, 0, 30), U(2026, 10, 25, 7, 0), "Ekim geçiş günü (Pazar): 07:00Z");
+        Sonraki(naBati, "Günlük sıfırlama", U(2026, 7, 1, 0, 0), U(2026, 7, 2, 7, 0), "NA Batı yaz saati: Çarşamba yok, Perşembe 07:00Z");
+        var sifirlamalar = new[] { Kalem(avrupa, "Günlük sıfırlama"), Kalem(avrupa, "Haftalık sıfırlama") };
+        Bak("sıfırlamalar etkinlik (boss listesine girmez)", Array.TrueForAll(sifirlamalar, k => k.Tur == TakvimTuru.Etkinlik
+            && k.SabitSaatDilimi == EtkinlikTakvimi.KoreSaatDilimi), string.Join(", ", Array.ConvertAll(sifirlamalar, k => k.Tur + "/" + k.SabitSaatDilimi)));
+        avrupa.Yaklasanlar(U(2026, 11, 14, 6, 52), on, liste);
+        Bak("Cumartesi 06:52Z: günlük sıfırlama 8 dk kala listede", liste.Exists(o => o.Ad == "Günlük sıfırlama" && o.GirisBitisUtc is null), Adlar(liste));
+        avrupa.Yaklasanlar(U(2026, 11, 14, 7, 0), on, liste);
+        Bak("sıfırlama anında listeden düşer", !liste.Exists(o => o.Ad == "Günlük sıfırlama"), Adlar(liste));
+        avrupa.Yaklasanlar(U(2026, 11, 18, 6, 55), on, liste);
+        Bak("Çarşamba 06:55Z: yalnız haftalık (günlük satırı yok)", liste.Exists(o => o.Ad == "Haftalık sıfırlama")
+            && !liste.Exists(o => o.Ad == "Günlük sıfırlama"), Adlar(liste));
+
+        // Arena of Tactics: her gün 11:00 ve 19:00 bölge saatiyle. Kanıt: kisk.app/timers, 2026-11-13 21:34Z'de beş bölge.
+        void Arena(EtkinlikTakvimi t, int saat, DateTime simdi, DateTime beklenen, string baslik)
+        {
+            var k = ArenaKalemi(t, saat);
+            DateTime bulunan = t.Sonraki(k, simdi).BaslangicUtc;
+            Bak(baslik, bulunan == beklenen, $"{simdi:yyyy-MM-dd HH:mm}Z → {bulunan:yyyy-MM-dd HH:mm}Z (beklenen {beklenen:yyyy-MM-dd HH:mm}Z)");
+        }
+        DateTime kisk = U(2026, 11, 13, 21, 34);
+        Arena(naBati, 11, U(2026, 11, 13, 18, 0), U(2026, 11, 13, 19, 0), "NA Batı Arena 11:00 PST = 19:00Z (kisk: 19:00Z-22:00Z açık)");
+        Arena(naDogu, 19, kisk, U(2026, 11, 14, 0, 0), "NA Doğu Arena 19:00 EST = 00:00Z (kisk)");
+        Arena(avrupa, 11, kisk, U(2026, 11, 14, 10, 0), "Avrupa Arena Cumartesi 11:00 CET = 10:00Z (kisk)");
+        Arena(avrupa, 19, kisk, U(2026, 11, 14, 18, 0), "Avrupa Arena Cumartesi 19:00 CET = 18:00Z");
+        Arena(asya, 11, kisk, U(2026, 11, 14, 2, 0), "Asya Arena 11:00 JST/KST = 02:00Z (kisk)");
+        Arena(latam, 19, kisk, U(2026, 11, 13, 22, 0), "Latin Amerika Arena 19:00 BRT = 22:00Z (kisk)");
+        Arena(avrupa, 11, U(2026, 7, 1, 0, 0), U(2026, 7, 1, 9, 0), "Avrupa Arena yaz saatinde 11:00 CEST = 09:00Z");
+        avrupa.Yaklasanlar(U(2026, 11, 14, 9, 52), on, liste);
+        Bak("Cumartesi 09:52Z: Arena 8 dk kala, giriş penceresi yok", liste.Exists(o => o.Ad == "Arena of Tactics" && o.GirisBitisUtc is null), Adlar(liste));
+        avrupa.Yaklasanlar(U(2026, 11, 14, 10, 0), on, liste);
+        Bak("Arena başlayınca listeden düşer (3 saat panelde kalmaz)", !liste.Exists(o => o.Ad == "Arena of Tactics"), Adlar(liste));
+
         // Maliyet: 10.000 sorgu (5 Hz'de ~33 dk) ve ayırma.
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long once = GC.GetAllocatedBytesForCurrentThread();
@@ -130,6 +184,13 @@ internal static class TakvimKontrol
         foreach (var k in t.Kalemler)
             if (k.Ad == ad) return k;
         throw new InvalidOperationException("Takvimde yok: " + ad);
+    }
+
+    private static TakvimKalemi ArenaKalemi(EtkinlikTakvimi t, int saat)
+    {
+        foreach (var k in t.Kalemler)
+            if (k.Ad == "Arena of Tactics" && k.IlkDk == saat * 60) return k;
+        throw new InvalidOperationException("Takvimde Arena yok: " + saat);
     }
 
     private static string Adlar(List<TakvimOlayi> l) =>
