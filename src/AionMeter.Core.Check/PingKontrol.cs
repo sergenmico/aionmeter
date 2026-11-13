@@ -19,14 +19,19 @@ internal static class PingKontrol
             if (ok) { gecen++; } else { kalan++; }
         }
 
-        // Bir istemci parçası (t ms'de) ve sunucunun onayı (rtt ms sonra). pcapKayma: Npcap saatinin varış saatine göre farkı (onayda).
-        static void Tur(PingOlcer o, ref uint sira, double t, double rtt, double pcapKayma = 0, double varisGecikme = 0, int baglanti = 1)
+        // Bir istemci parçası (t ms'de) ve sunucunun onayı (rtt ms sonra; varsayılan olarak veri taşıyan parçanın sırtında, sunucuVeri bayt).
+        // pcapKayma: Npcap saatinin varış saatine göre farkı (onayda). kopya: her parça ikinci bir ağ kartında da yakalanır.
+        static void Tur(PingOlcer o, ref uint sira, double t, double rtt, double pcapKayma = 0, double varisGecikme = 0, int baglanti = 1,
+                        int sunucuVeri = 100, bool kopya = false)
         {
             long gonder = T0 + (long)(t * Ms);
             long onay = T0 + (long)((t + rtt) * Ms);
             o.Gozle(baglanti, sunucudan: false, sira, 40, ackVar: true, 0, gonder, gonder);
+            if (kopya) o.Gozle(baglanti, sunucudan: false, sira, 40, ackVar: true, 0, gonder + Ms / 5, gonder + Ms / 3);
             sira += 40;
-            o.Gozle(baglanti, sunucudan: true, 5000, 0, ackVar: true, sira, onay + (long)(pcapKayma * Ms), onay + (long)(varisGecikme * Ms));
+            long pcap = onay + (long)(pcapKayma * Ms), varis = onay + (long)(varisGecikme * Ms);
+            o.Gozle(baglanti, sunucudan: true, 5000, sunucuVeri, ackVar: true, sira, pcap, varis);
+            if (kopya) o.Gozle(baglanti, sunucudan: true, 5000, sunucuVeri, ackVar: true, sira, pcap + Ms / 5, varis + Ms / 3);
         }
 
         static string Yaz(int? ms) => ms is int m ? m + " ms" : "null";
@@ -75,7 +80,7 @@ internal static class PingKontrol
             long t = T0 + 1000 * Ms;
             o.Gozle(1, false, s, 40, true, 0, t, t);                           // gönderildi, kayboldu
             o.Gozle(1, false, s, 40, true, 0, t + 350 * Ms, t + 350 * Ms);     // aynı baytlar yeniden
-            o.Gozle(1, true, 5000, 0, true, s + 40, t + 400 * Ms, t + 400 * Ms);
+            o.Gozle(1, true, 5000, 100, true, s + 40, t + 400 * Ms, t + 400 * Ms);
             (long ornek, _, long yeniden) = o.Sayaclar();
             int? p = o.Ms(T0 + 1500 * Ms);
             Bak("Karn: yeniden gönderim örnek vermez", ornek == 10 && yeniden == 1 && p == 50, $"{Yaz(p)}, örnek {ornek}, yeniden {yeniden}");
@@ -144,10 +149,56 @@ internal static class PingKontrol
                 o.Gozle(1, false, s, 40, true, 0, t, t);
                 o.Gozle(1, false, s + 40, 40, true, 0, t + 30 * Ms, t + 30 * Ms);
                 o.Gozle(1, false, s + 80, 40, true, 0, t + 60 * Ms, t + 60 * Ms);
-                o.Gozle(1, true, 5000, 0, true, s + 120, t + 160 * Ms, t + 160 * Ms);
+                o.Gozle(1, true, 5000, 100, true, s + 120, t + 160 * Ms, t + 160 * Ms);
             }
             int? p = o.Ms(T0 + 2000 * Ms);
             Bak("toplu onay: en yeni parçadan", p == 100, Yaz(p));
+        }
+
+        // 13) Seyrek trafik (kasaba/AFK): sunucunun gönderecek verisi yok, her parçayı 200 ms gecikmeli boş ACK'le onaylar (60 + 200).
+        //     Boş ACK örnek vermez: ölçüm yok, alarm yok. Aynı seyreklikte veri sırtında gelen onay da 5 sn'de 8'den az örnek: null.
+        {
+            var o = new PingOlcer();
+            uint s = 1000;
+            for (int i = 0; i < 25; i++) Tur(o, ref s, i * 400, 260, sunucuVeri: 0);
+            int? bos = o.Ms(T0 + 9800 * Ms);
+            var o2 = new PingOlcer();
+            uint s2 = 1000;
+            for (int i = 0; i < 10; i++) Tur(o2, ref s2, i * 1000, 260);
+            int? seyrek = o2.Ms(T0 + 9500 * Ms);
+            Bak("seyrek trafik + 200 ms gecikmeli ACK: alarm yok", bos is null && seyrek is null
+                && !PingUyarisi.Gorunsun(false, bos, 250) && !PingUyarisi.Gorunsun(false, seyrek, 250), $"boş ACK {Yaz(bos)}, seyrek veri {Yaz(seyrek)}");
+        }
+
+        // 14) Boş ACK'ler gecikmeli (260), veri sırtındakiler hemen (60), karışık: yalnız veri sırtındakiler sayılır.
+        {
+            var o = new PingOlcer();
+            uint s = 1000;
+            for (int i = 0; i < 40; i++) Tur(o, ref s, i * 100, i % 2 == 0 ? 60 : 260, sunucuVeri: i % 2 == 0 ? 100 : 0);
+            (long ornek, _, _) = o.Sayaclar();
+            int? p = o.Ms(T0 + 4300 * Ms);
+            Bak("boş ACK örnek değil, veri sırtındaki sayılır", p == 60 && ornek == 20, $"{Yaz(p)}, örnek {ornek}");
+        }
+
+        // 15) Aynı parçalar iki ağ kartında yakalanıyor (Hyper-V vEthernet): kopyalar yeniden gönderim sayılmaz, ölçüm olur.
+        {
+            var o = new PingOlcer();
+            uint s = 1000;
+            for (int i = 0; i < 40; i++) Tur(o, ref s, i * 100, 80, kopya: true);
+            (long ornek, _, long yeniden) = o.Sayaclar();
+            int? p = o.Ms(T0 + 4000 * Ms);
+            Bak("iki kartta kopya: yeniden gönderim değil", p == 80 && yeniden == 0 && ornek == 40, $"{Yaz(p)}, örnek {ornek}, yeniden {yeniden}");
+        }
+
+        // 16) Gerçek yeniden gönderim (350 ms sonra aynı baytlar) kopya sayılmaz: Karn yine işler.
+        {
+            var o = new PingOlcer();
+            uint s = 1000;
+            long t = T0;
+            o.Gozle(1, false, s, 40, true, 0, t, t);
+            o.Gozle(1, false, s, 40, true, 0, t + 350 * Ms, t + 350 * Ms);
+            (_, _, long yeniden) = o.Sayaclar();
+            Bak("350 ms sonraki aynı parça yeniden gönderimdir", yeniden == 1, $"yeniden {yeniden}");
         }
 
         // 12) Histerezis: 250'de görünür, 200'ün altında kaybolur, null'da kaybolur

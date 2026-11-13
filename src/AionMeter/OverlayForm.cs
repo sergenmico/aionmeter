@@ -825,7 +825,13 @@ internal sealed class OverlayForm : Form
             var s = _motor.Snapshot();
             _sonAnlik = s;
             KupDenetle(s); // savaş dışında gizli/soluk olsa da ses çalar
-            if (PingDenetle(s)) _onceki = null; // uyarı göründü / kayboldu / değer değişti: model yeniden
+            var ping = PingDenetle(s);
+            if (ping == PingDegisim.Gorunurluk)
+            {
+                // Uyarı göründü / kayboldu: yer açılır ya da kapanır; genişlik baştan ölçülür ki kaybolunca overlay daralsın.
+                GenislikleriSifirla();
+                _onceki = null;
+            }
             SavasDurumu(s);
             var kuklaOnce = _kukla.Durum;
             if (kuklaOnce != KuklaTesti.Hal.Kapali && _kukla.Ilerle(s, KuklaDetay))
@@ -856,7 +862,11 @@ internal sealed class OverlayForm : Form
             if (_detay is { Visible: true } && (_tikSayaci & 1) == 0) _detay.Yenile(); // detay sadece açıkken ~2,5 Hz
 
             bool bossGoster = _kukla.Durum == KuklaTesti.Hal.Kapali && BossGosterilsinMi(s); // test ve kart sürerken boss bloğu yok
-            if (_onceki is not null && bossGoster == _bossGoster && Ayni(_onceki, s)) return;
+            if (_onceki is not null && bossGoster == _bossGoster && Ayni(_onceki, s))
+            {
+                if (ping == PingDegisim.Metin && !_altAlani.IsEmpty) Invalidate(_altAlani); // yalnız ping değeri: yer sabit, model kurulmaz
+                return;
+            }
 
             _onceki = s;
             _bossGoster = bossGoster;
@@ -887,16 +897,20 @@ internal sealed class OverlayForm : Form
     }
 
     /// <summary>Gecikme uyarısı: ping eşiği aşınca görünür, eşiğin %80'inin altına inince ya da ölçüm yokken kaybolur (PingUyarisi).
-    /// Normalken hiçbir şey çizilmez. Gösterilen metin değiştiyse true.</summary>
-    private bool PingDenetle(MeterSnapshot s)
+    /// Normalken hiçbir şey çizilmez. Değer 10 ms adımla yuvarlanır (her ms oynamasında yeniden çizilmesin).
+    /// Dönen değer: görünürlük değişti (yer açılır/kapanır: genişlik baştan) ya da yalnız metin değişti (yalnız yeniden çizim).</summary>
+    private PingDegisim PingDenetle(MeterSnapshot s)
     {
         bool acik = _ayar.PingUyari && s.State == EngineState.Connected;
+        bool onceki = _pingGorunur;
         _pingGorunur = acik && PingUyarisi.Gorunsun(_pingGorunur, s.PingMs, _ayar.PingEsik);
-        string metin = _pingGorunur && s.PingMs is int ms ? Bicim.Tam(ms) + " ms" : "";
-        if (metin == _pingMetin) return false;
+        string metin = _pingGorunur && s.PingMs is int ms ? Bicim.Tam((ms + 5) / 10 * 10) + " ms" : "";
+        if (metin == _pingMetin) return PingDegisim.Yok;
         _pingMetin = metin;
-        return true;
+        return onceki != _pingGorunur ? PingDegisim.Gorunurluk : PingDegisim.Metin;
     }
+
+    private enum PingDegisim { Yok, Metin, Gorunurluk }
 
     /// <summary>
     /// Ekranın ortasında (oyun penceresinin, yoksa overlay'in ekranının) "Küp var" afişi.
@@ -2079,7 +2093,8 @@ internal sealed class OverlayForm : Form
         _saatW = SaatBoy + (_alarmMetinW > 0 ? P(5) + _alarmMetinW : 0);
         _kupMesafeW = _kupMesafe is null ? 0 : _rKucuk.Genislik("~888 m"); // en geniş haline göre: mesafe değişirken overlay genişlemesin
         _kupW = _kupYakinda > 0 ? KupBoy + (_kupMesafeW > 0 ? P(4) + _kupMesafeW : 0) : 0;
-        _pingW = _pingMetin.Length > 0 ? _rYari.Genislik(_pingMetin) : 0;
+        // Ping: yalnız uyarı varken, en geniş haline göre sabit yer ("9.999 ms"): değer değişirken overlay genişleyip daralmaz.
+        _pingW = _pingMetin.Length > 0 ? Math.Max(_rYari.Genislik("9.999 ms"), _rYari.Genislik(_pingMetin)) : 0;
         gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0) + P(12) + _saatW + (_kupW > 0 ? _kupW + P(12) : 0)
             + (_pingW > 0 ? _pingW + P(12) : 0));
 
@@ -2343,7 +2358,7 @@ internal sealed class OverlayForm : Form
         {
             // Gecikme uyarısı: saatin hemen solunda kırmızı ping (yalnız eşik aşılınca; sebep bağlantı mı, rotasyon mu)
             int px = x1 - _pingW;
-            _rYari.Ciz(g, _pingMetin, new Rectangle(px, y, _pingW, altH), Palet.Kirmizi, sag: false);
+            _rYari.Ciz(g, _pingMetin, new Rectangle(px, y, _pingW, altH), Palet.Kirmizi, sag: true); // sabit yerde saate yaslı
             x1 = px - P(12);
         }
         if (_kupW > 0)

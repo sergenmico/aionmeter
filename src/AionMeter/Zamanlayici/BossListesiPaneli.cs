@@ -2,8 +2,9 @@ using System.Drawing.Drawing2D;
 
 namespace AionMeter.Zamanlayici;
 
-/// <summary>Boss listesi satırı: ad ve bir sonraki doğuşa kalan süre ("1 sa 41 dk", "41:20", "şimdi").</summary>
-internal readonly record struct BossSatiri(string Ad, string Sure, Color SureRengi, bool Rakam);
+/// <summary>Boss listesi satırı: ad ve bir sonraki doğuşa kalan süre ("1 sa 41 dk", "41:20", "şimdi"). <see cref="Soluk"/>: bilgi belirsiz
+/// ("canlı?"), ad ve nokta soluk.</summary>
+internal readonly record struct BossSatiri(string Ad, string Sure, Color SureRengi, bool Rakam, bool Soluk = false);
 
 /// <summary>
 /// İstendiğinde açılan boss listesi: takvim ve saha bossları, en yakın doğuş üstte (canlı saha bossları sonda). Kullanıcı kendisi
@@ -20,6 +21,7 @@ internal sealed class BossListesiPaneli : KatmanliPanel
     private Font? _yazi, _yaziBaslik, _yaziKucuk, _yaziSimdi;
     private RakamYazisi? _rakam;
     private readonly SolidBrush _fircaBoss = new(Palet.Kirmizi);
+    private readonly SolidBrush _fircaSoluk = new(Palet.CokSoluk);
     private readonly Pen _kalemKenar = new(Palet.Cizgi);
     private readonly Pen _kalemAyirac = new(Palet.Cizgi);
     private readonly Pen _kalemKapat = new(Palet.Soluk, 1.5f);
@@ -30,6 +32,17 @@ internal sealed class BossListesiPaneli : KatmanliPanel
 
     /// <summary>× tıklandı.</summary>
     public event Action? KapatIstendi;
+
+    /// <summary>Panelin en çok yüksekliği (bulunduğu ekranın yüksekliği, fiziksel px); 0: sınırsız. Aşan satırlar kırpılır, son satırda
+    /// soluk "+N daha" (satırlar en yakın doğuş üstte geldiği için kalanlar en yakınlarıdır).</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int EnFazlaYukseklik { get; set; }
+
+    /// <summary>Satırlar dışındaki sabit yükseklik: başlık, ayırıcı, kenar boşlukları ve ipucu (Boyut ölçer).</summary>
+    private int SabitH => Pad / 2 + BaslikH + P(4) + Pad + (_ipucuH > 0 ? P(6) + _ipucuH : 0);
+
+    /// <summary><paramref name="yukseklik"/> içine sığan satır yuvası sayısı; satırlar sığmıyorsa son yuva "+N daha" içindir.</summary>
+    private int Yuva(int yukseklik) => Math.Max(1, (yukseklik - SabitH) / SatirH);
 
     public BossListesiPaneli(float olcek) : base("AionMeter Boss Listesi", olcek)
     {
@@ -81,15 +94,15 @@ internal sealed class BossListesiPaneli : KatmanliPanel
         }
         _sureW = sureW;
         int w = Pad + P(13) + Math.Min(adW, P(260)) + P(20) + sureW + Pad;
-        int h = Pad / 2 + BaslikH + P(4) + Math.Max(1, _satirlar.Count) * SatirH + Pad;
         _ipucuH = 0;
         if (_ipucu is { Length: > 0 })
         {
             // Panel ipucu için genişlemez: sığmazsa alt satıra geçer.
             _ipucuH = TextRenderer.MeasureText(_ipucu, _yaziKucuk!, new Size(w - 2 * Pad, int.MaxValue), IpucuBicimi).Height;
-            h += P(6) + _ipucuH;
         }
-        return new Size(w, h);
+        int yuva = Math.Max(1, _satirlar.Count);
+        if (EnFazlaYukseklik > 0) yuva = Math.Min(yuva, Math.Max(2, Yuva(EnFazlaYukseklik))); // en az bir satır + "+N daha"
+        return new Size(w, SabitH + yuva * SatirH);
     }
 
     public override void Ciz(Graphics g, Size boyut)
@@ -119,14 +132,25 @@ internal sealed class BossListesiPaneli : KatmanliPanel
         int cap = Math.Max(4, P(6)), satirH = SatirH;
         if (_satirlar.Count == 0)
             TextRenderer.DrawText(g, "Takvimde boss yok", _yazi!, new Rectangle(x0, y, x1 - x0, satirH), Palet.Soluk, Sol);
-        foreach (var s in _satirlar)
+        // Boyut ekran yüksekliğiyle sınırlandıysa sığan kadar satır; kalanlar son yuvada "+N daha".
+        int yuva = Yuva(h);
+        int goster = _satirlar.Count > yuva ? yuva - 1 : _satirlar.Count;
+        for (int i = 0; i < goster; i++)
         {
-            Nokta(g, _fircaBoss, x0, y + satirH / 2, cap);
+            var s = _satirlar[i];
+            Nokta(g, s.Soluk ? _fircaSoluk : _fircaBoss, x0, y + satirH / 2, cap);
             var sureKutu = new Rectangle(x1 - _sureW, y, _sureW, satirH);
             if (s.Rakam) _rakam!.Ciz(g, s.Sure, sureKutu, s.SureRengi, sag: true);
             else TextRenderer.DrawText(g, s.Sure, _yaziSimdi!, sureKutu, s.SureRengi, Sag);
             int adX = x0 + cap + P(7);
-            TextRenderer.DrawText(g, s.Ad, _yazi!, new Rectangle(adX, y, Math.Max(0, sureKutu.Left - P(16) - adX), satirH), Palet.Yazi, Sol);
+            TextRenderer.DrawText(g, s.Ad, _yazi!, new Rectangle(adX, y, Math.Max(0, sureKutu.Left - P(16) - adX), satirH),
+                s.Soluk ? Palet.Soluk : Palet.Yazi, Sol);
+            y += satirH;
+        }
+        if (goster < _satirlar.Count)
+        {
+            string fazla = "+" + (_satirlar.Count - goster).ToString(Bicim.Tr) + " daha";
+            TextRenderer.DrawText(g, fazla, _yaziKucuk!, new Rectangle(x0 + cap + P(7), y, x1 - x0 - cap - P(7), satirH), Palet.CokSoluk, Sol);
             y += satirH;
         }
         if (_satirlar.Count == 0) y += satirH;
@@ -170,7 +194,7 @@ internal sealed class BossListesiPaneli : KatmanliPanel
         if (disposing)
         {
             _yazi?.Dispose(); _yaziBaslik?.Dispose(); _yaziKucuk?.Dispose(); _yaziSimdi?.Dispose(); _rakam?.Dispose();
-            _fircaBoss.Dispose(); _kalemKenar.Dispose(); _kalemAyirac.Dispose(); _kalemKapat.Dispose(); _kalemKapatUst.Dispose();
+            _fircaBoss.Dispose(); _fircaSoluk.Dispose(); _kalemKenar.Dispose(); _kalemAyirac.Dispose(); _kalemKapat.Dispose(); _kalemKapatUst.Dispose();
         }
         base.Dispose(disposing);
     }

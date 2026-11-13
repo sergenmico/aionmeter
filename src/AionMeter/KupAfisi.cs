@@ -32,25 +32,27 @@ internal static class KupSimgesi
 /// <summary>
 /// En yakın küpün pusula yönü ve mesafesi (afiş ve overlay rozeti). Yön harita kuzeyine göredir (karakterin ya da kameranın bakışına
 /// göre değil: oyun bakış yönü göndermez); 5° adımlıdır ki küçük oynamalarda yeniden çizilmesin. Tahmini: oyuncunun yeri kesin değil.
+/// <see cref="Derece"/> null: mesafe biliniyor ama yön güvenilmez (yer tahmini ve küp 30 m'den yakın); ok ve yön adı çizilmez.
 /// </summary>
-internal readonly record struct KupYonu(int Derece, int Metre, bool Tahmini)
+internal readonly record struct KupYonu(int? Derece, int Metre, bool Tahmini)
 {
     private static readonly string[] Yonler = { "K", "KD", "D", "GD", "G", "GB", "B", "KB" };
 
-    /// <summary>Anlık görüntüde yön ve mesafe varsa; yoksa null (afiş ve rozet eski görünümde kalır).</summary>
+    /// <summary>Anlık görüntüde mesafe varsa (yön de varsa onunla); yoksa null (afiş ve rozet eski görünümde kalır).</summary>
     public static KupYonu? Den(MeterSnapshot s) =>
-        s.KupYonDerece is double d && double.IsFinite(d) && s.KupMesafe is int m && m >= 0
-            ? new KupYonu(((int)Math.Round(d / 5.0) * 5 % 360 + 360) % 360, Math.Min(m, 999), s.KupKonumTahmini)
+        s.KupMesafe is int m && m >= 0
+            ? new KupYonu(s.KupYonDerece is double d && double.IsFinite(d) ? ((int)Math.Round(d / 5.0) * 5 % 360 + 360) % 360 : null,
+                          Math.Min(m, 999), s.KupKonumTahmini)
             : null;
 
-    /// <summary>Sekiz bölgeli pusula kısaltması: K, KD, D, GD, G, GB, B, KB.</summary>
-    public string YonAdi => Yonler[(int)Math.Round(Derece / 45.0) % 8];
+    /// <summary>Sekiz bölgeli pusula kısaltması: K, KD, D, GD, G, GB, B, KB; yön yoksa boş.</summary>
+    public string YonAdi => Derece is int d ? Yonler[(int)Math.Round(d / 45.0) % 8] : "";
 
     /// <summary>"38 m"; tahminiyse "~38 m".</summary>
     public string MesafeMetni => (Tahmini ? "~" : "") + Metre + " m";
 
-    /// <summary>Afişteki yazı: "KD · 38 m".</summary>
-    public string Metin => YonAdi + " · " + MesafeMetni;
+    /// <summary>Afişteki yazı: "KD · 38 m"; yön yoksa yalnız "~20 m".</summary>
+    public string Metin => Derece is null ? MesafeMetni : YonAdi + " · " + MesafeMetni;
 }
 
 /// <summary>
@@ -280,11 +282,18 @@ internal sealed class KupAfisi : KatmanPencere
 
     /// <summary>
     /// Pusula kadranı (halka + kuzey çentiği) içinde harita kuzeyine göre dönmüş ok, sağında "KD · 38 m".
-    /// Ok yukarı = harita kuzeyi (karakterin baktığı yön değil).
+    /// Ok yukarı = harita kuzeyi (karakterin baktığı yön değil). Yön güvenilmezken (<see cref="KupYonu.Derece"/> null) kadran ve ok
+    /// çizilmez, yalnız "~20 m" kadranın yerinden başlar (afişin boyu değişmez).
     /// </summary>
     private static void CizYon(Graphics g, float x, float cy, float olcek, KupYonu y)
     {
         float cap = P(26, olcek), r = cap / 2f, mx = x + r;
+        if (y.Derece is not int derece)
+        {
+            CizYonMetni(g, x, cy, olcek, y);
+            return;
+        }
+
         using (var halka = new Pen(Color.FromArgb(120, Palet.Kup), Math.Max(1f, 1.5f * olcek)))
             g.DrawEllipse(halka, mx - r, cy - r, cap, cap);
         // kuzey çentiği: halkanın tepesinde kısa açık çizgi (harita kuzeyi)
@@ -302,7 +311,7 @@ internal sealed class KupAfisi : KatmanPencere
             });
             using (var m = new Matrix())
             {
-                m.RotateAt(y.Derece, new PointF(mx, cy)); // ekranda y aşağı: pozitif açı saat yönünde = pusula
+                m.RotateAt(derece, new PointF(mx, cy)); // ekranda y aşağı: pozitif açı saat yönünde = pusula
                 ok.Transform(m);
             }
             using (var golge = new Pen(Color.FromArgb(200, 0, 0, 0), Math.Max(1.5f, 2.5f * olcek)) { LineJoin = LineJoin.Round })
@@ -311,12 +320,18 @@ internal sealed class KupAfisi : KatmanPencere
             g.FillPath(dolgu, ok);
         }
 
+        CizYonMetni(g, x + cap + P(8, olcek), cy, olcek, y);
+    }
+
+    /// <summary>"KD · 38 m" (ya da yalnız "~20 m"): sol kenarı <paramref name="x"/>, dikeyde ortalı; dış çizgili açık dolgu.</summary>
+    private static void CizYonMetni(Graphics g, float x, float cy, float olcek, KupYonu y)
+    {
         using var f = YonYazisi(olcek);
         using var metin = MetinYolu(f, y.Metin);
         var b = metin.GetBounds();
         using (var m = new Matrix())
         {
-            m.Translate(x + cap + P(8, olcek) - b.Left, cy - (b.Top + b.Height / 2f));
+            m.Translate(x - b.Left, cy - (b.Top + b.Height / 2f));
             metin.Transform(m);
         }
         using (var golge = new Pen(Color.FromArgb(210, 0, 0, 0), Math.Max(2f, 3.5f * olcek)) { LineJoin = LineJoin.Round })

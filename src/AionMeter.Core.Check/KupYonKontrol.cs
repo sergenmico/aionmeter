@@ -52,6 +52,14 @@ internal static class KupYonKontrol
             Sonuc(ok, baslik, $"{Yaz(s)} (beklenen {(derece is null ? "yok" : $"{derece:0}° {metre} m{(tahmini ? " ~" : "")}")})");
         }
 
+        // Yer tahmini ve küp 30 m'den yakın: yön güvenilmez (±40-50°), yalnız mesafe.
+        void BakYonsuz(string baslik, int metre)
+        {
+            var s = Aion2MeterEngine.KupYonuEkle(dir, Anlik(dir));
+            bool ok = s.KupYonDerece is null && s.KupMesafe == metre && s.KupKonumTahmini;
+            Sonuc(ok, baslik, $"{Yaz(s)} (beklenen yön yok, ~{metre} m)");
+        }
+
         Ver(Zone(1010, 0f, 0f));
         Ver(Spawn(500, 10000f, 5000f));
         Bak("bölge çerçevesi (0, 0): yer sayılmaz", null, null, false);
@@ -76,10 +84,10 @@ internal static class KupYonKontrol
         Ver(Hareket(911, 11900f, 4900f));
         Ver(Hareket(912, 12000f, 5000f));
         Ver(Hareket(913, 12100f, 5100f));
-        Bak("çevredeki üç varlığın ortası: küp batıda 20 m, tahmini", 270, 20, true);
+        BakYonsuz("çevredeki üç varlığın ortası: küp 20 m, tahmini ve yakın: yön yok", 20);
 
         Ver(Hareket(914, 90000f, 90000f));
-        Bak("uzaktaki varlık kırpılır: yine batı 20 m", 270, 20, true);
+        BakYonsuz("uzaktaki varlık kırpılır: yine ~20 m, yön yok", 20);
 
         Ver(Etki(hedef: 5000, koyan: Ben, 10000f, -5000f));
         Bak("yerel oyuncunun etkisi (son 12 bayt): küp güneyde 100 m", 180, 100, false);
@@ -108,7 +116,7 @@ internal static class KupYonKontrol
         Ver(NpcSpawn(921, 46000f, 49000f));
         Ver(NpcSpawn(922, 46100f, 49000f));
         Ver(NpcSpawn(923, 45900f, 49000f));
-        Bak("canavar doğuşlarının ortası: küp kuzeyde 30 m, tahmini", 0, 30, true);
+        Bak("canavar doğuşlarının ortası: küp kuzeyde 30 m, tahmini (30 m: yön güvenilir sınırda, gösterilir)", 0, 30, true);
         Ver(NpcRemove(921));
         Ver(NpcRemove(922));
         Bak("canavarlar kalktı (2 kaldı < 3): yer bilinmiyor", null, null, false);

@@ -133,9 +133,39 @@ public sealed partial class Aion2FrameDecoder
         _power.Clear();
         _effectTargets.Clear();
         _entities.ForgetZone(keep, at);
+
+        // Değiştirildi (eklendi): partideyken roster birkaç saniyede bir yeniden gelir (bkz. DecodeRoster). Bölge değişti ve parti
+        // biliniyor: yeni bölgede PartiBayatSuresi boyunca hiç roster gelmezse parti bayattır (oyuncu ayrılmış, ayrılış çerçevesi
+        // kaçmış). Roster bölge çerçevesinden hemen önce geldiyse (ZoneKeepWindow) o zaten yeni bölgenindir: kontrol kurulmaz.
+        if (_entities.RosterKnown && !(_rosterAt is DateTime r && at - r <= ZoneKeepWindow))
+        {
+            _partiDenetimi = at + PartiBayatSuresi;
+        }
     }
 
     private static readonly TimeSpan ZoneKeepWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Değiştirildi (eklendi): bölge değişiminden sonra bu kadar süre roster gelmezse parti boş sayılır. Roster partideyken
+    /// "birkaç saniyede bir" yeniden gönderilir (referans çözücünün yakalamalarla doğrulanmış notu); kesin aralık elimizde ölçülmüş
+    /// olmadığından süre bilerek çok uzundur: partideki birinin arkadaşlarını tablodan silmek, ayrılan birinin satırının bir süre
+    /// kalmasından çok daha kötüdür. Bölge değişmeden hiçbir zaman düşürülmez (ayrılınca oyun yalnız yerel oyuncuyu sayan bir
+    /// roster gönderir; o çerçeve partiyi zaten boşaltır).
+    /// </summary>
+    internal static readonly TimeSpan PartiBayatSuresi = TimeSpan.FromMinutes(5);
+
+    private DateTime? _rosterAt;      // son parti roster'ının (0x0297) geldiği an
+    private DateTime? _partiDenetimi; // bu ana kadar roster gelmezse parti boşaltılır (bölge değişiminden sonra)
+
+    /// <summary>Değiştirildi (eklendi): bölge değişiminden sonra süre doldu ve roster gelmedi: parti boşaltılır.</summary>
+    private void PartiBayatsaUnut(DateTime timestamp)
+    {
+        if (_partiDenetimi is DateTime son && timestamp >= son)
+        {
+            _partiDenetimi = null;
+            _entities.ForgetParty();
+        }
+    }
 
     /// <summary>Değiştirildi (eklendi): bir bölgede uzun kalındığında tabloların sınırı.</summary>
     private const int MaxZoneTable = 4096;
@@ -169,6 +199,7 @@ public sealed partial class Aion2FrameDecoder
         _onZone = onZone;
         try
         {
+            PartiBayatsaUnut(timestamp);
             foreach (DamageEvent ev in DecodeFrame(frame, timestamp, nested: false))
             {
                 onHit(ev);
@@ -1690,6 +1721,8 @@ public sealed partial class Aion2FrameDecoder
         if (frame[0] == 0x02 && frame[1] == 0x97 && members.Count > 0)
         {
             _entities.NoteParty(members, timestamp);
+            _rosterAt = timestamp;      // Değiştirildi (eklendi): parti hâlâ var, bayatlık denetimi kalkar
+            _partiDenetimi = null;
         }
     }
 

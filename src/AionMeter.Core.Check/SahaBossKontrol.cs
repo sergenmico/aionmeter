@@ -113,6 +113,28 @@ internal static class SahaBossKontrol
         depo.Oku(t0.AddHours(25), okunan);
         Bak("hepsi eskidi", okunan.Count == 0 && depo.Sayi == 0, Ozet());
 
+        // 8b) Belirsizlik: 60 dk'dan eski "canlı" bilgisi ve geri gelişinin üstünden 60 dk geçmiş ölü kayıt belirsizdir (liste "canlı?").
+        {
+            var dk = (int d) => t0.AddMinutes(d);
+            var durumlar = new (string Ad, SahaBossDurumu D, bool Beklenen)[]
+            {
+                ("canlı, 59 dk önce görüldü", new(1, "a", "h", true, dk(-200), dk(-59)), false),
+                ("canlı, 61 dk önce görüldü", new(1, "a", "h", true, dk(-200), dk(-61)), true),
+                ("canlı, doğuş anı bilinmiyor, 61 dk önce görüldü", new(1, "a", "h", true, DateTime.MinValue, dk(-61)), true),
+                ("ölü, 20 dk sonra gelecek (11 sa önce görüldü)", new(1, "a", "h", false, dk(20), dk(-660)), false),
+                ("ölü, 30 dk önce geri gelmiş", new(1, "a", "h", false, dk(-30), dk(-90)), false),
+                ("ölü, 61 dk önce geri gelmiş", new(1, "a", "h", false, dk(-61), dk(-90)), true),
+            };
+            bool hepsi = true;
+            var yanlis = new List<string>();
+            foreach (var (ad, d, beklenen) in durumlar)
+            {
+                bool b = SahaBossDeposu.Belirsiz(d, t0);
+                if (b != beklenen) { hepsi = false; yanlis.Add(ad); }
+            }
+            Bak("belirsizlik: 60 dk sınırı (görülme / geri geliş)", hepsi, yanlis.Count == 0 ? "6 durum doğru" : "yanlış: " + string.Join("; ", yanlis));
+        }
+
         // 9) Kalıcılık (ayrı depolarla; kapanışta yazmazlar): yaz, yeni depoya yükle.
         string dosya = Path.Combine(Path.GetTempPath(), "aionmeter-saha-denetim-" + Environment.ProcessId + ".json");
         try
@@ -148,6 +170,23 @@ internal static class SahaBossKontrol
             var k3 = new SahaBossDeposu();
             k3.KaliciYap(dosya, t0, kapanistaYaz: false);
             Bak("bozuk dosya: boş başlar", k3.Sayi == 0, $"{k3.Sayi}");
+
+            // Tek bozuk kayıt (yanlış tür, eksik alan, nesne değil) yalnız kendisini düşürür: önceki ve sonraki kayıtlar yüklenir.
+            long g0 = Ms(t0.AddMinutes(-3)), z0 = Ms(t0.AddHours(1));
+            File.WriteAllText(dosya, "{\"bosslar\":["
+                + $"{{\"yer\":101001,\"canli\":false,\"zaman\":{z0},\"goruldu\":{g0}}},"
+                + $"{{\"yer\":\"101002\",\"canli\":true,\"zaman\":0,\"goruldu\":{g0}}},"
+                + $"{{\"yer\":101003,\"canli\":true,\"zaman\":0}},"
+                + "7,"
+                + $"{{\"yer\":101004,\"canli\":\"evet\",\"zaman\":0,\"goruldu\":{g0}}},"
+                + $"{{\"yer\":2002,\"canli\":true,\"zaman\":0,\"goruldu\":{g0}}}"
+                + "]}");
+            var k4 = new SahaBossDeposu();
+            k4.KaliciYap(dosya, t0, kapanistaYaz: false);
+            var okunan4 = new List<SahaBossDurumu>();
+            k4.Oku(t0, okunan4);
+            Bak("tek bozuk kayıt sonrakileri düşürmez", k4.Sayi == 2 && okunan4.Any(d => d.Yer == 101001) && okunan4.Any(d => d.Yer == 2002),
+                string.Join(", ", okunan4.Select(d => d.Yer)));
         }
         finally
         {

@@ -16,14 +16,22 @@ namespace AionDPS.Aion2.Capture;
 /// teslim gecikmesi ya da bozuk zaman damgası süreyi yalnız uzatabilir, kısaltamaz. Zaman damgası ters gidiyor ya da varış farkından
 /// belirgin uzun çıkıyorsa (bazı Npcap zaman damgası modları) örnek "bozuk" sayılır; son 5 sn'de bozuklar %20'yi aşarsa ölçüm yok (null).</item>
 /// <item>Gösterilen değer son 5 sn'deki örneklerin alt çeyreğidir (25. yüzdelik): sunucunun gecikmeli ACK'i ve tek aykırı örnek alarm vermez;
-/// gerçekten kötü bir bağlantıda örneklerin hepsi yükselir. En az 3 örnek yoksa null (yanlış alarm yerine sessizlik).</item>
+/// gerçekten kötü bir bağlantıda örneklerin hepsi yükselir. En az <see cref="EnAzOrnek"/> örnek yoksa null (yanlış alarm yerine sessizlik).</item>
+/// <item>Gecikmeli ACK (delayed ACK): az trafikte (kasaba, AFK) sunucunun gönderecek verisi yoksa boş ACK'i 40-200 ms bekletir; o zaman
+/// örneklerin hepsi gecikmiş olur ve alt çeyrek de kurtarmaz. Bu yüzden yalnız veri taşıyan sunucu parçalarının onayı örnek verir (onay
+/// verinin sırtında, sunucu veriyi gönderirken hemen); boş ACK yalnız bekleyenleri düşürür. Ayrıca 5 sn'de en az 8 örnek gerekir: seyrek
+/// trafikte ölçüm yok (null), alarm yok. Savaşta ve kalabalıkta trafik bunun çok üstündedir.</item>
+/// <item>Aynı parça iki ağ kartında yakalanırsa (ör. Hyper-V vEthernet) ikinci kopya yeniden gönderim sayılmaz, yok sayılır
+/// (aynı başlangıç ve uzunluk, Npcap zamanı 20 ms içinde).</item>
 /// </list>
 /// Yakalama iş parçacıklarından beslenir, arayüz iş parçacığından okunur (kilitli; bellek sabit: halka dizileri).
 /// </summary>
 internal sealed class PingOlcer
 {
     public const int PencereMs = 5000;
-    public const int EnAzOrnek = 3;
+    public const int EnAzOrnek = 8;
+    private const int SonParcaBoyu = 8;          // kopya denetimi için hatırlanan son istemci parçaları
+    private const long KopyaToleransMs = 20;     // iki kartta yakalanan kopyaların Npcap zaman farkı bundan küçük
     private const int EnFazlaBekleyen = 64;      // bağlantı başına onay bekleyen istemci parçası
     private const int EnFazlaBaglanti = 8;
     private const int HalkaBoyu = 256;           // son örnekler (5 sn'de bundan fazlası gerekmez)
@@ -37,6 +45,34 @@ internal sealed class PingOlcer
         public bool IstemciSonVar;
         public long SonGorulme;   // varış saati (tick)
         public readonly Queue<(uint Son, long Pcap, long Varis)> Bekleyen = new();
+
+        // Son istemci parçaları (başlangıç, son, Npcap zamanı): iki kartta yakalanan kopyayı yeniden gönderimden ayırmak için. Halka, ayırma yok.
+        public readonly (uint Ilk, uint Son, long Pcap)[] SonParcalar = new (uint, uint, long)[SonParcaBoyu];
+        public int SonParcaYaz, SonParcaDolu;
+
+        public bool KopyaMi(uint ilk, uint son, long pcap)
+        {
+            for (int i = 0; i < SonParcaDolu; i++)
+            {
+                var p = SonParcalar[i];
+                if (p.Ilk == ilk && p.Son == son && Math.Abs(pcap - p.Pcap) <= KopyaToleransMs * TickMs)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public void Hatirla(uint ilk, uint son, long pcap)
+        {
+            SonParcalar[SonParcaYaz] = (ilk, son, pcap);
+            SonParcaYaz = (SonParcaYaz + 1) % SonParcaBoyu;
+            if (SonParcaDolu < SonParcaBoyu)
+            {
+                SonParcaDolu++;
+            }
+        }
     }
 
     private readonly object _kilit = new();
@@ -83,6 +119,12 @@ internal sealed class PingOlcer
                 }
 
                 uint son = unchecked(sira + (uint)uzunluk);
+                if (b.KopyaMi(sira, son, pcapTick))
+                {
+                    return; // aynı parçanın ikinci kartta yakalanmış kopyası: yeniden gönderim değil, ölçüme girmez
+                }
+
+                b.Hatirla(sira, son, pcapTick);
                 bool yeniden = b.IstemciSonVar && (int)(sira - b.IstemciSon) < 0; // daha önce gönderilmiş baytları taşıyor
                 if (yeniden)
                 {
@@ -120,9 +162,9 @@ internal sealed class PingOlcer
                 kapsanan = b.Bekleyen.Dequeue();
             }
 
-            if (kapsanan is not { } k)
+            if (kapsanan is not { } k || uzunluk <= 0)
             {
-                return;
+                return; // boş ACK gecikmeli olabilir (delayed ACK): kapsadıklarını düşürür, örnek vermez
             }
 
             double varisMs = (double)(varisTick - k.Varis) / TickMs;

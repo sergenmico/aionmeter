@@ -44,6 +44,7 @@ ok &= KupYonKontrol.Calistir(assets); // Gizli Küp: oyuncunun yeri, küpe pusul
 ok &= TakvimKontrol.Calistir(); // Etkinlik takvimi: bölge saatleri, yaz saati, giriş penceresi
 ok &= SahaBossKontrol.Calistir(assets); // Saha bossu listesi (0x0191): çözüm, depo, kalıcılık
 ok &= PingKontrol.Calistir(); // ping: sentetik zaman damgalı parçalarla RTT ve uyarı histerezisi
+ok &= PartiKontrol.Calistir(assets); // parti roster'ı: bölge değişiminden sonra roster gelmezse parti bayat
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif

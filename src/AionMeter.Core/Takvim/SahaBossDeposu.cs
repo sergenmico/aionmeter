@@ -30,6 +30,23 @@ public sealed class SahaBossDeposu
     /// <summary>Oyundan bu kadar süredir yenisi gelmeyen bilgi silinir.</summary>
     public static readonly TimeSpan BilgiSiniri = TimeSpan.FromHours(24);
 
+    /// <summary>"Canlı" bilgisi bundan eskiyse ya da geri gelme anının üstünden bu kadar geçtiyse durum belirsizdir (biri öldürmüş olabilir).</summary>
+    public static readonly TimeSpan BelirsizlikSiniri = TimeSpan.FromMinutes(60);
+
+    /// <summary>
+    /// Bu durum artık kesin değil mi? Canlı ama bilgisi (<see cref="SahaBossDurumu.GorulduUtc"/>) 60 dk'dan eski, ya da ölüydü ve geri
+    /// gelme anının üstünden 60 dk'dan fazla geçti. Boss listesi bunları soluk "canlı?" gösterir, geri sayım hiç göstermez.
+    /// </summary>
+    public static bool Belirsiz(in SahaBossDurumu d, DateTime utcSimdi)
+    {
+        if (d.Canli)
+        {
+            return utcSimdi - d.GorulduUtc > BelirsizlikSiniri;
+        }
+
+        return d.ZamanUtc != DateTime.MinValue && utcSimdi - d.ZamanUtc > BelirsizlikSiniri;
+    }
+
     /// <summary>Dosyaya iki yazım arasındaki en kısa süre.</summary>
     public static readonly TimeSpan YazmaAraligi = TimeSpan.FromMinutes(1);
 
@@ -248,19 +265,27 @@ public sealed class SahaBossDeposu
             var katalog = KatalogAl();
             foreach (JsonElement e in doc.RootElement.GetProperty("bosslar").EnumerateArray())
             {
-                int yer = e.GetProperty("yer").GetInt32();
-                if (!katalog.ContainsKey(yer) || _durum.ContainsKey(yer))
+                // Kayıt başına: tek bozuk kayıt (eksik alan, yanlış tür) yalnız kendisini düşürür, sonrakiler yüklenir.
+                try
                 {
-                    continue; // bu oturumda gelen bilgi daha yeni
-                }
+                    int yer = e.GetProperty("yer").GetInt32();
+                    if (!katalog.ContainsKey(yer) || _durum.ContainsKey(yer))
+                    {
+                        continue; // bu oturumda gelen bilgi daha yeni
+                    }
 
-                long zaman = e.GetProperty("zaman").GetInt64(), goruldu = e.GetProperty("goruldu").GetInt64();
-                if ((zaman != 0 && !MakulZaman(zaman)) || !MakulZaman(goruldu))
+                    long zaman = e.GetProperty("zaman").GetInt64(), goruldu = e.GetProperty("goruldu").GetInt64();
+                    if ((zaman != 0 && !MakulZaman(zaman)) || !MakulZaman(goruldu))
+                    {
+                        continue; // elle bozulmuş değer
+                    }
+
+                    _durum[yer] = new Durum(e.GetProperty("canli").GetBoolean(), zaman, goruldu);
+                }
+                catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException)
                 {
-                    continue; // elle bozulmuş değer
+                    // bu kayıt atlanır
                 }
-
-                _durum[yer] = new Durum(e.GetProperty("canli").GetBoolean(), zaman, goruldu);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or InvalidOperationException or FormatException)

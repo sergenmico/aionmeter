@@ -203,8 +203,9 @@ public sealed class NpcapCaptureService : IDisposable
             bool sunucudan = ports.Contains(tcp.SourcePort);
             if (sunucudan || ports.Contains(tcp.DestinationPort))
             {
-                System.Net.IPAddress sunucu = sunucudan ? ip.SourceAddress : ip.DestinationAddress;
-                int anahtar = HashCode.Combine(sunucu, sunucudan ? tcp.SourcePort : tcp.DestinationPort, sunucudan ? tcp.DestinationPort : tcp.SourcePort);
+                // Bağlantı anahtarı yalnız iki porttan (sunucu portu << 16 | istemci portu): parça başına IPAddress ayrılmaz. Bu
+                // bilgisayardan oyun sunucusuna açık bağlantıların istemci portları zaten farklıdır.
+                int anahtar = (sunucudan ? tcp.SourcePort : tcp.DestinationPort) << 16 | (sunucudan ? tcp.DestinationPort : tcp.SourcePort);
                 long pcapTick = (long)raw.Timeval.Seconds * TimeSpan.TicksPerSecond + (long)raw.Timeval.MicroSeconds * 10;
                 Ping.Gozle(anahtar, sunucudan, tcp.SequenceNumber, payload.Length, tcp.Acknowledgment, tcp.AcknowledgmentNumber, pcapTick, PingOlcer.VarisSaati());
             }

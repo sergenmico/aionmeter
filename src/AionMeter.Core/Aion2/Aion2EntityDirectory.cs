@@ -1142,6 +1142,17 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         }
     }
 
+    /// <summary>Değiştirildi (eklendi): parti bilgisi bayatladı (bölge değişiminden sonra uzun süre roster gelmedi, bkz.
+    /// Aion2FrameDecoder.PartiBayatSuresi): parti boş sayılır, tabloda yalnız yerel oyuncu kalır. Yeni roster gelince parti geri gelir.
+    /// Sınıf ve isim bilgileri silinmez.</summary>
+    public void ForgetParty()
+    {
+        lock (_gate)
+        {
+            _party = new HashSet<string>(StringComparer.Ordinal);
+        }
+    }
+
     // Party member name -> class, from the roster's class code.
     private readonly Dictionary<string, string> _partyClasses = new(StringComparer.Ordinal);
 

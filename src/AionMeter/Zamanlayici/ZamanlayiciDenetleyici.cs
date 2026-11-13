@@ -14,6 +14,9 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     /// <summary>Geri sayımın başladığı süre.</summary>
     public static readonly TimeSpan Pencere = TimeSpan.FromMinutes(10);
 
+    /// <summary>Geri sayım panelinde en çok bu kadar satır (en yakın başlangıçlar).</summary>
+    internal const int EnFazlaGeriSayim = 6;
+
     private readonly Ayarlar _ayar;
     private readonly Func<float> _olcek;
     private readonly Func<IntPtr> _oyunPenceresi;
@@ -151,7 +154,7 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         foreach (var o in tampon) sira.Add((o.BaslangicUtc, Satir(o, utc)));
         foreach (var s in saha)
         {
-            if (s.Canli || s.ZamanUtc == DateTime.MinValue) continue;
+            if (s.Canli || s.ZamanUtc == DateTime.MinValue || SahaBossDeposu.Belirsiz(s, utc)) continue;
             var kalan = s.ZamanUtc - utc;
             if (kalan > Pencere || -kalan >= EtkinlikTakvimi.BossSimdiSuresi) continue;
             GeriSayimSatiri satir;
@@ -166,7 +169,11 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         }
         KararliSirala(sira);
         hedef.Clear();
-        foreach (var (_, s) in sira) hedef.Add(s);
+        foreach (var (_, s) in sira)
+        {
+            if (hedef.Count == EnFazlaGeriSayim) break; // en yakın başlangıçlar kalır; panel ekranı kaplamasın
+            hedef.Add(s);
+        }
         if (hedef.Count == 0 && !kilitli)
         {
             TakvimOlayi? en = null;
@@ -202,7 +209,9 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
 
     /// <summary>
     /// Takvim + saha bossları, en yakın doğuş üstte. Saha bossu ölüyse geri gelişine kalan süre (doğunca 60 sn "şimdi"); canlıysa ya da
-    /// geri gelme anı geçtiyse yeşil "canlı", listenin sonunda (yer kimliği sırasıyla). Pencere açmadan da çağrılabilir.
+    /// geri gelme anı geçtiyse yeşil "canlı", listenin sonunda (yer kimliği sırasıyla). Bilgi belirsizleştiyse (<see cref="SahaBossDeposu.Belirsiz"/>:
+    /// 60 dk'dan eski "canlı" ya da geri gelişinin üstünden 60 dk geçmiş) soluk "canlı?", en sonda. Gizlenmez: boss kaybolursa kullanıcı
+    /// nereye gittiğini merak eder; soluk soru işareti "muhtemelen canlı, haritadan bak" der. Pencere açmadan da çağrılabilir.
     /// </summary>
     internal static void BossSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, IReadOnlyList<SahaBossDurumu> saha,
                                           List<(DateTime Utc, BossSatiri Satir)> tampon, List<BossSatiri> hedef)
@@ -218,14 +227,19 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         {
             DateTime sira;
             BossSatiri satir;
-            if (!s.Canli && s.ZamanUtc != DateTime.MinValue && utc - s.ZamanUtc < EtkinlikTakvimi.BossSimdiSuresi)
+            if (SahaBossDeposu.Belirsiz(s, utc))
+            {
+                sira = DateTime.MaxValue; // en sonda
+                satir = new BossSatiri(s.GorunenAd, "canlı?", Palet.CokSoluk, Rakam: false, Soluk: true);
+            }
+            else if (!s.Canli && s.ZamanUtc != DateTime.MinValue && utc - s.ZamanUtc < EtkinlikTakvimi.BossSimdiSuresi)
             {
                 sira = s.ZamanUtc;
                 satir = BossSatir(s.GorunenAd, s.ZamanUtc, utc);
             }
             else
             {
-                sira = DateTime.MaxValue;
+                sira = DateTime.MaxValue.AddTicks(-1); // takvimden sonra, belirsizlerden önce
                 satir = new BossSatiri(s.GorunenAd, "canlı", Palet.Yesil, Rakam: false);
             }
             if (!Var(tampon, satir)) tampon.Add((sira, satir)); // aynı haritadaki eş adlılar aynı durumdaysa tek satır
@@ -326,7 +340,6 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     private void BossYerlestir()
     {
         if (_boss is null || _boss.Surukleniyor) return;
-        var boyut = _boss.Boyut();
         Rectangle r;
         if (_bossYerles)
         {
@@ -342,9 +355,16 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
                 var c = Capa();
                 (ortaX, ust) = (c.X, c.Y);
             }
+            // Liste bulunduğu ekranın yüksekliğini aşmasın: fazlası kırpılır, son satırda "+N daha" (en yakın doğuşlar kalır).
+            _boss.EnFazlaYukseklik = Screen.FromPoint(new Point(ortaX, ust)).Bounds.Height;
+            var boyut = _boss.Boyut();
             r = new Rectangle(ortaX - boyut.Width / 2, ust, boyut.Width, boyut.Height);
         }
-        else r = new Rectangle(_boss.Location, boyut);
+        else
+        {
+            _boss.EnFazlaYukseklik = Screen.FromRectangle(_boss.Bounds).Bounds.Height;
+            r = new Rectangle(_boss.Location, _boss.Boyut());
+        }
         _boss.Yerles(EkranaSigdir(r));
     }
 
