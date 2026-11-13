@@ -1722,7 +1722,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
     private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss, TimeSpan Active, TimeSpan BossActive);
 
-    public MeterSnapshot Snapshot() => SnapshotCore(DateTime.Now); // olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime)
+    public MeterSnapshot Snapshot() => KupYonuEkle(SnapshotCore(DateTime.Now)); // olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime)
 
     private MeterSnapshot SnapshotCore(DateTime now)
     {

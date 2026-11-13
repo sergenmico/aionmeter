@@ -40,6 +40,7 @@ AuditChecks();
 PlayerTargetChecks();
 DurationChecks();
 ok &= KupKontrol.Calistir(assets); // Gizli Küp: çerçeve çözümü ve sayaçlar
+ok &= KupYonKontrol.Calistir(assets); // Gizli Küp: oyuncunun yeri, küpe pusula yönü ve mesafe
 ok &= TakvimKontrol.Calistir(); // Etkinlik takvimi: bölge saatleri, yaz saati, giriş penceresi
 ok &= SahaBossKontrol.Calistir(assets); // Saha bossu listesi (0x0191): çözüm, depo, kalıcılık
 #if YEREL_TANI

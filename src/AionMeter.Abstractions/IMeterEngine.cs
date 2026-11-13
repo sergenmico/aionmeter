@@ -70,7 +70,14 @@ public sealed record MeterSnapshot(
     // Gizli Küp (Hidden Cube): açılıştan beri menzile giren küp sayısı (aynı küp tekrar duyurulunca sayılmaz). Overlay sayı artınca yumuşak bir ses çalar.
     int KupGelis = 0,
     // Şu an menzilde olan (açılmamış) gizli küp sayısı.
-    int KupYakinda = 0);
+    int KupYakinda = 0,
+    // En yakın menzildeki küpün pusula yönü: derece, harita kuzeyinden saat yönünde (0 = K, 90 = D). Oyuncunun yeri bilinmiyorsa null.
+    // Karakterin ya da kameranın bakışına göre değildir (oyun bakış yönü göndermez).
+    double? KupYonDerece = null,
+    // O küpe mesafe (tam metre); yer bilinmiyorsa null.
+    int? KupMesafe = null,
+    // Oyuncunun yeri tahmin (çevredeki varlıkların ortası ya da birkaç saniyelik eski bildirim): mesafe "~" ile gösterilir.
+    bool KupKonumTahmini = false);
 
 public interface IMeterEngine : IDisposable
 {

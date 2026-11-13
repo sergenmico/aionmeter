@@ -118,6 +118,8 @@ internal sealed class OverlayForm : Form
     private int _kupGelisSon = -1;
     private int _kupYakinda;
     private int _kupW;
+    private string? _kupMesafe; // "38 m" / "~38 m": oyuncunun yeri biliniyorsa rozetin yanında; yoksa yalnız simge
+    private int _kupMesafeW;
     private KupAfisi? _kupAfisi; // ilk küpte yaratılır
 
     // Kenar düğmesi: overlay'in dış kenarındaki sekme; tıklayınca tepsi menüsü yanında açılır (kilitliyken de tıklanır)
@@ -872,8 +874,9 @@ internal sealed class OverlayForm : Form
         if (_kupGelisSon >= 0 && gelis > _kupGelisSon)
         {
             Zil.Kup(_ayar.KupSes);
-            KupAfisiGoster(); // ses ve yazı aynı anda
+            KupAfisiGoster(KupYonu.Den(s)); // ses ve yazı aynı anda
         }
+        else if (_kupAfisi is { Acik: true }) _kupAfisi.YonGuncelle(KupYonu.Den(s)); // afiş görünürken yön/mesafe canlı (değişince çizilir)
         _kupGelisSon = gelis;
     }
 
@@ -882,7 +885,7 @@ internal sealed class OverlayForm : Form
     /// Oyun özel tam ekrandayken ya da önde değilken gösterilmez (tam ekranda pencere açmak oyunu çökertebilir).
     /// Overlay gizli/soluk olsa da gösterilir: sesle birlikte haber verir.
     /// </summary>
-    private void KupAfisiGoster()
+    private void KupAfisiGoster(KupYonu? yon)
     {
         try
         {
@@ -899,7 +902,7 @@ internal sealed class OverlayForm : Form
             }
             if (hedef.IsEmpty) hedef = Screen.FromRectangle(Bounds).Bounds;
             _kupAfisi ??= new KupAfisi();
-            _kupAfisi.Goster(hedef);
+            _kupAfisi.Goster(hedef, yon);
         }
         catch (Exception ex)
         {
@@ -1109,6 +1112,7 @@ internal sealed class OverlayForm : Form
     {
         if (a.State != b.State || a.FightOver != b.FightOver || a.Message != b.Message || !Equals(a.Boss, b.Boss)) return false;
         if (a.KupYakinda != b.KupYakinda) return false;
+        if (a.KupMesafe != b.KupMesafe || a.KupKonumTahmini != b.KupKonumTahmini) return false;
         if ((long)a.FightDuration.TotalSeconds != (long)b.FightDuration.TotalSeconds) return false;
         var x = a.Players ?? Array.Empty<PlayerDamage>();
         var y = b.Players ?? Array.Empty<PlayerDamage>();
@@ -1252,7 +1256,8 @@ internal sealed class OverlayForm : Form
         else if (_kukla.Sonuc is { } ks) KartModelKur(ks);
         _sure = (s.FightOver ? "Sonuç · " : "") + Bicim.Sure(s.FightDuration);
         _sureRakam = !s.FightOver;
-        _kupYakinda = Math.Max(0, s.KupYakinda); // menzildeyken alt satırda yalnız küp simgesi (yazı ekran ortasındaki afişte)
+        _kupYakinda = Math.Max(0, s.KupYakinda); // menzildeyken alt satırda küp simgesi (yazı ekran ortasındaki afişte)
+        _kupMesafe = _kupYakinda > 0 ? KupYonu.Den(s)?.MesafeMetni : null; // yer biliniyorsa simgenin yanında mesafe
         GenislikleriOlc();
     }
 
@@ -2054,7 +2059,8 @@ internal sealed class OverlayForm : Form
         _ipucuW = Olc(_ipucu, _yaziKucuk);
         _alarmMetinW = AlarmKurulu ? Math.Max(Olc("Alarm 00:00", _yaziKucuk), Olc(_alarmMetin, _yaziKucuk)) : 0;
         _saatW = SaatBoy + (_alarmMetinW > 0 ? P(5) + _alarmMetinW : 0);
-        _kupW = _kupYakinda > 0 ? KupBoy : 0;
+        _kupMesafeW = _kupMesafe is null ? 0 : _rKucuk.Genislik("~888 m"); // en geniş haline göre: mesafe değişirken overlay genişlemesin
+        _kupW = _kupYakinda > 0 ? KupBoy + (_kupMesafeW > 0 ? P(4) + _kupMesafeW : 0) : 0;
         gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0) + P(12) + _saatW + (_kupW > 0 ? _kupW + P(12) : 0));
 
         _icerikW = Math.Max(_icerikW, gerek);
@@ -2315,9 +2321,11 @@ internal sealed class OverlayForm : Form
         x1 = saatX - P(12);
         if (_kupW > 0)
         {
-            // Gizli Küp menzilde: saatin solunda küçük küp simgesi
+            // Gizli Küp menzilde: saatin solunda küçük küp simgesi (yer biliniyorsa yanında mesafe)
             int kx = x1 - _kupW;
             CizKup(g, kx, y + altH / 2);
+            if (_kupMesafeW > 0)
+                _rKucuk.Ciz(g, _kupMesafe, new Rectangle(kx + KupBoy + P(4), y, _kupMesafeW, altH), Palet.Kup, sag: false);
             x1 = kx - P(12);
         }
 

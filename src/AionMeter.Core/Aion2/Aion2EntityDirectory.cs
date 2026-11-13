@@ -255,6 +255,34 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
         }
     }
 
+    /// <summary>Değiştirildi (eklendi): menzildeki (açılmamış ya da açılmakta olan) küplerden (<paramref name="x"/>, <paramref name="y"/>)'ye
+    /// en yakın olanın yeri; yoksa null. Küp yön/mesafesi için (<see cref="Konum"/>).</summary>
+    public (float X, float Y)? NearestCubeTo(float x, float y)
+    {
+        lock (_gate)
+        {
+            (float X, float Y)? best = null;
+            double bestD = double.MaxValue;
+            long now = Environment.TickCount64;
+            foreach (Cube cube in _cubes.Values)
+            {
+                if (cube.State == CubeState.OutOfSight || now - cube.SeenTick > CubeStaleMs)
+                {
+                    continue;
+                }
+
+                double dx = cube.X - x, dy = cube.Y - y, d = dx * dx + dy * dy;
+                if (d < bestD)
+                {
+                    bestD = d;
+                    best = (cube.X, cube.Y);
+                }
+            }
+
+            return best;
+        }
+    }
+
     /// <summary>Bir oyuncu env nesnesini açmaya başladı (0x3836). Küp 04 kaldırması gelene kadar menzilde sayılır.</summary>
     public void NoteCubeOpening(int entityId)
     {
@@ -654,6 +682,9 @@ public sealed class Aion2EntityDirectory : IEntityDirectory
 
     /// <summary>Casts, whom entities aim at and the effects on them (see <see cref="Aion2CombatState"/>).</summary>
     public Aion2CombatState Combat { get; } = new();
+
+    /// <summary>Değiştirildi (eklendi): yerel oyuncunun yeri (kesin bildirimler ve çevre tahmini; Gizli Küp yön/mesafesi için).</summary>
+    public Aion2Konum Konum { get; } = new();
 
     // Every entity announced by the monster-appears frame: monsters and summons, never players.
     private readonly HashSet<int> _spawned = new();
