@@ -696,9 +696,12 @@ internal sealed class CevirmenDenetleyici : IDisposable
 
     public void Dispose()
     {
+        // İki kez çağrılabilir: bırakılmış iptal nesnesine dokunulmasın.
         _bolgeIptal?.Cancel();
+        _bolgeIptal = null;
         _aciklamaIptal?.Cancel();
         _aciklamaIptal?.Dispose();
+        _aciklamaIptal = null;
         TabaniBirak();
         SonucuKapat();
         _aciklamaPaneli?.Dispose();

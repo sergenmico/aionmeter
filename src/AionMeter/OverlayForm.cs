@@ -3359,10 +3359,16 @@ internal sealed class OverlayForm : Form
         base.OnFormClosing(e);
     }
 
+    // Ana form iki kez bırakılır: Application.Run kapanınca bir kez, Program'daki using ile bir kez daha. İkincisi hiçbir şey yapmamalı
+    // (çevirmenin bırakılmış iptal nesnesi yeniden iptal edilince tepsiden "Kapat" "Beklenmeyen hata" ile çöküyordu).
+    private bool _birakildi;
+
     protected override void Dispose(bool disposing)
     {
+        if (disposing && _birakildi) { base.Dispose(disposing); return; }
         if (disposing)
         {
+            _birakildi = true;
             SystemEvents.DisplaySettingsChanged -= EkranDegisti;
             if (_onPlanKancasi != IntPtr.Zero) Native.UnhookWinEvent(_onPlanKancasi);
             _onPlanKancasi = IntPtr.Zero;
