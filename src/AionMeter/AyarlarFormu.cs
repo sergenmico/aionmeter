@@ -288,6 +288,15 @@ internal sealed class AyarlarFormu : Form
                 try { System.Media.SystemSounds.Exclamation.Play(); } catch { /* önizleme */ }
             }
         }));
+        // Gecikme uyarısı: overlay her tikte ayara bakar, değişiklik hemen geçerli.
+        string[] pingEsikleri = Array.ConvertAll(PingUyarisi.Esikler, v => v.ToString(Bicim.Tr) + " ms");
+        _ogeler.Add(new Anahtar("Gecikme uyarısı", "Ping eşiği aşınca overlay'de kırmızı \"320 ms\"", () => _ayar.PingUyari, () =>
+        {
+            _ayar.PingUyari = !_ayar.PingUyari;
+            _ayar.Kaydet();
+        }));
+        _ogeler.Add(new Secim("Gecikme eşiği", pingEsikleri, () => Array.IndexOf(PingUyarisi.Esikler, _ayar.PingEsik),
+            i => { _ayar.PingEsik = PingUyarisi.Esikler[i]; _ayar.Kaydet(); }) { Etkin = () => _ayar.PingUyari });
 
         _ogeler.Add(new Bolum("Gizli Küp"));
         _ogeler.Add(new Anahtar("Gizli Küp sesi", "Yakına bir küp gelince kısa, yumuşak ses", () => _ayar.KupSesi, () =>

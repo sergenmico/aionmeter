@@ -42,6 +42,7 @@ DurationChecks();
 ok &= KupKontrol.Calistir(assets); // Gizli Küp: çerçeve çözümü ve sayaçlar
 ok &= TakvimKontrol.Calistir(); // Etkinlik takvimi: bölge saatleri, yaz saati, giriş penceresi
 ok &= SahaBossKontrol.Calistir(assets); // Saha bossu listesi (0x0191): çözüm, depo, kalıcılık
+ok &= PingKontrol.Calistir(); // ping: sentetik zaman damgalı parçalarla RTT ve uyarı histerezisi
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif

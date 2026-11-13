@@ -43,6 +43,9 @@ public sealed class Aion2PacketCombatSource : IDisposable
     /// <summary>The id of the zone the local player is in (0 until the game has sent one).</summary>
     public int CurrentZoneId => _decoder.CurrentZoneId;
 
+    /// <summary>Değiştirildi (eklendi): oyun bağlantısının son 5 sn'lik pingi (ms); yakalama yoksa ya da ölçüm güvenilir değilse null.</summary>
+    public int? PingMs => _capture?.Ping.Ms();
+
     /// <summary>Değiştirildi (eklendi): çözülen her hasar/iyileştirme olayı; yakalama işçi iş parçacığında çağrılır.</summary>
     public event Action<DamageEvent>? Hit;
 
@@ -173,6 +176,12 @@ public sealed class Aion2PacketCombatSource : IDisposable
                 + $"tls +{c.Tls - p.Tls}, kuyruk taşması +{c.QueueDrops - p.QueueDrops}, ps_drop +{c.KernelDrops - p.KernelDrops}, if_drop +{c.IfDrops - p.IfDrops}, "
                 + $"lz4/paket hatası +{c.BundleFailures - p.BundleFailures}, atlanan çerçeve +{c.Skipped - p.Skipped}, bilinmeyen opcode +{c.Unknown - p.Unknown}, "
                 + $"işleyici hatası +{c.CallbackErrors - p.CallbackErrors}; alınan paket {received}");
+            if (_capture is { } capture)
+            {
+                (long ornek, long bozuk, long yeniden) = capture.Ping.Sayaclar();
+                MeterTani.Yaz?.Invoke($"{now:HH:mm:ss.fff} ping: {(capture.Ping.Ms() is int ms ? ms + " ms" : "yok")} "
+                    + $"(açılıştan beri örnek {ornek}, bozuk zaman damgası {bozuk}, yeniden gönderim {yeniden})");
+            }
         }
         catch (Exception)
         {
