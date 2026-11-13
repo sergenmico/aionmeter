@@ -268,6 +268,8 @@ internal sealed class OverlayForm : Form
         _kareZamanlayici.Tick += (_, _) => KareTick();
         _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _dpiOlcek, BizimPencereler, m => _tepsi?.Bildir(m));
         _etkinlik = new Zamanlayici.ZamanlayiciDenetleyici(ayar, () => _olcek, () => _onPlan.OyunPenceresi);
+        Core.SahaBossDeposu.Ortak.KaliciYap(Path.Combine(Ayarlar.Klasor, "saha-bosslari.json")); // saha bossları yeniden açılışta kaybolmasın
+        _etkinlik.SahaBosslari = Core.SahaBossDeposu.Ortak.Oku;
         _cevirmen.DurumDegisti += () =>
         {
             TepsiGuncelle();

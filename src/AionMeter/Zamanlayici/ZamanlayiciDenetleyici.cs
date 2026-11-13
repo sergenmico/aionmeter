@@ -28,12 +28,17 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     private readonly List<GeriSayimSatiri> _gsSatirlar = new();
     private readonly List<(DateTime Utc, BossSatiri Satir)> _bossSira = new();
     private readonly List<BossSatiri> _bossSatirlar = new();
+    private readonly List<(DateTime Utc, GeriSayimSatiri Satir)> _gsSira = new();
+    private readonly List<SahaBossDurumu> _saha = new();
+
+    /// <summary>Boss listesinde hiç saha bossu bilgisi yokken altta görünen ipucu.</summary>
+    internal const string SahaIpucu = "Saha bossları için oyunda haritayı (M) açıp saha bossu listesine göz at";
 
     /// <summary>
-    /// Saha bossları (ileride paket çözücüden doldurulacak): ad ve bir sonraki doğuş (UTC). Boss listesinde takvim
-    /// bosslarıyla birlikte sıralanır; doğuştan 60 sn sonrası listeden düşer. Şimdilik boş.
+    /// Saha bosslarının bilinen durumu (paket çözücüden; <see cref="SahaBossDeposu.Oku"/>): verilen listeyi temizleyip doldurur.
+    /// Ölülerin geri gelişi takvim bosslarıyla birlikte sıralanır ve 10 dk kala geri sayıma girer; canlılar listenin sonunda.
     /// </summary>
-    public Func<IReadOnlyList<(string Ad, DateTime DogusUtc)>> SahaBosslari { get; set; } = () => Array.Empty<(string, DateTime)>();
+    public Action<DateTime, List<SahaBossDurumu>> SahaBosslari { get; set; } = static (_, hedef) => hedef.Clear();
 
     public bool BossListesiAcik => _bossAcik;
 
@@ -85,6 +90,13 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         bool olcekDegisti = olcek != _sonOlcek;
         _sonOlcek = olcek;
         byte alfa = (byte)Math.Clamp(_ayar.Opaklik * 255 / 100, 40, 255);
+        try
+        {
+            SahaBosslari(utc, _saha);
+            // Reshanta bossları (harita 20/22, yer kimliği 2001..2205) takvimde zaten var: aynı boss iki satır olmasın.
+            _saha.RemoveAll(static b => b.Yer < 10_000);
+        }
+        catch (Exception ex) { HataLog.Yaz("Saha bossları", ex); _saha.Clear(); }
 
         // ---- Geri sayım ----
         if (_ayar.Zamanlayici && GeriSayimSatirlari(utc, kilitli))
@@ -114,8 +126,8 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             }
             _boss.OlcekAyarla(olcek);
             _boss.AlfaAyarla(alfa);
-            BossSatirlari(utc);
-            bool degisti = _boss.Guncelle(_bossSatirlar, EtkinlikTakvimi.BolgeAdlari[(int)_takvim.Bolge]);
+            BossSatirlariKur(_takvim, utc, _saha, _bossSira, _bossSatirlar);
+            bool degisti = _boss.Guncelle(_bossSatirlar, EtkinlikTakvimi.BolgeAdlari[(int)_takvim.Bolge], _saha.Count == 0 ? SahaIpucu : null);
             if (degisti || olcekDegisti || _bossYerles || !_boss.Visible) BossYerlestir();
             _boss.Goster();
         }
@@ -124,14 +136,37 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     // ---------------- Geri sayım satırları ----------------
 
     /// <summary>Gösterilecek satır varsa true. Kilitsizken boşsa sıradaki etkinlik soluk gösterilir (paneli yerleştirebilmek için).</summary>
-    private bool GeriSayimSatirlari(DateTime utc, bool kilitli) => GeriSayimSatirlariKur(_takvim!, utc, kilitli, _olaylar, _gsSatirlar);
+    private bool GeriSayimSatirlari(DateTime utc, bool kilitli) =>
+        GeriSayimSatirlariKur(_takvim!, utc, kilitli, _saha, _olaylar, _gsSira, _gsSatirlar);
 
-    /// <summary>Pencere açmadan da çağrılabilir (ekran dışı çizim denemesi). <paramref name="tampon"/> takvimin çalışma listesi.</summary>
-    internal static bool GeriSayimSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, bool kilitli, List<TakvimOlayi> tampon, List<GeriSayimSatiri> hedef)
+    /// <summary>
+    /// Takvim + saha bosslarının geri gelişi (10 dk kala; doğunca 60 sn "şimdi"), en yakın üstte. Pencere açmadan da çağrılabilir
+    /// (ekran dışı çizim denemesi). <paramref name="tampon"/> ve <paramref name="sira"/> çalışma listeleri.
+    /// </summary>
+    internal static bool GeriSayimSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, bool kilitli, IReadOnlyList<SahaBossDurumu> saha,
+                                               List<TakvimOlayi> tampon, List<(DateTime Utc, GeriSayimSatiri Satir)> sira, List<GeriSayimSatiri> hedef)
     {
         takvim.Yaklasanlar(utc, Pencere, tampon);
+        sira.Clear();
+        foreach (var o in tampon) sira.Add((o.BaslangicUtc, Satir(o, utc)));
+        foreach (var s in saha)
+        {
+            if (s.Canli || s.ZamanUtc == DateTime.MinValue) continue;
+            var kalan = s.ZamanUtc - utc;
+            if (kalan > Pencere || -kalan >= EtkinlikTakvimi.BossSimdiSuresi) continue;
+            GeriSayimSatiri satir;
+            if (kalan > TimeSpan.Zero)
+            {
+                var k = Yukari(kalan);
+                satir = new GeriSayimSatiri(s.GorunenAd, TakvimTuru.Boss, Bicim.Kalan(k), null,
+                    k <= TimeSpan.FromMinutes(1) ? Palet.Yerel : Palet.Dps, Rakam: true, Soluk: false);
+            }
+            else satir = new GeriSayimSatiri(s.GorunenAd, TakvimTuru.Boss, "şimdi", null, Palet.Kirmizi, Rakam: false, Soluk: false);
+            if (!Var(sira, satir)) sira.Add((s.ZamanUtc, satir)); // aynı haritadaki eş adlılar aynı anda gelirse tek satır
+        }
+        KararliSirala(sira);
         hedef.Clear();
-        foreach (var o in tampon) hedef.Add(Satir(o, utc));
+        foreach (var (_, s) in sira) hedef.Add(s);
         if (hedef.Count == 0 && !kilitli)
         {
             TakvimOlayi? en = null;
@@ -165,16 +200,11 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
 
     // ---------------- Boss satırları ----------------
 
-    private void BossSatirlari(DateTime utc)
-    {
-        IReadOnlyList<(string Ad, DateTime DogusUtc)> saha;
-        try { saha = SahaBosslari(); }
-        catch (Exception ex) { HataLog.Yaz("Saha bossları", ex); saha = Array.Empty<(string, DateTime)>(); }
-        BossSatirlariKur(_takvim!, utc, saha, _bossSira, _bossSatirlar);
-    }
-
-    /// <summary>Takvim + saha bossları, en yakın doğuş üstte. Pencere açmadan da çağrılabilir.</summary>
-    internal static void BossSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, IReadOnlyList<(string Ad, DateTime DogusUtc)> saha,
+    /// <summary>
+    /// Takvim + saha bossları, en yakın doğuş üstte. Saha bossu ölüyse geri gelişine kalan süre (doğunca 60 sn "şimdi"); canlıysa ya da
+    /// geri gelme anı geçtiyse yeşil "canlı", listenin sonunda (yer kimliği sırasıyla). Pencere açmadan da çağrılabilir.
+    /// </summary>
+    internal static void BossSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, IReadOnlyList<SahaBossDurumu> saha,
                                           List<(DateTime Utc, BossSatiri Satir)> tampon, List<BossSatiri> hedef)
     {
         tampon.Clear();
@@ -184,26 +214,48 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             var o = takvim.Guncel(k, utc);
             tampon.Add((o.BaslangicUtc, BossSatir(k.Ad, o.BaslangicUtc, utc)));
         }
-        foreach (var (ad, dogus) in saha)
+        foreach (var s in saha)
         {
-            var d = DateTime.SpecifyKind(dogus, DateTimeKind.Utc);
-            if (utc - d >= EtkinlikTakvimi.BossSimdiSuresi) continue; // doğuşu geçmiş, bir sonrakini sağlayıcı verir
-            tampon.Add((d, BossSatir(ad, d, utc)));
-        }
-        // Kararlı sıralama (eşit saatte takvim sırası)
-        for (int i = 1; i < tampon.Count; i++)
-        {
-            var x = tampon[i];
-            int j = i - 1;
-            while (j >= 0 && tampon[j].Utc > x.Utc)
+            DateTime sira;
+            BossSatiri satir;
+            if (!s.Canli && s.ZamanUtc != DateTime.MinValue && utc - s.ZamanUtc < EtkinlikTakvimi.BossSimdiSuresi)
             {
-                tampon[j + 1] = tampon[j];
-                j--;
+                sira = s.ZamanUtc;
+                satir = BossSatir(s.GorunenAd, s.ZamanUtc, utc);
             }
-            tampon[j + 1] = x;
+            else
+            {
+                sira = DateTime.MaxValue;
+                satir = new BossSatiri(s.GorunenAd, "canlı", Palet.Yesil, Rakam: false);
+            }
+            if (!Var(tampon, satir)) tampon.Add((sira, satir)); // aynı haritadaki eş adlılar aynı durumdaysa tek satır
         }
+        KararliSirala(tampon);
         hedef.Clear();
         foreach (var (_, s) in tampon) hedef.Add(s);
+    }
+
+    private static bool Var<T>(List<(DateTime Utc, T Satir)> liste, T satir) where T : IEquatable<T>
+    {
+        foreach (var (_, s) in liste)
+            if (s.Equals(satir)) return true;
+        return false;
+    }
+
+    /// <summary>Eklenme sırasını koruyan sıralama (eşit saatte takvim sırası); liste küçük, ayırma yok.</summary>
+    private static void KararliSirala<T>(List<(DateTime Utc, T Satir)> liste)
+    {
+        for (int i = 1; i < liste.Count; i++)
+        {
+            var x = liste[i];
+            int j = i - 1;
+            while (j >= 0 && liste[j].Utc > x.Utc)
+            {
+                liste[j + 1] = liste[j];
+                j--;
+            }
+            liste[j + 1] = x;
+        }
     }
 
     private static BossSatiri BossSatir(string ad, DateTime dogus, DateTime utc)
