@@ -29,21 +29,27 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Ctrl+Alt+D` | Kendi detayın |
 | `Ctrl+Alt+T` | Ekranda bölge seç, Türkçeye çevir (tekrar basınca kapanır) |
 | `Alt` + üstüne gel | Eşya/craft/beceri açıklamasını çevirir (model indirildikten sonra) |
-| `Ctrl+Alt+K` | Kukla testini başlat (Ayarlar'daki süreyle); tekrar basınca iptal / sonuç kartını kapat. Ayarlar → Kukla ve alarm → Kısayol'dan değiştirilir ya da kapatılır |
+| `Ctrl+Alt+K` | Kukla testini başlat (Ayarlar'daki süreyle); tekrar basınca iptal / sonuç kartını kapat. Ayarlar → Kukla → Kısayol'dan değiştirilir ya da kapatılır |
 | `Alt` + saate tıkla | Alarm kur / kapat (overlay'in sağ alt köşesi) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
-Tepsi menüsünde **Ayarlar…**: boyut (%70–%125), saydamlık (kaydırırken canlı görünür), savaş dışında davranış, öfke uyarısı sesi, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
+Tepsi menüsünde ya da overlay'in kenarındaki küçük düğmede **Ayarlar…** (dört sekme: Genel, Görünüm, Uyarılar, Kukla): boyut (%70–%125), opaklık (kaydırırken canlı görünür), savaş dışında davranış, uyarılar, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
 **Savaş dışında** (Ayarlar): bir canavara vurunca overlay tam görünür; savaş bitince ~8 sn sonra `Soluk` (varsayılan), `Gizle` ya da `Hep görünür`. Kilit açıkken de geçerlidir; fareyi overlay'in üstüne (`Gizle`'de eski yerine) getirince tam görünür, çekince ~1 sn sonra kurala döner. Kilitliyken `Alt` basılı tutup üstüne gel.
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapatılabilir).
 Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da Ayarlar'dan "Çeviri modeli: İndir").
 
 ## Ek özellikler
 - **Sadece benim satırım** (Ayarlar → Genel): overlay'de boss ve yalnız senin satırın (`#3` gibi sıranla) kalır; diğerleri arka planda sayılmaya devam eder.
-- **Renk ve yazı** (Ayarlar → Renk ve yazı): her sınıfın rengi, kendi satır rengin, ad / DPS / boss yazı boyutu (%80–%130) ve pay çubuğu opaklığı; değiştirdikçe overlay canlı değişir, "Varsayılana dön" ile geri alınır.
-- **Kukla testi** (tepsi menüsü ya da Ayarlar → Kukla ve alarm): süreyi seç (30 / 60 / 120 / 180 sn ya da özel 5–300 sn), kuklaya vurmaya başla; süre dolunca DPS, toplam, en çok vuran 3 beceri ve sınıfına göre kişisel en iyinle kıyas çıkar. Rekorlar `kukla-rekor.json`'da durur. Kart `Alt`+tıkla ya da yeni dövüşte kapanır.
+- **Renk ve yazı** (Ayarlar → Görünüm): her sınıfın rengi, kendi satır rengin, ad / DPS / boss yazı boyutu (%80–%130) ve pay çubuğu opaklığı; değiştirdikçe overlay canlı değişir, "Varsayılana dön" ile geri alınır.
+- **Kukla testi** (tepsi menüsü ya da Ayarlar → Kukla): süreyi seç (30 / 60 / 120 / 180 sn ya da özel 5–300 sn), kuklaya vurmaya başla; süre dolunca DPS, toplam, en çok vuran 3 beceri ve sınıfına göre kişisel en iyinle kıyas çıkar. Rekorlar `kukla-rekor.json`'da durur. Kart `Alt`+tıkla ya da yeni dövüşte kapanır.
 - **Alarm**: `Alt` basılı tutup overlay'deki saate tıkla, süreyi seç (hazır 1 / 3 / 5 / 10 / 15 / 30 dk; ±1 dk ile 1–180 dk), Başlat. Süre dolunca kısa ve yumuşak bir ses, tepsi bildirimi; ses seviyesi Ayarlar'da.
-- **Gizli Küp** (Hidden Cube): yakına bir küp gelince kısa, yumuşak bir ses çalar (overlay savaş dışında gizliyken de); küp menzildeyken alt satırda "Küp yakında" yazar. Aynı küpün başında dururken tekrar çalmaz. Ayarlar → Kukla ve alarm → Gizli Küp'ten açılıp kapatılır, ses düzeyi ayarlanır, "Dene" ile dinlenir.
+- **Gizli Küp** (Hidden Cube): yakına bir küp gelince kısa bir ses ve ekranın ortasında "Küp var" yazısı; yanında küpün yönü (harita kuzeyine göre) ve mesafesi. Birkaç saniye sonra yazı küçük bir çipe iner, küp menzildeyken kalır. Aynı küpün başında dururken tekrar çalmaz. Ayarlar → Uyarılar → Gizli Küp.
+- **Etkinlik geri sayımı**: Shugo Festival, Dimensional Invasion, Spacetime Rift, Arena of Tactics, takvimli bosslar (Watcher Kaira, Argo, Guardian Lord Nahma, kuşatma) ve günlük/haftalık sıfırlama başlamadan 10 dk önce ekranda geri sayılır; kilit açıkken paneli sürükleyip yerini değiştirebilirsin. Ayarlar → Uyarılar (sunucu bölgesi de orada).
+- **Boss zamanları** (tepsi menüsü ya da kenar düğmesi): bütün bossların doğmasına kalan süre. Saha bossları için oyunda haritayı (`M`) açıp saha bossu listesine bir kez bakman yeterli.
+- **Kenar düğmesi**: overlay kilitliyken de tıklanır; menüyü oyunun üstünde açar (Alt+Tab gerekmez).
+- **Gecikme uyarısı**: ping eşiği aşınca (varsayılan 250 ms) saatin solunda kırmızı ms yazar; normalken görünmez. Ayarlar → Uyarılar.
+- **Tablo**: partideyken yalnız parti, partisizken yalnız sen. DPS'in yanındaki küçük ▲/▼ son ~10 sn'nin kendi ortalamanın belirgin üstünde/altında olduğunu gösterir.
+- Oyunda ekran modu **Pencereli tam ekran** olmalı; tam ekran modunda sayaç oyunu çökertmemek için kendini gizler.
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini
