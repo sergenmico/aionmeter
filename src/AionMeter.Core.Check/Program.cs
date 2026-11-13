@@ -270,7 +270,7 @@ void FightRules()
         }
     }
 
-    // e) Dünya boss'u: 12 yabancı + yerel oyuncu boss'a vuruyor -> 13 oyuncu, hasara göre azalan, yerel dahil.
+    // e) Partisiz dünya boss'u: 12 yabancı + yerel oyuncu boss'a vuruyor -> tabloda yalnız yerel (kullanıcı isteği: partisizken yalnız benim satırım).
     {
         var (engine, dir) = NewFight();
         using (engine)
@@ -288,8 +288,7 @@ void FightRules()
 
             dir.HitPoints.Note(boss, t0.AddSeconds(-7), 49_000_000);
             MeterSnapshot snap = engine.Snapshot();
-            bool sorted = snap.Players.Zip(snap.Players.Skip(1)).All(pair => pair.First.Total >= pair.Second.Total);
-            Check($"dünya boss'u, 12 yabancı + yerel -> {snap.Players.Count} oyuncu", snap.Players.Count == 13 && sorted && snap.Players.Any(p => p.IsLocal && p.Total == 5_500));
+            Check($"partisiz dünya boss'u, 12 yabancı + yerel -> {snap.Players.Count} oyuncu (yalnız ben)", snap.Players.Count == 1 && snap.Players[0] is { IsLocal: true, Total: 5_500 });
         }
     }
 
@@ -320,6 +319,32 @@ void FightRules()
             dir.HitPoints.Note(boss, t0.AddSeconds(-7), 4_900_000);
             MeterSnapshot snap = engine.Snapshot();
             Check($"5 kişilik parti -> {snap.Players.Count} oyuncu", snap.Players.Count == 5 && snap.Players.All(p => members.Contains(p.Name)), Show(snap));
+        }
+    }
+
+    // g) Partideyken saha/dünya boss'u: aynı boss'a 8 yabancı da vuruyor -> tabloda yalnız parti (2 kişi), yabancılar gösterilmez.
+    {
+        var (engine, dir) = NewFight();
+        using (engine)
+        {
+            dir.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, t0));
+            dir.Register(601, "Arkadas");
+            dir.NoteClass(601, "Cleric");
+            dir.NoteParty(new[] { "Ben", "Arkadas" }, t0);
+            dir.HitPoints.Note(boss, t0.AddSeconds(-10), 50_000_000);
+            engine.InjectHit(Hit(t0.AddSeconds(-9), boss, 10_000));
+            engine.InjectHit(new DamageEvent(t0.AddSeconds(-8), 601, boss, 4_000, false, SkillId: 17010000));
+            for (int i = 0; i < 8; i++)
+            {
+                dir.Register(3000 + i, "Yabanci" + i);
+                dir.NoteClass(3000 + i, "Ranger");
+                engine.InjectHit(new DamageEvent(t0.AddSeconds(-8), 3000 + i, boss, 50_000L * (i + 1), false, SkillId: 13010000));
+            }
+
+            dir.HitPoints.Note(boss, t0.AddSeconds(-7), 49_000_000);
+            MeterSnapshot snap = engine.Snapshot();
+            Check($"partideyken saha boss'u, 8 yabancı -> {snap.Players.Count} oyuncu (yalnız parti)",
+                snap.Players.Count == 2 && snap.Players.All(p => p.Name is "Ben" or "Arkadas"), Show(snap));
         }
     }
 }
@@ -418,7 +443,7 @@ void MotorScenarios()
         d.HitPoints.Note(boss, t.AddSeconds(-8), 1_000_000);
         e.InjectHit(H(me, t.AddSeconds(-7), boss, 50_000));
         MeterSnapshot s2 = e.Snapshot();
-        Check("MOTOR 3: kukla 0'a inip doldu, dövüş bölünmez", !s1.FightOver && !s2.FightOver && P(s2, me)?.Total == 450_000 && P(s2, friend)?.Total == 600_000, Show(s2));
+        Check("MOTOR 3: kukla 0'a inip doldu, dövüş bölünmez (partisiz: arkadaş tabloda yok)", !s1.FightOver && !s2.FightOver && P(s2, me)?.Total == 450_000 && P(s2, friend) is null, Show(s2));
     }
 
     // MOTOR 4: karakter kaydı var (ben), arkadaşın adı hiç gelmedi, beceri sayısı benden çok: açık kimlik varken tahmine bakılmaz.
@@ -1355,8 +1380,11 @@ void DurationChecks()
                 }
 
                 MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(60));
-                bool order = s.Players.Count == 2 && s.Players[0].Id == b && s.Players[1].Id == a;
-                results[(roster, localA)] = (P(s, a)?.Dps ?? -1, order ? P(s, b)?.Dps ?? -1 : -1, Show(s));
+                // Roster yokken tabloda yalnız yerel oyuncu var (partisiz kabul): öteki satır beklenmez, yerelin sayısı yine tutarlı olmalı.
+                bool order = roster ? s.Players.Count == 2 && s.Players[0].Id == b && s.Players[1].Id == a : s.Players.Count == 1;
+                double pa = P(s, a)?.Dps ?? -1, pb = P(s, b)?.Dps ?? -1;
+                if (!roster) { if (localA) pb = 120_000; else pa = 100_000; } // tabloda olmayan satırın yerine hedef değer (karşılaştırma dışı)
+                results[(roster, localA)] = (order ? pa : -1, order ? pb : -1, Show(s));
             }
         }
 
@@ -1364,7 +1392,8 @@ void DurationChecks()
         foreach (var ((roster, localA), r) in results)
         {
             string view = (roster ? "(k) roster var" : localA ? "(i) roster yok" : "(j) roster yok") + (localA ? ", A'nın ekranı" : ", B'nin ekranı");
-            Check($"süre {view}: A ≈ 100.000, B ≈ 120.000 (±%2), sıralama hasara göre", Close(r.A, 100_000) && Close(r.B, 120_000), r.Shown);
+            Check($"süre {view}: " + (roster ? "A ≈ 100.000, B ≈ 120.000 (±%2), sıralama hasara göre" : "yalnız kendi satırı, DPS'i doğru (±%2)"),
+                Close(r.A, 100_000) && Close(r.B, 120_000), r.Shown);
         }
 
         bool same = results.Values.All(r => Close(r.A, results[(false, true)].A) && Close(r.B, results[(false, true)].B));
