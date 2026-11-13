@@ -6,7 +6,7 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaKisa, _kuklaOzel, _kuklaIptal, _alarm;
+    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaKisa, _kuklaOzel, _kuklaIptal, _alarm, _boss;
     private readonly ToolStripMenuItem[] _kuklaSureleri;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
@@ -41,12 +41,14 @@ internal sealed class Tepsi : IDisposable
         _kukla.DropDownItems.Add(new ToolStripSeparator());
         _kukla.DropDownItems.Add(_kuklaIptal);
         _alarm = new ToolStripMenuItem("Alarm…", null, (_, _) => alarm());
+        // Boss zamanları: iş (BossZamanlari) verilene kadar menüde görünmez.
+        _boss = new ToolStripMenuItem("Boss zamanları", null, (_, _) => _bossZamanlari?.Invoke()) { Available = false };
 
         var ayar = new ToolStripMenuItem("Ayarlar…", null, (_, _) => ayarlar());
         _denetle = new ToolStripMenuItem("Güncellemeleri denetle", null, (_, _) => guncellemeDenetle());
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
         Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), bolge,
-            _kukla, _alarm, new ToolStripSeparator(), ayar, _denetle, new ToolStripSeparator(), cik });
+            _kukla, _alarm, _boss, new ToolStripSeparator(), ayar, _denetle, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon
@@ -57,6 +59,19 @@ internal sealed class Tepsi : IDisposable
             Visible = true,
         };
         _simge.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) gosterDegistir(); };
+    }
+
+    private Action? _bossZamanlari;
+
+    /// <summary>"Boss zamanları" öğesinin işi. Boşken öğe menüde görünmez.</summary>
+    public Action? BossZamanlari
+    {
+        get => _bossZamanlari;
+        set
+        {
+            _bossZamanlari = value;
+            _boss.Available = value is not null;
+        }
     }
 
     public void Guncelle(bool kilitli, bool gorunur, bool denetleniyor)
