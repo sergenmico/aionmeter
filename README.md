@@ -49,7 +49,6 @@ Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapat
 - **Kenar düğmesi**: overlay kilitliyken de tıklanır; menüyü oyunun üstünde açar (Alt+Tab gerekmez).
 - **Gecikme uyarısı**: ping eşiği aşınca (varsayılan 250 ms) saatin solunda kırmızı ms yazar; normalken görünmez. Ayarlar → Uyarılar.
 - **Tablo**: partideyken yalnız parti, partisizken yalnız sen. DPS'in yanındaki küçük ▲/▼ son ~10 sn'nin kendi ortalamanın belirgin üstünde/altında olduğunu gösterir.
-- Oyunda ekran modu **Pencereli tam ekran** olmalı; tam ekran modunda sayaç oyunu çökertmemek için kendini gizler.
 
 ## Oyun yaması sonrası çalışmazsa
 Genelde sadece `assets/aion2/protocol/opcodes.json` değişir. Güncelini
