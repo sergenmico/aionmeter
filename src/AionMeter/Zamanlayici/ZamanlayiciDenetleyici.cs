@@ -37,6 +37,12 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     /// <summary>Boss listesinde hiç saha bossu bilgisi yokken altta görünen ipucu.</summary>
     internal const string SahaIpucu = "Saha bossları için oyunda haritayı (M) açıp saha bossu listesine göz at";
 
+    /// <summary>Takvimli bossların (ve Reshanta saha kayıtlarının) grubu; saha bosslarında grup harita adıdır.</summary>
+    internal const string AbyssGrubu = "Abyss";
+
+    /// <summary>Ayarlar'daki Bosslar sekmesinde grupların sırası (listede olmayan harita olursa bunlardan sonra gelir).</summary>
+    internal static readonly string[] GrupSirasi = { AbyssGrubu, "Verteron", "Altgard", "Eltnen", "Morheim" };
+
     /// <summary>
     /// Saha bosslarının bilinen durumu (paket çözücüden; <see cref="SahaBossDeposu.Oku"/>): verilen listeyi temizleyip doldurur.
     /// Ölülerin geri gelişi takvim bosslarıyla birlikte sıralanır ve 10 dk kala geri sayıma girer; canlılar listenin sonunda.
@@ -88,18 +94,11 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             _boss?.Gizle();
             return;
         }
-        if (_takvim is null || _takvim.Bolge != _ayar.Bolge) _takvim = new EtkinlikTakvimi(_ayar.Bolge);
+        Hazirla(utc);
         float olcek = _olcek();
         bool olcekDegisti = olcek != _sonOlcek;
         _sonOlcek = olcek;
         byte alfa = (byte)Math.Clamp(_ayar.Opaklik * 255 / 100, 40, 255);
-        try
-        {
-            SahaBosslari(utc, _saha);
-            // Reshanta bossları (harita 20/22, yer kimliği 2001..2205) takvimde zaten var: aynı boss iki satır olmasın.
-            _saha.RemoveAll(static b => b.Yer < 10_000);
-        }
-        catch (Exception ex) { HataLog.Yaz("Saha bossları", ex); _saha.Clear(); }
 
         // ---- Geri sayım ----
         if (_ayar.Zamanlayici && GeriSayimSatirlari(utc, kilitli))
@@ -129,11 +128,39 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             }
             _boss.OlcekAyarla(olcek);
             _boss.AlfaAyarla(alfa);
-            BossSatirlariKur(_takvim, utc, _saha, _bossSira, _bossSatirlar);
-            bool degisti = _boss.Guncelle(_bossSatirlar, EtkinlikTakvimi.BolgeAdlari[(int)_takvim.Bolge], _saha.Count == 0 ? SahaIpucu : null);
+            BossSatirlariKur(_takvim!, utc, _saha, _bossSira, _bossSatirlar);
+            bool degisti = _boss.Guncelle(_bossSatirlar, EtkinlikTakvimi.BolgeAdlari[(int)_takvim!.Bolge], sahaVar: _saha.Count > 0);
             if (degisti || olcekDegisti || _bossYerles || !_boss.Visible) BossYerlestir();
             _boss.Goster();
         }
+    }
+
+    /// <summary>Takvimi bölgeye göre hazırlar ve saha bosslarının son durumunu okur.</summary>
+    private void Hazirla(DateTime utc)
+    {
+        if (_takvim is null || _takvim.Bolge != _ayar.Bolge) _takvim = new EtkinlikTakvimi(_ayar.Bolge);
+        try
+        {
+            SahaBosslari(utc, _saha);
+            // Reshanta bossları (harita 20/22, yer kimliği 2001..2205) takvimde zaten var: aynı boss iki satır olmasın.
+            _saha.RemoveAll(static b => b.Yer < 10_000);
+        }
+        catch (Exception ex) { HataLog.Yaz("Saha bossları", ex); _saha.Clear(); }
+    }
+
+    /// <summary>
+    /// Boss listesinin satırları (takvim + saha bossları, en yakın doğuş üstte; ayrıntı <see cref="BossSatirlariKur"/>). Ekranda yüzen
+    /// liste de Ayarlar'daki Bosslar sekmesi de satırlarını aynı yoldan alır. Pencere açmaz. Saha bossu bilgisi hiç yoksa false döner
+    /// (çağıran <see cref="SahaIpucu"/>'yu gösterir).
+    /// </summary>
+    public bool BossSatirlariniDoldur(DateTime utcSimdi, List<BossSatiri> hedef)
+    {
+        hedef.Clear();
+        if (_disposed) return false;
+        var utc = utcSimdi.Kind == DateTimeKind.Local ? utcSimdi.ToUniversalTime() : utcSimdi;
+        Hazirla(utc);
+        BossSatirlariKur(_takvim!, utc, _saha, _bossSira, hedef);
+        return _saha.Count > 0;
     }
 
     // ---------------- Geri sayım satırları ----------------
@@ -221,26 +248,27 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         {
             if (k.Tur != TakvimTuru.Boss) continue;
             var o = takvim.Guncel(k, utc);
-            tampon.Add((o.BaslangicUtc, BossSatir(k.Ad, o.BaslangicUtc, utc)));
+            tampon.Add((o.BaslangicUtc, BossSatir(k.Ad, o.BaslangicUtc, utc, AbyssGrubu)));
         }
         foreach (var s in saha)
         {
             DateTime sira;
             BossSatiri satir;
+            string grup = s.Yer < 10_000 ? AbyssGrubu : s.Harita.Length > 0 ? s.Harita : "Diğer";
             if (SahaBossDeposu.Belirsiz(s, utc))
             {
                 sira = DateTime.MaxValue; // en sonda
-                satir = new BossSatiri(s.GorunenAd, "canlı?", Palet.CokSoluk, Rakam: false, Soluk: true);
+                satir = new BossSatiri(s.GorunenAd, "canlı?", Palet.CokSoluk, Rakam: false, Soluk: true, Grup: grup);
             }
             else if (!s.Canli && s.ZamanUtc != DateTime.MinValue && utc - s.ZamanUtc < EtkinlikTakvimi.BossSimdiSuresi)
             {
                 sira = s.ZamanUtc;
-                satir = BossSatir(s.GorunenAd, s.ZamanUtc, utc);
+                satir = BossSatir(s.GorunenAd, s.ZamanUtc, utc, grup);
             }
             else
             {
                 sira = DateTime.MaxValue.AddTicks(-1); // takvimden sonra, belirsizlerden önce
-                satir = new BossSatiri(s.GorunenAd, "canlı", Palet.Yesil, Rakam: false);
+                satir = new BossSatiri(s.GorunenAd, "canlı", Palet.Yesil, Rakam: false, Canli: true, Grup: grup);
             }
             if (!Var(tampon, satir)) tampon.Add((sira, satir)); // aynı haritadaki eş adlılar aynı durumdaysa tek satır
         }
@@ -272,13 +300,13 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         }
     }
 
-    private static BossSatiri BossSatir(string ad, DateTime dogus, DateTime utc)
+    private static BossSatiri BossSatir(string ad, DateTime dogus, DateTime utc, string grup)
     {
-        if (dogus <= utc) return new BossSatiri(ad, "şimdi", Palet.Kirmizi, Rakam: false);
+        if (dogus <= utc) return new BossSatiri(ad, "şimdi", Palet.Kirmizi, Rakam: false, Grup: grup);
         var kalan = Yukari(dogus - utc);
         if (kalan < TimeSpan.FromHours(1))
-            return new BossSatiri(ad, Bicim.Kalan(kalan), kalan <= TimeSpan.FromMinutes(1) ? Palet.Yerel : Palet.Dps, Rakam: true);
-        return new BossSatiri(ad, UzunSure(kalan), Palet.Soluk, Rakam: true);
+            return new BossSatiri(ad, Bicim.Kalan(kalan), kalan <= TimeSpan.FromMinutes(1) ? Palet.Yerel : Palet.Dps, Rakam: true, Grup: grup);
+        return new BossSatiri(ad, UzunSure(kalan), Palet.Soluk, Rakam: true, Grup: grup);
     }
 
     /// <summary>1 saat ve üstü: "1 sa 41 dk", "2 gün 3 sa" (sıfır kısım yazılmaz).</summary>
@@ -355,14 +383,14 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
                 var c = Capa();
                 (ortaX, ust) = (c.X, c.Y);
             }
-            // Liste bulunduğu ekranın yüksekliğini aşmasın: fazlası kırpılır, son satırda "+N daha" (en yakın doğuşlar kalır).
-            _boss.EnFazlaYukseklik = Screen.FromPoint(new Point(ortaX, ust)).Bounds.Height;
+            // Liste ekranın üçte ikisini geçmesin: fazlası tekerlekle kaydırılır.
+            _boss.EnFazlaYukseklik = Screen.FromPoint(new Point(ortaX, ust)).Bounds.Height * 2 / 3;
             var boyut = _boss.Boyut();
             r = new Rectangle(ortaX - boyut.Width / 2, ust, boyut.Width, boyut.Height);
         }
         else
         {
-            _boss.EnFazlaYukseklik = Screen.FromRectangle(_boss.Bounds).Bounds.Height;
+            _boss.EnFazlaYukseklik = Screen.FromRectangle(_boss.Bounds).Bounds.Height * 2 / 3;
             r = new Rectangle(_boss.Location, _boss.Boyut());
         }
         _boss.Yerles(EkranaSigdir(r));

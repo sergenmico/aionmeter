@@ -729,6 +729,7 @@ internal sealed class OverlayForm : Form
             KuklaEtkin = () => _kukla.Etkin,
             AlarmKur = () => { _ayarlarFormu?.Close(); AlarmSeciciAc(); },
             BossZamanlari = () => { _ayarlarFormu?.Close(); if (!_etkinlik.BossListesiAcik) _etkinlik.BossListesiDegistir(); EtkinlikTick(); }, // pencere kapanır, liste oyunun üstünde kalır
+            BossSatirlari = l => _etkinlik.BossSatirlariniDoldur(DateTime.UtcNow, l), // Bosslar sekmesi: yüzen listeyle aynı satırlar
             AlarmIptal = AlarmIptal,
             AlarmKalan = AlarmKalan,
             KuklaKisayol = () => _ayar.KuklaKisayol,

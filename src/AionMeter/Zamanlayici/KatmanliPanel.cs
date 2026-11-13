@@ -6,6 +6,8 @@ namespace AionMeter.Zamanlayici;
 /// Zamanlayıcı pencerelerinin ortak tabanı: kenarlıksız, en üstte, odak asla çalınmaz (WS_EX_NOACTIVATE + SW_SHOWNOACTIVATE,
 /// WM_MOUSEACTIVATE → MA_NOACTIVATE). Tıklanmaz modda fare olayları oyuna geçer (WS_EX_TRANSPARENT + HTTRANSPARENT).
 /// Saydamlık katman opaklığıyla (overlay ile aynı), çizim kodla. Sürüklenebilirken sol tuşla taşınır; bırakınca <see cref="Tasindi"/>.
+/// <para>Sürükleme fare mesajlarına güvenmez: pencere hiç etkinleşmediği (oyun önde kaldığı) için imleç hızla dışarı çıkınca
+/// WM_MOUSEMOVE gelmeyebilir. Basılınca 15 ms'lik bir zamanlayıcı imleci ve sol tuşu yoklar; tuş bırakılınca sürükleme biter.</para>
 /// </summary>
 internal abstract class KatmanliPanel : Form
 {
@@ -16,8 +18,9 @@ internal abstract class KatmanliPanel : Form
 
     private byte _alfa = 230;
     private bool _tiklanmaz;
-    private bool _surukle, _tasindiMi;
+    private bool _surukle, _tasindiMi, _tusGoruldu;
     private Point _fareBas, _konumBas;
+    private System.Windows.Forms.Timer? _surukleYoklama; // yalnız sürüklerken çalışır
 
     protected float Olcek { get; private set; } = 1f;
 
@@ -167,30 +170,73 @@ internal abstract class KatmanliPanel : Form
         if (_tiklanmaz || !Suruklenebilir || e.Button != MouseButtons.Left || !SurukleBaslar(e.Location)) return;
         _surukle = true;
         _tasindiMi = false;
+        _tusGoruldu = false;
         _fareBas = Cursor.Position;
         _konumBas = Location;
         Capture = true;
+        if (_surukleYoklama is null)
+        {
+            _surukleYoklama = new System.Windows.Forms.Timer { Interval = 15 };
+            _surukleYoklama.Tick += (_, _) => SurukleYokla();
+        }
+        _surukleYoklama.Start();
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (!_surukle)
-        {
-            Cursor = Suruklenebilir && !_tiklanmaz && SurukleBaslar(e.Location) ? Cursors.SizeAll : Cursors.Default;
-            return;
-        }
-        var p = Cursor.Position;
-        int dx = p.X - _fareBas.X, dy = p.Y - _fareBas.Y;
-        if (dx == 0 && dy == 0) return;
-        _tasindiMi = true;
-        Location = new Point(_konumBas.X + dx, _konumBas.Y + dy);
+        if (_surukle) Tasi();
+        else Cursor = Suruklenebilir && !_tiklanmaz && SurukleBaslar(e.Location) ? Cursors.SizeAll : Cursors.Default;
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if (_surukle && e.Button == MouseButtons.Left) SurukleBitir();
+    }
+
+    /// <summary>
+    /// Yakalama elden gitti. Tuşun durumu okunabiliyorsa yoklama bitişi kendisi görür; okunamıyorsa (oyun yönetici olarak çalışıyor,
+    /// biz değiliz: Windows tuş durumunu gizler) bırakma mesajı da gelmeyecek demektir, panel imlece yapışık kalmasın diye burada biter.
+    /// </summary>
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (_surukle && !_tusGoruldu) SurukleBitir();
+    }
+
+    /// <summary>15 ms'de bir: imleci izle, sol tuş bırakıldıysa bitir (ters çevrilmiş fare tuşlarında fiziksel sağ tuş).</summary>
+    private void SurukleYokla()
+    {
+        if (!_surukle || IsDisposed)
+        {
+            _surukleYoklama?.Stop();
+            return;
+        }
+        int vk = SystemInformation.MouseButtonsSwapped ? Native.VK_RBUTTON : Native.VK_LBUTTON;
+        if ((Native.GetAsyncKeyState(vk) & 0x8000) != 0) _tusGoruldu = true;
+        else if (_tusGoruldu)
+        {
+            SurukleBitir();
+            return;
+        }
+        Tasi();
+    }
+
+    private void Tasi()
+    {
+        var p = Cursor.Position;
+        int dx = p.X - _fareBas.X, dy = p.Y - _fareBas.Y;
+        var hedef = new Point(_konumBas.X + dx, _konumBas.Y + dy);
+        if (hedef == Location) return;
+        if (dx != 0 || dy != 0) _tasindiMi = true;
+        Location = hedef;
+    }
+
+    private void SurukleBitir()
+    {
         if (!_surukle) return;
+        Tasi(); // son konum
         bool tasindi = _tasindiMi;
         SurukleBirak();
         if (tasindi) Tasindi?.Invoke();
@@ -201,7 +247,18 @@ internal abstract class KatmanliPanel : Form
         if (!_surukle) return;
         _surukle = false;
         _tasindiMi = false;
+        _surukleYoklama?.Stop();
         Capture = false;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _surukleYoklama?.Dispose();
+            _surukleYoklama = null;
+        }
+        base.Dispose(disposing);
     }
 
     // ---------------- Çizim yardımcıları ----------------

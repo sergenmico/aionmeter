@@ -1,15 +1,17 @@
 using System.Drawing.Drawing2D;
 using AionMeter.Cevirmen;
 using AionMeter.Core;
+using AionMeter.Zamanlayici;
 
 namespace AionMeter;
 
 /// <summary>
 /// Tepsi "Ayarlar…": tek küçük koyu pencere, tamamen kodla çizilir (overlay ile aynı palet ve yazı tipleri).
-/// Dört sekme: Genel · Görünüm · Uyarılar · Kukla. Her değişiklik anında uygulanır ve ayarlar.ini'ye yazılır;
+/// Beş sekme: Genel · Görünüm · Uyarılar · Kukla · Bosslar. Her değişiklik anında uygulanır ve ayarlar.ini'ye yazılır;
 /// opaklık, renkler ve yazı boyutları değiştirilirken overlay (ve açık detay paneli) canlı değişir.
 /// Pencere en uzun sekmenin boyundadır; %100'de ~560 px, %150 ölçekte de 1080p ekrana sığar.
 /// Pencere odak alabilir (Esc kapatır); kapanınca overlay odağı oyuna geri verir. Tanı kaydı burada yoktur.
+/// Bosslar sekmesi tüm bossları (takvim + saha) gruplu ve kalan süreleriyle gösterir; yalnız o sekme açıkken saniyede bir yenilenir.
 /// </summary>
 internal sealed class AyarlarFormu : Form
 {
@@ -35,7 +37,8 @@ internal sealed class AyarlarFormu : Form
         public Action KuklaIptal { get; init; } = () => { };
         public Func<bool> KuklaEtkin { get; init; } = () => false;
         public Action AlarmKur { get; init; } = () => { };
-        public Action BossZamanlari { get; init; } = () => { };
+        public Action BossZamanlari { get; init; } = () => { };     // ekranda yüzen boss listesini açar
+        public Func<List<BossSatiri>, bool> BossSatirlari { get; init; } = l => { l.Clear(); return false; }; // doldurur; saha bilgisi varsa true
         public Action AlarmIptal { get; init; } = () => { };
         public Func<string?> AlarmKalan { get; init; } = () => null;
         public Func<string> KuklaKisayol { get; init; } = () => "";
@@ -110,6 +113,9 @@ internal sealed class AyarlarFormu : Form
         public Rectangle Kutu;
     }
 
+    /// <summary>Bosslar sekmesinin listesi: sekmenin geri kalanını kaplar (pencere boyunu büyütmez), sığmazsa tekerlekle kayar.</summary>
+    private sealed class BossListesiOge : Oge { }
+
     /// <summary>Kukla kısayolu: [Ctrl+Alt+K] [Değiştir] [Kaldır]; altta ipucu ya da kırmızı uyarı.</summary>
     private sealed class KisayolSatiri : Oge
     {
@@ -119,7 +125,17 @@ internal sealed class AyarlarFormu : Form
     private bool _yakalaniyor;     // "Değiştir"e basıldı: bir sonraki tuş kombinasyonu bekleniyor
     private string? _kisayolHata;  // kısa kırmızı uyarı (bir sonraki eyleme kadar)
 
-    private static readonly string[] Sekmeler = { "Genel", "Görünüm", "Uyarılar", "Kukla" };
+    private static readonly string[] Sekmeler = { "Genel", "Görünüm", "Uyarılar", "Kukla", "Bosslar" };
+    private const int BossSekmesi = 4;
+
+    // Bosslar sekmesi: çizici ve zamanlayıcı ilk açılışta kurulur, pencere kapanınca biter.
+    private readonly BossListesiOge _bossOge = new() { Sekme = BossSekmesi };
+    private readonly List<BossSatiri> _bossHam = new();
+    private BossListesiCizimi? _bossCizim;
+    private System.Windows.Forms.Timer? _bossZamanlayici;
+    private int _bossKaydirma, _bossIcerikH;
+    private bool _bossCubukSurukle, _bossCubukUstunde;
+    private int _bossCubukBasY, _bossKaydirmaBas;
     private readonly Rectangle[] _sekmeKutu = new Rectangle[Sekmeler.Length];
     private int _sekme;
     private int _sekmeUstunde = -1;
@@ -280,7 +296,6 @@ internal sealed class AyarlarFormu : Form
             i => { _ayar.PingEsik = PingUyarisi.Esikler[i]; _ayar.Kaydet(); }) { Etkin = () => _ayar.PingUyari });
 
         _ogeler.Add(new Bolum("Etkinlik ve alarm"));
-        _ogeler.Add(new Dugme(() => "", () => "Boss zamanları", () => _b.BossZamanlari()) { Baslikta = true }); // oyun içinden boss listesi
         // Zamanlayıcı ayarları her tikte okur: burada yalnız kaydetmek yeter (geri sayım paneli kendini günceller).
         _ogeler.Add(new Anahtar("Etkinlik geri sayımı", null, () => _ayar.Zamanlayici, () =>
         {
@@ -320,6 +335,14 @@ internal sealed class AyarlarFormu : Form
             "Sayaç sıfırlanır; ilk vuruşunla geri sayım başlar"));
         _ogeler.Add(new KisayolSatiri());
         for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 3;
+
+        // ---- Sekme 4: Bosslar ----
+        ilk = _ogeler.Count;
+        _ogeler.Add(new Bolum("Boss zamanları"));
+        // Pencere kapanır, liste oyunun üstünde kalır (taşınabilir, × ile kapanır).
+        _ogeler.Add(new Dugme(() => "", () => "Ekranda göster", () => _b.BossZamanlari()) { Baslikta = true });
+        _ogeler.Add(_bossOge);
+        for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = BossSekmesi;
 
         ClientSize = Yerlesim();
     }
@@ -462,13 +485,19 @@ internal sealed class AyarlarFormu : Form
                         o.Alan = new Rectangle(x0, y, x1 - x0, P(36));
                         r.Kutu = new Rectangle(x1 - P(44), y + (P(36) - P(20)) / 2, P(44), P(20));
                         break;
+                    case BossListesiOge:
+                        o.Alan = new Rectangle(x0, y, x1 - x0, 0); // boyu aşağıda: diğer sekmelerin bıraktığı yer kadar
+                        break;
                 }
                 y += o.Alan.Height;
             }
             if (solDolu) y += yarimH;
             enAlt = Math.Max(enAlt, y);
         }
-        return new Size(w, enAlt + P(8) + P(30));
+        // Boss listesi pencereyi uzatmaz: en uzun sekmenin bittiği yere kadar iner.
+        int listeUst = _bossOge.Alan.Top + P(4);
+        _bossOge.Alan = Rectangle.FromLTRB(x0, listeUst, x1, Math.Max(listeUst + P(60), enAlt));
+        return new Size(w, Math.Max(enAlt, _bossOge.Alan.Bottom) + P(8) + P(30));
     }
 
     // ---------------- Pencere ----------------
@@ -600,11 +629,19 @@ internal sealed class AyarlarFormu : Form
                 case KisayolSatiri ks:
                     CizKisayol(g, ks);
                     break;
+                case BossListesiOge:
+                    if (_bossCizim is null) break;
+                    _bossCizim.Ciz(g, r, _bossKaydirma);
+                    if (_bossKaydirma > 0) g.DrawLine(_kalemKenar, r.Left, r.Top, r.Right, r.Top); // liste kaydırıldı: üstünde ince çizgi
+                    _bossCizim.CubukCiz(g, BossIz(), _bossKaydirma, _bossIcerikH, _bossCubukUstunde || _bossCubukSurukle);
+                    break;
             }
         }
 
-        TextRenderer.DrawText(g, "Her değişiklik anında kaydedilir.", _yaziKucuk,
-            new Rectangle(pad, h - P(30), w - 2 * pad, P(22)), Palet.CokSoluk, Sol);
+        string alt = _sekme == BossSekmesi
+            ? "Takvim " + EtkinlikTakvimi.BolgeAdlari[(int)_ayar.Bolge] + " saatine göre · bölge Uyarılar sekmesinde"
+            : "Her değişiklik anında kaydedilir.";
+        TextRenderer.DrawText(g, alt, _yaziKucuk, new Rectangle(pad, h - P(30), w - 2 * pad, P(22)), Palet.CokSoluk, Sol);
 
         if (_palet is not null) CizPalet(g);
         g.DrawRectangle(_kalemKenar, 0, 0, w - 1, h - 1);
@@ -746,6 +783,7 @@ internal sealed class AyarlarFormu : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _bossZamanlayici?.Stop();
         YakalamaBitir();
         base.OnFormClosed(e);
     }
@@ -832,6 +870,94 @@ internal sealed class AyarlarFormu : Form
         return _paletVarsayilan.Contains(p) ? Palet.Secenekler.Length : -1;
     }
 
+    // ---------------- Bosslar sekmesi ----------------
+
+    /// <summary>Sekmeyi değiştirir; Bosslar sekmesine geçince liste hemen yenilenir ve en başa döner.</summary>
+    private void SekmeSec(int si)
+    {
+        _sekme = si;
+        _ustunde = null;
+        if (si == BossSekmesi)
+        {
+            _bossKaydirma = 0;
+            BossListesiYenile();
+        }
+        BossZamanlayiciAyarla();
+        Invalidate();
+    }
+
+    /// <summary>Saniyelik yenileme yalnız Bosslar sekmesi görünürken çalışır.</summary>
+    private void BossZamanlayiciAyarla()
+    {
+        if (_sekme == BossSekmesi && Visible && !IsDisposed)
+        {
+            if (_bossZamanlayici is null)
+            {
+                _bossZamanlayici = new System.Windows.Forms.Timer { Interval = 1000 };
+                _bossZamanlayici.Tick += (_, _) =>
+                {
+                    if (BossListesiYenile()) Invalidate(Rectangle.Union(_bossOge.Alan, BossIz()));
+                };
+            }
+            _bossZamanlayici.Start();
+        }
+        else _bossZamanlayici?.Stop();
+    }
+
+    /// <summary>Satırları overlay'den alır ve gruplar; görünen içerik değiştiyse true.</summary>
+    private bool BossListesiYenile()
+    {
+        _bossCizim ??= new BossListesiCizimi(_olcek);
+        bool sahaVar;
+        try { sahaVar = _b.BossSatirlari(_bossHam); }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Bosslar sekmesi", ex);
+            _bossHam.Clear();
+            sahaVar = true;
+        }
+        bool degisti = _bossCizim.Guncelle(_bossHam, sahaVar);
+        _bossIcerikH = _bossCizim.IcerikH(_bossOge.Alan.Width);
+        _bossKaydirma = Math.Clamp(_bossKaydirma, 0, BossKaydirmaSiniri);
+        return degisti;
+    }
+
+    private int BossKaydirmaSiniri => BossListesiCizimi.KaydirmaSiniri(_bossIcerikH, _bossOge.Alan.Height);
+
+    /// <summary>İnce kaydırma çubuğunun yolu: listenin sağındaki kenar boşluğunda.</summary>
+    private Rectangle BossIz() =>
+        new(_bossOge.Alan.Right + P(8), _bossOge.Alan.Top + P(8), Math.Max(3, P(4)), Math.Max(0, _bossOge.Alan.Height - P(8)));
+
+    /// <summary>Çubuğun tutulabilir alanı (ince çubuk için yanlara biraz genişletilmiş).</summary>
+    private Rectangle BossTopuzAlani()
+    {
+        if (_bossCizim is null) return Rectangle.Empty;
+        var t = _bossCizim.Topuz(BossIz(), _bossKaydirma, _bossIcerikH);
+        return t.IsEmpty ? t : Rectangle.Inflate(t, P(6), 0);
+    }
+
+    private void BossKaydir(int yeni)
+    {
+        yeni = Math.Clamp(yeni, 0, BossKaydirmaSiniri);
+        if (yeni == _bossKaydirma) return;
+        _bossKaydirma = yeni;
+        Invalidate(Rectangle.Union(_bossOge.Alan, Rectangle.Inflate(BossIz(), P(6), 0)));
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        if (_sekme != BossSekmesi || _bossCizim is null || _bossCubukSurukle) return;
+        BossKaydir(_bossKaydirma - e.Delta * _bossCizim.TekerAdimi / 120);
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (Visible && _sekme == BossSekmesi) BossListesiYenile();
+        BossZamanlayiciAyarla();
+    }
+
     // ---------------- Fare ----------------
 
     private Oge? OgeBul(Point p)
@@ -867,6 +993,25 @@ internal sealed class AyarlarFormu : Form
     {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left || _palet is not null) return; // palet açıkken tıklama bırakınca işlenir
+        if (_sekme == BossSekmesi && _bossCizim is not null)
+        {
+            var topuz = BossTopuzAlani();
+            if (topuz.Contains(e.Location))
+            {
+                _bossCubukSurukle = true;
+                _bossCubukBasY = e.Y;
+                _bossKaydirmaBas = _bossKaydirma;
+                Capture = true;
+                Invalidate(topuz);
+                return;
+            }
+            var iz = Rectangle.Inflate(BossIz(), P(6), 0);
+            if (!topuz.IsEmpty && iz.Contains(e.Location)) // çubuğun boş yerine tıklama: bir sayfa
+            {
+                BossKaydir(_bossKaydirma + Math.Sign(e.Y - topuz.Top) * (_bossOge.Alan.Height - _bossCizim.SatirH));
+                return;
+            }
+        }
         var o = OgeBul(e.Location);
         if (o is Kaydirici k && k.EtkinMi)
         {
@@ -890,6 +1035,23 @@ internal sealed class AyarlarFormu : Form
         {
             KaydiriciAyarla(_suruklenen, e.X);
             return;
+        }
+        if (_bossCubukSurukle)
+        {
+            var iz = BossIz();
+            int topuzH = _bossCizim!.Topuz(iz, _bossKaydirma, _bossIcerikH).Height;
+            int yol = Math.Max(1, iz.Height - topuzH);
+            BossKaydir(_bossKaydirmaBas + (int)((long)(e.Y - _bossCubukBasY) * BossKaydirmaSiniri / yol));
+            return;
+        }
+        if (_sekme == BossSekmesi)
+        {
+            bool ust = BossTopuzAlani().Contains(e.Location);
+            if (ust != _bossCubukUstunde)
+            {
+                _bossCubukUstunde = ust;
+                Invalidate(Rectangle.Inflate(BossIz(), P(6), 0));
+            }
         }
         if (_pencereSurukle)
         {
@@ -951,6 +1113,13 @@ internal sealed class AyarlarFormu : Form
             k.Bitti(); // kaydırma bitince bir kez kaydet
             return;
         }
+        if (_bossCubukSurukle)
+        {
+            _bossCubukSurukle = false;
+            Capture = false;
+            Invalidate(Rectangle.Inflate(BossIz(), P(6), 0));
+            return;
+        }
         if (_pencereSurukle)
         {
             _pencereSurukle = false;
@@ -978,12 +1147,7 @@ internal sealed class AyarlarFormu : Form
         int si = SekmeBul(e.Location);
         if (si >= 0)
         {
-            if (si != _sekme)
-            {
-                _sekme = si;
-                _ustunde = null;
-                Invalidate();
-            }
+            if (si != _sekme) SekmeSec(si);
             return;
         }
         var o = OgeBul(e.Location);
@@ -1026,6 +1190,8 @@ internal sealed class AyarlarFormu : Form
             _fircaPanel.Dispose(); _fircaPanelUst.Dispose(); _fircaVurgu.Dispose(); _fircaSecili.Dispose();
             _fircaTopuz.Dispose(); _fircaTopuzKapali.Dispose(); _fircaRenk.Dispose();
             _kalemKenar.Dispose(); _kalemSeciliKenar.Dispose(); _kalemKapat.Dispose(); _kalemHalka.Dispose(); _kalemHalkaSoluk.Dispose();
+            _bossZamanlayici?.Dispose(); _bossZamanlayici = null;
+            _bossCizim?.Dispose(); _bossCizim = null;
         }
         base.Dispose(disposing);
     }
