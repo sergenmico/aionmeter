@@ -40,6 +40,7 @@ AuditChecks();
 PlayerTargetChecks();
 DurationChecks();
 ok &= KupKontrol.Calistir(assets); // Gizli Küp: çerçeve çözümü ve sayaçlar
+ok &= PingKontrol.Calistir(); // ping: sentetik zaman damgalı parçalarla RTT ve uyarı histerezisi
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif

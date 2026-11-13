@@ -61,6 +61,10 @@ internal sealed class Ayarlar
     public bool KupSesi = true;
     public int KupSes = 40;        // yüzde, 10..100
 
+    // Gecikme uyarısı: ping eşiği aşınca overlay'de kırmızı "320 ms" (normalken hiçbir şey görünmez).
+    public bool PingUyari = true;
+    public int PingEsik = PingUyarisi.VarsayilanEsik; // ms, PingUyarisi.Esikler'den biri
+
     public const int EnAzSolukOpaklik = 10, EnFazlaSolukOpaklik = 60;
     public const int EnAzYazi = 80, EnFazlaYazi = 130;
     public const int EnAzKukla = 5, EnFazlaKukla = 300;
@@ -112,7 +116,7 @@ internal sealed class Ayarlar
         "X", "Y", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
         "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
         "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
-        "KuklaKisayol", "KupSesi", "KupSes",
+        "KuklaKisayol", "KupSesi", "KupSes", "PingUyari", "PingEsik",
     };
 
     private readonly List<string> _bilinmeyen = new(); // tanınmayan satırlar, Kaydet'te sona aynen yazılır
@@ -179,6 +183,8 @@ internal sealed class Ayarlar
                     case "AlarmDk" when sayi: a.AlarmDk = Math.Clamp(n, 1, EnFazlaAlarmDk); break;
                     case "KupSesi": a.KupSesi = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                     case "KupSes" when sayi: a.KupSes = Math.Clamp(n, EnAzAlarmSes, EnFazlaAlarmSes); break;
+                    case "PingUyari": a.PingUyari = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
+                    case "PingEsik" when sayi && Array.IndexOf(PingUyarisi.Esikler, n) >= 0: a.PingEsik = n; break;
                     case "KuklaKisayol":
                         // "yok" = kısayol kapalı; geçersiz metin varsayılana döner
                         a.KuklaKisayol = deger.Equals("yok", StringComparison.OrdinalIgnoreCase) ? ""
@@ -250,6 +256,8 @@ internal sealed class Ayarlar
                 "KuklaKisayol=" + (KuklaKisayol.Length > 0 ? KuklaKisayol : "yok") + Environment.NewLine +
                 "KupSesi=" + (KupSesi ? "1" : "0") + Environment.NewLine +
                 "KupSes=" + KupSes.ToString(inv) + Environment.NewLine +
+                "PingUyari=" + (PingUyari ? "1" : "0") + Environment.NewLine +
+                "PingEsik=" + PingEsik.ToString(inv) + Environment.NewLine +
                 (_bilinmeyen.Count > 0 ? string.Join(Environment.NewLine, _bilinmeyen) + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";

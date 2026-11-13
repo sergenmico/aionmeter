@@ -67,6 +67,9 @@ public sealed class NpcapCaptureService : IDisposable
 
     public long Packets => Interlocked.Read(ref _packets);
 
+    /// <summary>Değiştirildi (eklendi): oyun bağlantısının pingi, yakalanan trafikten (hiçbir paket gönderilmez).</summary>
+    internal PingOlcer Ping { get; } = new();
+
     /// <summary>Packets whose handling threw. A bad packet is counted and skipped; before this, one
     /// exception in the callback ended the capture thread without a word.</summary>
     public int CallbackErrors => Volatile.Read(ref _callbackErrors);
@@ -190,14 +193,29 @@ public sealed class NpcapCaptureService : IDisposable
             return;
         }
 
-        // Değiştirildi: boş parçalar (yalnız ACK) ping tahmini için gerekmiyor, atılır.
+        int[] ports = _serverPorts;
         byte[] payload = tcp.PayloadData ?? Array.Empty<byte>();
+
+        // Değiştirildi (eklendi): ping ölçümü bilinen oyun portunun iki yönünü de görür (sunucunun boş ACK'i dahil); yalnız sıra/onay
+        // numarası ve iki zaman tutulur, parça kuyruğa girmez. Port bilinmiyorken (kalibrasyon, Network filtresi) ölçülmez.
+        if (ports.Length > 0 && Network is not { Length: > 0 })
+        {
+            bool sunucudan = ports.Contains(tcp.SourcePort);
+            if (sunucudan || ports.Contains(tcp.DestinationPort))
+            {
+                System.Net.IPAddress sunucu = sunucudan ? ip.SourceAddress : ip.DestinationAddress;
+                int anahtar = HashCode.Combine(sunucu, sunucudan ? tcp.SourcePort : tcp.DestinationPort, sunucudan ? tcp.DestinationPort : tcp.SourcePort);
+                long pcapTick = (long)raw.Timeval.Seconds * TimeSpan.TicksPerSecond + (long)raw.Timeval.MicroSeconds * 10;
+                Ping.Gozle(anahtar, sunucudan, tcp.SequenceNumber, payload.Length, tcp.Acknowledgment, tcp.AcknowledgmentNumber, pcapTick, PingOlcer.VarisSaati());
+            }
+        }
+
+        // Değiştirildi: boş parçalar (yalnız ACK) çözücüye gitmez, atılır (ping yukarıda ölçüldü).
         if (payload.Length == 0)
         {
             return;
         }
 
-        int[] ports = _serverPorts;
         if (_discovering && ports.Length > 0 && !ports.Contains(tcp.SourcePort) && !ports.Contains(tcp.DestinationPort))
         {
             // Not a known game port: only ask whether it is the game's stream; the segment itself is dropped.

@@ -70,7 +70,10 @@ public sealed record MeterSnapshot(
     // Gizli Küp (Hidden Cube): açılıştan beri menzile giren küp sayısı (aynı küp tekrar duyurulunca sayılmaz). Overlay sayı artınca yumuşak bir ses çalar.
     int KupGelis = 0,
     // Şu an menzilde olan (açılmamış) gizli küp sayısı.
-    int KupYakinda = 0);
+    int KupYakinda = 0,
+    // Oyun bağlantısının pingi (ms): son 5 sn'deki örneklerin alt çeyreği, yakalanan trafikten (paket gönderilmez).
+    // Bilinmiyorsa ya da ölçüm güvenilir değilse null; overlay null'da hiçbir şey göstermez.
+    int? PingMs = null);
 
 public interface IMeterEngine : IDisposable
 {

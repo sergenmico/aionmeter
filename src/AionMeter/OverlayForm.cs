@@ -118,6 +118,11 @@ internal sealed class OverlayForm : Form
     private string _kupMetin = "";
     private int _kupW;
 
+    // Gecikme uyarısı (ping eşiği aşınca alt satırda kırmızı "320 ms")
+    private bool _pingGorunur;
+    private string _pingMetin = "";
+    private int _pingW;
+
     private readonly SatirModel[] _satirlar = new SatirModel[MaxSatir];
     private readonly List<PlayerDamage> _sirali = new(32); // gösterilen toplama göre sıralı (yeniden kullanılır)
     private int _satirSayisi;
@@ -689,6 +694,7 @@ internal sealed class OverlayForm : Form
             var s = _motor.Snapshot();
             _sonAnlik = s;
             KupDenetle(s); // savaş dışında gizli/soluk olsa da ses çalar
+            if (PingDenetle(s)) _onceki = null; // uyarı göründü / kayboldu / değer değişti: model yeniden
             SavasDurumu(s);
             var kuklaOnce = _kukla.Durum;
             if (kuklaOnce != KuklaTesti.Hal.Kapali && _kukla.Ilerle(s, KuklaDetay))
@@ -742,6 +748,18 @@ internal sealed class OverlayForm : Form
         int gelis = s.KupGelis;
         if (_kupGelisSon >= 0 && gelis > _kupGelisSon) Zil.Kup(_ayar.KupSes);
         _kupGelisSon = gelis;
+    }
+
+    /// <summary>Gecikme uyarısı: ping eşiği aşınca görünür, eşiğin %80'inin altına inince ya da ölçüm yokken kaybolur (PingUyarisi).
+    /// Normalken hiçbir şey çizilmez. Gösterilen metin değiştiyse true.</summary>
+    private bool PingDenetle(MeterSnapshot s)
+    {
+        bool acik = _ayar.PingUyari && s.State == EngineState.Connected;
+        _pingGorunur = acik && PingUyarisi.Gorunsun(_pingGorunur, s.PingMs, _ayar.PingEsik);
+        string metin = _pingGorunur && s.PingMs is int ms ? Bicim.Tam(ms) + " ms" : "";
+        if (metin == _pingMetin) return false;
+        _pingMetin = metin;
+        return true;
     }
 
     // ---------------- Akıcılık: kare zamanlayıcısı ----------------
@@ -1893,7 +1911,9 @@ internal sealed class OverlayForm : Form
         _alarmMetinW = AlarmKurulu ? Math.Max(Olc("Alarm 00:00", _yaziKucuk), Olc(_alarmMetin, _yaziKucuk)) : 0;
         _saatW = SaatBoy + (_alarmMetinW > 0 ? P(5) + _alarmMetinW : 0);
         _kupW = _kupMetin.Length > 0 ? KupBoy + P(4) + Olc(_kupMetin, _yaziKucuk) : 0;
-        gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0) + P(12) + _saatW + (_kupW > 0 ? _kupW + P(12) : 0));
+        _pingW = _pingMetin.Length > 0 ? _rYari.Genislik(_pingMetin) : 0;
+        gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0) + P(12) + _saatW + (_kupW > 0 ? _kupW + P(12) : 0)
+            + (_pingW > 0 ? _pingW + P(12) : 0));
 
         _icerikW = Math.Max(_icerikW, gerek);
     }
@@ -2150,6 +2170,13 @@ internal sealed class OverlayForm : Form
         if (_alarmMetinW > 0)
             TextRenderer.DrawText(g, _alarmMetin, _yaziKucuk, new Rectangle(saatX + SaatBoy + P(5), y, _alarmMetinW, altH), Palet.Yazi, Sol);
         x1 = saatX - P(12);
+        if (_pingW > 0)
+        {
+            // Gecikme uyarısı: saatin hemen solunda kırmızı ping (yalnız eşik aşılınca; sebep bağlantı mı, rotasyon mu)
+            int px = x1 - _pingW;
+            _rYari.Ciz(g, _pingMetin, new Rectangle(px, y, _pingW, altH), Palet.Kirmizi, sag: false);
+            x1 = px - P(12);
+        }
         if (_kupW > 0)
         {
             // Gizli Küp yakında: saatin solunda küçük küp + kısa metin
