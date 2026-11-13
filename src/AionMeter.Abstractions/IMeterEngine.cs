@@ -11,8 +11,10 @@ namespace AionMeter;
 /// <param name="BossTotal">Bu denemede takip edilen bossa vurulan toplam hasar (canı okunmadan önceki vuruşlar dahil); boss yoksa 0.
 /// Boss varken overlay Toplam ve Pay %'yi bundan hesaplar (kullanıcı kararı: DPS, Toplam, Pay aynı hedeften).</param>
 /// <param name="Olum">Bu denemede oyuncunun kaç kez öldüğü (protokolden kesin bilinen ölümler); bilinmiyorsa 0.</param>
+/// <param name="SonDps">Son ~10 sn'deki DPS (bütün hedeflere; tamamlanmış saniyelik kovalardan, boşta geçen saniyeler 0). Aynı tabanlı
+/// <see cref="Dps"/> ile karşılaştırılır (anlık DPS oku, <see cref="DpsEgilimi"/>). Dövüş bitmişse ya da kova yoksa null.</param>
 public sealed record PlayerDamage(long Id, string Name, long Total, double Dps, bool IsLocal, string? ClassName = null, int? CombatPower = null,
-    double BossDps = 0, long BossTotal = 0, int Olum = 0);
+    double BossDps = 0, long BossTotal = 0, int Olum = 0, double? SonDps = null);
 
 /// <summary>Takip edilen boss. Max bilinmiyorsa 0'dır.</summary>
 /// <param name="TimeToKill">Kalan can ÷ son 30 sn'deki takım hasarının bossa DPS'i; tahmin edilemiyorsa null.</param>

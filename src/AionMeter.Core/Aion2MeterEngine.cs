@@ -1720,7 +1720,41 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         }
     }
 
-    private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss, TimeSpan Active, TimeSpan BossActive);
+    private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss, TimeSpan Active, TimeSpan BossActive,
+        double? Recent = null);
+
+    /// <summary>Son-DPS penceresi (anlık DPS oku): tamamlanmış kovalardan en az bu kadar saniye.</summary>
+    internal const int RecentSeconds = 10;
+
+    /// <summary>
+    /// Son ~<see cref="RecentSeconds"/> sn'nin DPS'i: içinde bulunulan (henüz dolmamış) kovadan önceki kovaların toplamı ÷ kapsadıkları süre.
+    /// Kovalar dövüş başından saniyeliktir (uzun dövüşte birleşir, <paramref name="bucketSeconds"/> büyür; pencere kova katına yuvarlanır).
+    /// Vuruşsuz saniyeler 0 sayılır (oyuncu durursa düşer). Tamamlanmış kova yoksa null.
+    /// </summary>
+    internal static double? RecentDps(IReadOnlyList<long>? buckets, int bucketSeconds, double secondsFromStart)
+    {
+        if (buckets is null || secondsFromStart < 0)
+        {
+            return null;
+        }
+
+        int bs = Math.Max(1, bucketSeconds);
+        long last = (long)secondsFromStart / bs - 1; // son tamamlanmış kova
+        if (last < 0)
+        {
+            return null;
+        }
+
+        int n = (RecentSeconds + bs - 1) / bs;
+        long first = Math.Max(0, last - n + 1);
+        long sum = 0;
+        for (long i = first; i <= last && i < buckets.Count; i++)
+        {
+            sum += Math.Max(0, buckets[(int)i]);
+        }
+
+        return sum / (double)((last - first + 1) * bs);
+    }
 
     // Olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime). Ping dövüşten bağımsızdır: donmuş sonuçta da günceldir.
     public MeterSnapshot Snapshot() => KupYonuEkle(SnapshotCore(DateTime.Now)) with { PingMs = _source?.PingMs };
@@ -1888,8 +1922,11 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
             // Oyuncu başı payda: aktif sürenin oyuncunun ilk ve son vuruşu arasındaki kısmı (uzun boşluklar sayılmaz); canlıyken kuyruk dahil.
             (TimeSpan active, TimeSpan bossActive) = PlayerActive(_cur, agg, now, live: !over);
+            // Anlık DPS oku: son ~10 sn (bütün hedeflere, detay kovalarından); donmuş sonuçta yok.
+            double? recent = !over && _cur.Start is { } start
+                ? RecentDps(agg.Detail?.Buckets, agg.Detail?.BucketSeconds ?? 1, (now - start).TotalSeconds) : null;
             rows.Add(new Row(id, agg.Total, agg.SharesTarget, onCluster,
-                _fightBoss is int f && agg.Targets.TryGetValue(f, out TargetAgg? onFightBoss) && onFightBoss.Amount > 0, active, bossActive));
+                _fightBoss is int f && agg.Targets.TryGetValue(f, out TargetAgg? onFightBoss) && onFightBoss.Amount > 0, active, bossActive, recent));
         }
 
         // Dövüş süresi: denemenin aktif süresi (kuyruksuz; deneme içinde azalmaz, kukla testi ve süre göstergesi buna dayanır).
@@ -1969,7 +2006,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         double bossSeconds = Math.Max(1.0, row.BossActive.TotalSeconds);
         string name = DisplayName(dir.NameFor(row.Id), row.Id);
         return new PlayerDamage(row.Id, name, row.Total, row.Total / seconds, local, dir.ClassOf(row.Id) ?? dir.PartyClassOf(name), dir.CombatPowerOf(name),
-            row.BossDamage / bossSeconds, row.BossDamage, _cur.Deaths.GetValueOrDefault(row.Id));
+            row.BossDamage / bossSeconds, row.BossDamage, _cur.Deaths.GetValueOrDefault(row.Id), row.Recent);
     }
 
     /// <summary>

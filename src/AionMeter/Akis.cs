@@ -59,6 +59,7 @@ internal sealed class Akis
     public bool PayVar;   // pay "—" değilse
     public bool YuvaVar;  // sıralı listede bir yeri var (yoksa listeye girerken kaymadan yerine konur)
     public int SiraliNesil;
+    public int Ok;        // anlık DPS oku: +1 ▲, −1 ▼, 0 yok (histerezis için oyuncuya bağlı tutulur, DpsEgilimi)
     // Son İlerle adımında ne değişti (kare zamanlayıcısı sadece değişen alanı yeniden çizer)
     public bool SayiDegisti, OranDegisti, YDegisti;
     public readonly char[] DpsB = new char[32], Dps2B = new char[32], ToplamB = new char[32], PayB = new char[16];
@@ -84,7 +85,8 @@ internal sealed class Akis
         if (p && PayVar) PayN = Yuzde(PayB, Pay.Deger);
     }
 
-    private static int Tam(char[] b, double v)
+    /// <summary>Tam sayı + binlik ayırıcı (Bicim.Tam ile aynı; v önce yuvarlanır, eksi/NaN 0). Tampona yazar, uzunluğu döner.</summary>
+    public static int Tam(Span<char> b, double v)
     {
         long n = v <= 0 || double.IsNaN(v) ? 0 : (long)Math.Round(v);
         return n.TryFormat(b, out int k, "N0", Bicim.Tr) ? k : 0;
@@ -95,5 +97,23 @@ internal sealed class Akis
     {
         b[0] = '%';
         return v.TryFormat(b.AsSpan(1), out int k, "0.0", Bicim.Tr) ? k + 1 : 0;
+    }
+
+    /// <summary>"%66,8" (Bicim.CanYuzde ile aynı: bir ondalığa aşağı yuvarlanır; oran 0..1).</summary>
+    public static int CanYuzde(Span<char> b, double oran)
+    {
+        if (double.IsNaN(oran) || oran < 0) oran = 0;
+        double binde = Math.Floor(Math.Min(oran, 1.0) * 1000.0);
+        b[0] = '%';
+        return (binde / 10.0).TryFormat(b[1..], out int k, "0.0", Bicim.Tr) ? k + 1 : 0;
+    }
+
+    /// <summary>Tam sayı + sabit son ek (" /sn", " / 7.200.000"): Bicim.Dps / boss can metniyle aynı.</summary>
+    public static int TamEkli(Span<char> b, double v, ReadOnlySpan<char> ek)
+    {
+        int n = Tam(b, v);
+        if (n + ek.Length > b.Length) return n;
+        ek.CopyTo(b[n..]);
+        return n + ek.Length;
     }
 }

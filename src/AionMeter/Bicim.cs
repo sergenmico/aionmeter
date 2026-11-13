@@ -35,8 +35,8 @@ internal static class Bicim
     /// <summary>pay/payda yüzdesi, payda 0 ise "—".</summary>
     public static string Oran(long pay, long payda) => payda > 0 ? Yuzde((double)pay / payda) : "—";
 
-    /// <summary>Kalan süre: 1:42 ya da 1:02:05.</summary>
-    public static string Kalan(TimeSpan t)
+    /// <summary>Süre (her yerde tek biçim): 0:52, 1:42, 12:05; 1 saatin üstünde 1:02:05. Eksi süre 0:00.</summary>
+    public static string Sure(TimeSpan t)
     {
         if (t < TimeSpan.Zero) t = TimeSpan.Zero;
         if (t.TotalHours >= 1)
@@ -44,10 +44,6 @@ internal static class Bicim
         return ((int)t.TotalMinutes).ToString(Tr) + ":" + t.Seconds.ToString("00", Tr);
     }
 
-    public static string Sure(TimeSpan t)
-    {
-        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
-        int dk = (int)t.TotalMinutes;
-        return dk.ToString("00", Tr) + ":" + t.Seconds.ToString("00", Tr);
-    }
+    /// <summary>Kalan süre: <see cref="Sure"/> ile aynı biçim (1:42 ya da 1:02:05).</summary>
+    public static string Kalan(TimeSpan t) => Sure(t);
 }

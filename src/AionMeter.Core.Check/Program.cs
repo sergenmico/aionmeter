@@ -39,6 +39,7 @@ OtherChecks();
 AuditChecks();
 PlayerTargetChecks();
 DurationChecks();
+RecentDpsChecks();
 ok &= KupKontrol.Calistir(assets); // Gizli Küp: çerçeve çözümü ve sayaçlar
 ok &= KupYonKontrol.Calistir(assets); // Gizli Küp: oyuncunun yeri, küpe pusula yönü ve mesafe
 ok &= TakvimKontrol.Calistir(); // Etkinlik takvimi: bölge saatleri, yaz saati, giriş penceresi
@@ -1451,6 +1452,94 @@ void DurationChecks()
         MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(18));
         Check("süre (D3b): sıra dışı gelen arkadaş vuruşları: 250.000 ÷ 4 sn (boşluk kapandı), benim 130.000 ÷ 18 sn",
             P(s, friend) is { Total: 250_000 } f && Near(f.Dps, 250_000 / 4.0) && P(s, me) is { Total: 130_000 } m && Near(m.Dps, 130_000 / 18.0), Show(s));
+    }
+}
+
+// Anlık DPS oku: motorun son ~10 sn DPS'i (SonDps, tamamlanmış saniyelik kovalardan) ve overlay'in histerezisli ok kuralı (DpsEgilimi).
+void RecentDpsChecks()
+{
+    Console.WriteLine("[anlık DPS oku]");
+    const int me = 500, trash = 950;
+    DamageEvent H(int src, DateTime at, int target, long amount, int skill = 11010000) => new(at, src, target, amount, false, SkillId: skill);
+    PlayerDamage? P(MeterSnapshot s, int id) => s.Players.FirstOrDefault(p => p.Id == id);
+    bool Near(double a, double b) => Math.Abs(a - b) <= Math.Max(1e-6, Math.Abs(b) * 1e-9);
+
+    // (a) 30 sn 10.000/sn, sonra 10 sn 30.000/sn: son 10 sn = 30.000 (ortalamanın 2 katı: ▲); sonra 10 sn 1.000/sn: ▼; donmuşta yok.
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        DateTime t0 = DateTime.Now.AddSeconds(-200);
+        for (int i = 0; i < 30; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+        for (int i = 30; i < 40; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 30_000)); }
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(40));
+        PlayerDamage? p = P(s, me);
+        Check("anlık (a): son 10 sn DPS = 30.000 (dolmamış saniye sayılmaz), ok ▲",
+            p is { SonDps: double son } && Near(son, 30_000) && DpsEgilimi.Hesapla(0, p.SonDps, p.Dps, s.FightDuration, s.FightOver) == 1,
+            $"son {p?.SonDps:N1}, ort. {p?.Dps:N1}, süre {s.FightDuration.TotalSeconds} sn");
+
+        MeterSnapshot yarim = e.SnapshotAt(t0.AddSeconds(40.6)); // 40. saniye henüz dolmadı: pencere aynı
+        Check("anlık (a): içinde bulunulan saniye pencereye girmez (40,6 sn'de de 30.000)",
+            P(yarim, me) is { SonDps: double y } && Near(y, 30_000), $"son {P(yarim, me)?.SonDps:N1}");
+
+        for (int i = 40; i < 50; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 1_000)); }
+        MeterSnapshot s2 = e.SnapshotAt(t0.AddSeconds(50));
+        PlayerDamage? p2 = P(s2, me);
+        Check("anlık (a): yavaşlayınca son 10 sn = 1.000, ok ▼ (▲'dan doğrudan)",
+            p2 is { SonDps: double son2 } && Near(son2, 1_000) && DpsEgilimi.Hesapla(1, p2.SonDps, p2.Dps, s2.FightDuration, s2.FightOver) == -1,
+            $"son {p2?.SonDps:N1}, ort. {p2?.Dps:N1}");
+
+        MeterSnapshot boslukta = e.SnapshotAt(t0.AddSeconds(55)); // 5 sn vuruşsuz: boş saniyeler 0 sayılır
+        Check("anlık (a): vuruşsuz saniyeler 0 sayılır (45-49: 5 × 1.000 ÷ 10 sn = 500)",
+            P(boslukta, me) is { SonDps: double b } && Near(b, 500), $"son {P(boslukta, me)?.SonDps:N1}");
+
+        MeterSnapshot over = e.SnapshotAt(t0.AddSeconds(71)); // 21 sn vuruşsuz: donmuş sonuç
+        Check("anlık (a): donmuş sonuçta SonDps yok, ok yok",
+            over.FightOver && P(over, me) is { SonDps: null } po && DpsEgilimi.Hesapla(1, po.SonDps, po.Dps, over.FightDuration, over.FightOver) == 0,
+            Show(over));
+    }
+
+    // (b) Uzun dövüş (> 900 sn): kovalar 2 sn'ye birleşir; pencere yine son 10 sn (5 kova).
+    {
+        var (e, d, _) = New();
+        d.NoteClass(me, "Gladiator");
+        DateTime t0 = DateTime.Now.AddSeconds(-2000);
+        for (int i = 0; i < 900; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000)); }
+        for (int i = 900; i < 910; i++) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 50_000)); }
+        MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(910));
+        Check("anlık (b): 2 sn'lik kovalarda son 10 sn = 50.000",
+            P(s, me) is { SonDps: double son } && Near(son, 50_000), $"son {P(s, me)?.SonDps:N1}, kova {e.Detail(me)?.BucketSeconds} sn");
+    }
+
+    // (c) Kovaların saf hesabı: ilk saniye dolmadan null; pencere başta kısa (3 sn dolu: 3 sn'ye bölünür).
+    {
+        var k = new List<long> { 3_000, 6_000, 9_000, 1_000 };
+        Check("anlık (c): ilk saniye dolmadan null, 3,5 sn'de (3.000+6.000+9.000) ÷ 3",
+            Aion2MeterEngine.RecentDps(k, 1, 0.9) is null && Aion2MeterEngine.RecentDps(k, 1, 3.5) is double v && Near(v, 6_000)
+            && Aion2MeterEngine.RecentDps(null, 1, 20) is null,
+            $"{Aion2MeterEngine.RecentDps(k, 1, 3.5):N1}");
+    }
+
+    // (d) Ok histerezisi: %15 farkla çıkar, %8'in altında kalkar; ilk 15 sn ve dövüş bitince yok.
+    {
+        var on = TimeSpan.FromSeconds(60);
+        (int simdi, double oran, int beklenen)[] adimlar =
+        {
+            (0, 1.10, 0), (0, 1.16, 1), (1, 1.10, 1), (1, 1.07, 0), (0, 0.86, 0), (0, 0.84, -1), (-1, 0.90, -1), (-1, 0.93, 0),
+            (-1, 1.20, 1), (1, 0.80, -1),
+        };
+        bool hepsi = true;
+        string iz = "";
+        foreach (var (simdi, oran, beklenen) in adimlar)
+        {
+            int r = DpsEgilimi.Hesapla(simdi, 100_000 * oran, 100_000, on, false);
+            hepsi &= r == beklenen;
+            iz += $"{simdi}/{oran:0.00}→{r} ";
+        }
+
+        hepsi &= DpsEgilimi.Hesapla(0, 200_000, 100_000, TimeSpan.FromSeconds(14), false) == 0;
+        hepsi &= DpsEgilimi.Hesapla(1, 200_000, 100_000, on, true) == 0;
+        hepsi &= DpsEgilimi.Hesapla(0, null, 100_000, on, false) == 0 && DpsEgilimi.Hesapla(0, 50_000, 0, on, false) == 0;
+        Check("anlık (d): histerezis %15 / %8, ilk 15 sn ve donmuşta ok yok", hepsi, iz);
     }
 }
 
