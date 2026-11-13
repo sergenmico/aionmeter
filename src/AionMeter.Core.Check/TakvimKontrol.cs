@@ -79,10 +79,12 @@ internal static class TakvimKontrol
         avrupa.Yaklasanlar(iki, on, liste);
         var shugo = liste.Find(o => o.Ad == "Shugo Festival");
         Bak("Shugo başladıktan 2 dk sonra girişi açık", shugo.Kalem is not null && shugo.BasladiMi(iki)
-            && shugo.GirisBitisUtc == U(2026, 11, 13, 18, 3) && shugo.GirisBitisUtc - iki == TimeSpan.FromMinutes(1), Adlar(liste));
+            && shugo.GirisBitisUtc == U(2026, 11, 13, 18, 8) && shugo.GirisBitisUtc - iki == TimeSpan.FromMinutes(6), Adlar(liste));
         Bak("Kaira doğuştan 2 dk sonra listede değil", !liste.Exists(o => o.Ad == "Watcher Kaira"), Adlar(liste));
-        avrupa.Yaklasanlar(U(2026, 11, 13, 18, 3), on, liste);
-        Bak("Shugo 3 dk sonra listede yok", !liste.Exists(o => o.Ad == "Shugo Festival"), Adlar(liste));
+        avrupa.Yaklasanlar(U(2026, 11, 13, 18, 7, 59), on, liste);
+        Bak("Shugo 7:59'da girişi hâlâ açık (8 dk)", liste.Exists(o => o.Ad == "Shugo Festival"), Adlar(liste));
+        avrupa.Yaklasanlar(U(2026, 11, 13, 18, 8), on, liste);
+        Bak("Shugo 8 dk sonra listede yok", !liste.Exists(o => o.Ad == "Shugo Festival"), Adlar(liste));
         avrupa.Yaklasanlar(U(2026, 11, 13, 18, 0, 59), on, liste);
         Bak("Kaira doğuştan 59 sn sonra \"şimdi\"", liste.Exists(o => o.Ad == "Watcher Kaira" && o.BasladiMi(U(2026, 11, 13, 18, 0, 59))
             && o.GirisBitisUtc is null), Adlar(liste));

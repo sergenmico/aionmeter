@@ -93,7 +93,7 @@ public sealed class EtkinlikTakvimi
     /// <summary>Global takvim (kalem sırası listede eşit başlangıçlarda korunur).</summary>
     public static readonly IReadOnlyList<TakvimKalemi> GlobalKalemler = new[]
     {
-        TakvimKalemi.Duzenli("Shugo Festival", TakvimTuru.Etkinlik, 60, 0, acikDk: 3),
+        TakvimKalemi.Duzenli("Shugo Festival", TakvimTuru.Etkinlik, 60, 0, acikDk: 8), // giriş 8 dk açık (kisk.app; oyunda :03'ten sonra da girildi — questlog'un 3 dk'sı yanlış)
         TakvimKalemi.Duzenli("Dimensional Invasion", TakvimTuru.Etkinlik, 60, 30, acikDk: 3),
         TakvimKalemi.Duzenli("Spacetime Rift", TakvimTuru.Etkinlik, 180, 2 * 60, acikDk: 10),
         TakvimKalemi.Haftalik("Artifact Siege", TakvimTuru.Etkinlik, 21 * 60, 30, DayOfWeek.Thursday, DayOfWeek.Saturday),
