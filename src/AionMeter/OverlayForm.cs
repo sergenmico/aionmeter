@@ -14,6 +14,8 @@ namespace AionMeter;
 /// Rakamlar Bahnschrift ile, sabit genişlikte (RakamYazisi) çizilir.
 /// Ek: "sadece benim satırım" modu, kullanıcı renkleri/yazı boyutları, kukla DPS testi (boss bloğunun yerinde
 /// geri sayım + sonuç kartı) ve alt satırdaki saatten kurulan kişisel alarm.
+/// Dış kenarda her zaman tıklanan küçük sekme (KenarDugmesi) tepsi menüsünü açar; yeni Gizli Küp gelince sesle birlikte
+/// ekranın ortasında afiş (KupAfisi) belirir. İkisi de özel tam ekranda hiç açılmaz.
 /// </summary>
 internal sealed class OverlayForm : Form
 {
@@ -66,8 +68,8 @@ internal sealed class OverlayForm : Form
     private readonly Pen _kalemIsaretBos = new(Color.FromArgb(44, 255, 255, 255));     // boş iz üstünde
     private readonly Pen _kalemOfkeKenar = new(Color.Transparent);
     private readonly SolidBrush _fircaKupUst = new(Palet.Kup);
-    private readonly SolidBrush _fircaKupSol = new(Color.FromArgb(Palet.Kup.R * 72 / 100, Palet.Kup.G * 72 / 100, Palet.Kup.B * 72 / 100));
-    private readonly SolidBrush _fircaKupSag = new(Color.FromArgb(Palet.Kup.R * 52 / 100, Palet.Kup.G * 52 / 100, Palet.Kup.B * 52 / 100));
+    private readonly SolidBrush _fircaKupSol = new(KupSimgesi.Sol);
+    private readonly SolidBrush _fircaKupSag = new(KupSimgesi.Sag);
     private readonly PointF[] _kupNokta = new PointF[4];
     private int _satirlarUst;
     private int _rowH, _bossSatirH; // yazı boyutuna göre (en az 22 / 19 × ölçek)
@@ -112,11 +114,18 @@ internal sealed class OverlayForm : Form
     private float _ofkeK = -1f; // öfkeye yaklaşma 0..1 (≤ 30 sn), öfkede 1; bilinmiyorsa -1
     private bool _bossMaxVar;
 
-    // Gizli Küp
+    // Gizli Küp: menzildeyken alt satırda küçük küp simgesi; yeni küp gelince ses + ekran ortasında afiş (KupAfisi)
     private int _kupGelisSon = -1;
     private int _kupYakinda;
-    private string _kupMetin = "";
     private int _kupW;
+    private KupAfisi? _kupAfisi; // ilk küpte yaratılır
+
+    // Kenar düğmesi: overlay'in dış kenarındaki sekme; tıklayınca tepsi menüsü yanında açılır (kilitliyken de tıklanır)
+    private KenarDugmesi? _kenar;
+    private IntPtr _menuOnceki;           // menü açılmadan önce öndeki (bizim olmayan) pencere: kapanınca odak ona döner
+    private long _menuKapandiMs = long.MinValue;
+    private ToolStripDropDownCloseReason _menuKapanisNedeni;
+    private bool _menuBagli;
 
     // Gecikme uyarısı (ping eşiği aşınca alt satırda kırmızı "320 ms")
     private bool _pingGorunur;
@@ -181,6 +190,7 @@ internal sealed class OverlayForm : Form
     // Yumuşak: savaş dışında soluk / gizli (motor okunmaya devam eder ki savaş başlayınca açılsın).
     private readonly OnPlanIzleyici _onPlan = new();
     private readonly Cevirmen.CevirmenDenetleyici _cevirmen;
+    private readonly Zamanlayici.ZamanlayiciDenetleyici _etkinlik; // etkinlik geri sayımı ve boss listesi
     private bool _kullaniciGizledi, _sadeceOyunda, _sertGorunur = true, _pencereAcik = true, _tamEkran;
     private bool _savasta;
     private DateTime _sonSavas = DateTime.MinValue;
@@ -262,6 +272,9 @@ internal sealed class OverlayForm : Form
         _kareZamanlayici = new System.Windows.Forms.Timer { Interval = 15 }; // ~60 fps, sadece geçiş sürerken
         _kareZamanlayici.Tick += (_, _) => KareTick();
         _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _dpiOlcek, BizimPencereler, m => _tepsi?.Bildir(m));
+        _etkinlik = new Zamanlayici.ZamanlayiciDenetleyici(ayar, () => _olcek, () => _onPlan.OyunPenceresi);
+        Core.SahaBossDeposu.Ortak.KaliciYap(Path.Combine(Ayarlar.Klasor, "saha-bosslari.json")); // saha bossları yeniden açılışta kaybolmasın
+        _etkinlik.SahaBosslari = Core.SahaBossDeposu.Ortak.Oku;
         _cevirmen.DurumDegisti += () =>
         {
             TepsiGuncelle();
@@ -346,6 +359,8 @@ internal sealed class OverlayForm : Form
         _tepsi = new Tepsi(KilitDegistir, GosterDegistir, Sifirla, Detayim, _cevirmen.BolgeCevir, AyarlariAc, GuncellemeDenetle, Close,
             sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc, KuklaKisayolBasildi);
         _tepsi.Menu.Opening += (_, _) => TepsiGuncelle(); // alarmın kalan süresi menü açılırken güncellenir
+        _tepsi.BossZamanlari = () => { _etkinlik.BossListesiDegistir(); EtkinlikTick(); };
+        if (!_demo) OnPlanKancasiKur();
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -384,6 +399,7 @@ internal sealed class OverlayForm : Form
         base.OnShown(e);
         // İlk görünürlük kararı pencere gösterildikten sonra verilir (OnLoad'da gizlemek WinForms'un Show'u ile çakışır).
         Tick();
+        KenarYarat();
         _zamanlayici.Start();
     }
 
@@ -428,6 +444,8 @@ internal sealed class OverlayForm : Form
             _cevirmen.PencereleriKapat();
             TamEkranUyar();
         }
+        // Küp afişi: tam ekrana geçildi ya da oyun arkaya düştüyse hemen kapanır.
+        if (_kupAfisi is { Acik: true } && (tamEkran || !(_demo || _onPlan.OyunOnde()))) _kupAfisi.Kapat();
         if (sert != _sertGorunur || tamEkranDegisti)
         {
             _sertGorunur = sert;
@@ -474,6 +492,7 @@ internal sealed class OverlayForm : Form
         if (alfa == _alfa || !IsHandleCreated) return;
         _alfa = alfa;
         Native.SetLayeredWindowAttributes(Handle, 0, (byte)Math.Clamp(alfa, 0, 255), Native.LWA_ALPHA);
+        _kenar?.OverlayAlfa(alfa); // kenar düğmesi overlay'in opaklığını izler (fare üstündeyken tam görünür)
     }
 
     private static readonly TimeSpan TamEkranUyariAraligi = TimeSpan.FromMinutes(10);
@@ -497,6 +516,11 @@ internal sealed class OverlayForm : Form
         Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0,
             Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
         if (_detay is { IsHandleCreated: true }) Native.ShowWindow(_detay.Handle, Native.SW_SHOWNOACTIVATE);
+        if (_kenar is not null)
+        {
+            _kenar.Yerlestir(Bounds, _olcek);
+            _kenar.PencereGoster(); // overlay ile birlikte (GorunurlukUygula yalnız tam ekran değilken buraya gelir)
+        }
         _onceki = null; // gizliyken kaçan değişiklikler için modeli yeniden kur
         _aniSifirla = true; // gizliyken eskiyen değerlerden akmasın: doğrudan güncel değer
     }
@@ -507,7 +531,85 @@ internal sealed class OverlayForm : Form
         _pencereAcik = false;
         _kareZamanlayici.Stop(); // görünmeyen pencere için kare çizilmez
         if (_detay is { IsHandleCreated: true }) Native.ShowWindow(_detay.Handle, Native.SW_HIDE);
+        if (_kenar is not null)
+        {
+            _kenar.PencereGizle();
+            _kenar.UstundeAyarla(false); // gizliyken MouseLeave gelmez
+        }
         Native.ShowWindow(Handle, Native.SW_HIDE);
+    }
+
+    /// <summary>Kenar düğmesi: overlay gösterildikten sonra bir kez yaratılır; overlay şu an görünürse o da görünür.</summary>
+    private void KenarYarat()
+    {
+        if (_kenar is not null || !IsHandleCreated) return;
+        try
+        {
+            _kenar = new KenarDugmesi();
+            _kenar.Tiklandi += KenarTiklandi;
+            _kenar.OverlayAlfa(Math.Max(0, _alfa));
+            _kenar.Yerlestir(Bounds, _olcek);
+            if (_pencereAcik && !_tamEkran) _kenar.PencereGoster();
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Kenar düğmesi", ex);
+        }
+    }
+
+    /// <summary>Kenar düğmesine tıklandı: tepsi menüsü düğmenin yanında, overlay'den dışarı doğru açılır (açıksa kapanır).</summary>
+    private void KenarTiklandi()
+    {
+        if (_kenar is null || _tepsi is null) return;
+        // Menü açıkken düğmeye basmak menüyü (fare basılınca) kapatır; bırakılınca yeniden açılmasın.
+        if (_menuKapanisNedeni == ToolStripDropDownCloseReason.AppClicked && Environment.TickCount64 - _menuKapandiMs < 400) return;
+        if (_tepsi.Menu.Visible)
+        {
+            _tepsi.Menu.Close(ToolStripDropDownCloseReason.CloseCalled);
+            return;
+        }
+        var a = _kenar.Alan;
+        if (_kenar.Sagda) MenuAc(_kenar, new Point(a.Right, a.Top), ToolStripDropDownDirection.BelowRight);
+        else MenuAc(_kenar, new Point(a.Left, a.Top), ToolStripDropDownDirection.BelowLeft);
+    }
+
+    /// <summary>
+    /// Tepsi menüsünü overlay'den (sağ tık) ya da kenar düğmesinden açar. Odak almayan pencereden açılan menü klavyeyi almaz
+    /// ve oyuna tıklanınca kapanmaz; tepsi simgesinin yaptığı gibi menüden önce kendi penceremiz öne alınır. Menü kapanınca
+    /// (bir öğe başka pencere açmadıysa) odak önceki pencereye, yani oyuna geri verilir. Tam ekranda bu pencereler zaten yoktur.
+    /// </summary>
+    private void MenuAc(Form sahip, Point konum, ToolStripDropDownDirection yon)
+    {
+        if (_tepsi is null) return;
+        var menu = _tepsi.Menu;
+        if (!_menuBagli)
+        {
+            _menuBagli = true;
+            menu.Closed += MenuKapandi;
+        }
+        IntPtr on = Native.GetForegroundWindow();
+        Native.GetWindowThreadProcessId(on, out uint pid);
+        _menuOnceki = on != IntPtr.Zero && pid != (uint)Environment.ProcessId ? on : IntPtr.Zero;
+        if (_menuOnceki != IntPtr.Zero) Cevirmen.OdakYardimcisi.OneGetir(sahip);
+        menu.Show(konum, yon);
+    }
+
+    private void MenuKapandi(object? sender, ToolStripDropDownClosedEventArgs e)
+    {
+        _menuKapandiMs = Environment.TickCount64;
+        _menuKapanisNedeni = e.CloseReason;
+        IntPtr onceki = _menuOnceki;
+        _menuOnceki = IntPtr.Zero;
+        if (onceki == IntPtr.Zero || IsDisposed) return;
+        // Öğenin işi (ör. Ayarlar) bu iletide bir pencere öne aldıysa ona dokunma; almadıysa odağı oyuna geri ver.
+        BeginInvoke(() =>
+        {
+            IntPtr fg = Native.GetForegroundWindow();
+            bool bizimKucuk = fg == IntPtr.Zero || fg == Handle ||
+                              (_kenar is { IsHandleCreated: true } && fg == _kenar.Handle) ||
+                              (_tepsi?.Menu is { IsHandleCreated: true } m && fg == m.Handle);
+            if (bizimKucuk) Cevirmen.OdakYardimcisi.GeriVer(onceki);
+        });
     }
 
     /// <summary>
@@ -517,9 +619,31 @@ internal sealed class OverlayForm : Form
     private void MenuyuGerekirseKapat()
     {
         if (_tepsi?.Menu is not { Visible: true } menu) return;
-        Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out uint pid);
-        if (pid != (uint)Environment.ProcessId) menu.Close(ToolStripDropDownCloseReason.AppFocusChange);
+        IntPtr fg = Native.GetForegroundWindow();
+        Native.GetWindowThreadProcessId(fg, out uint pid);
+        if (pid == (uint)Environment.ProcessId) return;
+        // Menüyü açarken öne geçilemediyse (Windows ön plan kilidi) oyun hâlâ önde: yalnız menü dışına tıklanınca kapat.
+        if (_menuOnceki != IntPtr.Zero && fg == _menuOnceki && !MenuDisinaTiklandi(menu)) return;
+        menu.Close(ToolStripDropDownCloseReason.AppFocusChange);
     }
+
+    /// <summary>Fare düğmesi şu an basılı ve imleç menünün, açık alt menülerin ve kenar düğmesinin dışında mı?</summary>
+    private bool MenuDisinaTiklandi(ContextMenuStrip menu)
+    {
+        // 0x8000 şu an basılı, 0x0001 son yoklamadan beri basıldı: 200 ms arası kısa tık da kaçmasın (denetim bulgusu 6)
+        if (!TusBasildi(Native.VK_LBUTTON) && !TusBasildi(Native.VK_RBUTTON)) return false;
+        var imlec = Cursor.Position;
+        if (menu.Bounds.Contains(imlec)) return false;
+        if (_kenar is { Acik: true } && _kenar.Alan.Contains(imlec)) return false;
+        foreach (ToolStripItem o in menu.Items)
+            if (o is ToolStripMenuItem { HasDropDownItems: true } mi && mi.DropDown.Visible && mi.DropDown.Bounds.Contains(imlec))
+                return false;
+        return true;
+    }
+
+    /// <summary>Detay paneli overlay'in yanına yerleşirken kenar düğmesini de kapsasın (üstüne binmesin).</summary>
+    private Rectangle DetayCapasi =>
+        _kenar is { Acik: true } k && !k.Alan.IsEmpty ? Rectangle.Union(Bounds, k.Alan) : Bounds;
 
     private void TepsiGuncelle()
     {
@@ -545,6 +669,9 @@ internal sealed class OverlayForm : Form
     private IEnumerable<Rectangle> BizimPencereler()
     {
         if (IsHandleCreated && _pencereAcik && _alfa > 0) yield return Bounds;
+        foreach (var r in _etkinlik.Pencereler) yield return r;
+        if (_kupAfisi is { Acik: true }) yield return _kupAfisi.Alan; // OCR "Küp var" yazısını çevirmeye çalışmasın
+        if (_kenar is { Acik: true }) yield return _kenar.Alan;
         if (_detay is { Visible: true }) yield return _detay.Bounds;
         if (_ayarlarFormu is { Visible: true }) yield return _ayarlarFormu.Bounds;
         if (_alarmSecici is { Visible: true }) yield return _alarmSecici.Bounds;
@@ -683,6 +810,8 @@ internal sealed class OverlayForm : Form
             if (_tikSayaci == 15) GC.Collect(); // açılıştan ~3 sn sonra bir kez: başlangıç çöplerini bırak
             FareYokla();
             GorunurlukUygula();
+            EtkinlikTick(); // overlay savaş dışında gizli/soluk olsa da geri sayım çalışır; tam ekranda/gizliyken kapalı
+            MenuyuGerekirseKapat(); // overlay gizlense de menü oyunun üstünde asılı kalmasın (denetim bulgusu 6)
             AltZamanlayiciGuncelle();
             if (!_sertGorunur)
             {
@@ -719,9 +848,9 @@ internal sealed class OverlayForm : Form
                 if (_detay is { Visible: true, IsHandleCreated: true })
                     Native.SetWindowPos(_detay.Handle, Native.HWND_TOPMOST, 0, 0, 0, 0,
                         Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
+                _kenar?.EnUsteAl();
             }
 
-            MenuyuGerekirseKapat();
             if (_detay is { Visible: true } && (_tikSayaci & 1) == 0) _detay.Yenile(); // detay sadece açıkken ~2,5 Hz
 
             bool bossGoster = _kukla.Durum == KuklaTesti.Hal.Kapali && BossGosterilsinMi(s); // test ve kart sürerken boss bloğu yok
@@ -746,7 +875,11 @@ internal sealed class OverlayForm : Form
         // Ses kapalıyken sayaç izlenmez (gizliyken motor okunmaz): ses açılınca ilk okuma yalnız eşitler, birikmiş küpler için çalmaz.
         if (!_ayar.KupSesi) { _kupGelisSon = -1; return; }
         int gelis = s.KupGelis;
-        if (_kupGelisSon >= 0 && gelis > _kupGelisSon) Zil.Kup(_ayar.KupSes);
+        if (_kupGelisSon >= 0 && gelis > _kupGelisSon)
+        {
+            Zil.Kup(_ayar.KupSes);
+            KupAfisiGoster(); // ses ve yazı aynı anda
+        }
         _kupGelisSon = gelis;
     }
 
@@ -760,6 +893,36 @@ internal sealed class OverlayForm : Form
         if (metin == _pingMetin) return false;
         _pingMetin = metin;
         return true;
+    }
+
+    /// <summary>
+    /// Ekranın ortasında (oyun penceresinin, yoksa overlay'in ekranının) "Küp var" afişi.
+    /// Oyun özel tam ekrandayken ya da önde değilken gösterilmez (tam ekranda pencere açmak oyunu çökertebilir).
+    /// Overlay gizli/soluk olsa da gösterilir: sesle birlikte haber verir.
+    /// </summary>
+    private void KupAfisiGoster()
+    {
+        try
+        {
+            if (!IsHandleCreated || _tamEkran) return;
+            if (!_demo && (_onPlan.OzelTamEkran() || !_onPlan.OyunOnde())) return;
+            Rectangle hedef = Rectangle.Empty;
+            IntPtr oyun = _demo ? IntPtr.Zero : _onPlan.OyunPenceresi; // alıntı aracının penceresi değil (denetim bulgusu 10)
+            if (oyun != IntPtr.Zero && Native.IsWindow(oyun) && Native.GetWindowRect(oyun, out Native.RECT r))
+            {
+                // Pencereli oyunda pencerenin ortası; ekran dışına taşan kısımlar sayılmaz.
+                var ekran = Screen.FromHandle(oyun).Bounds;
+                hedef = Rectangle.Intersect(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom), ekran);
+                if (hedef.Width < 200 || hedef.Height < 120) hedef = ekran;
+            }
+            if (hedef.IsEmpty) hedef = Screen.FromRectangle(Bounds).Bounds;
+            _kupAfisi ??= new KupAfisi();
+            _kupAfisi.Goster(hedef);
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Küp afişi", ex);
+        }
     }
 
     // ---------------- Akıcılık: kare zamanlayıcısı ----------------
@@ -1107,8 +1270,7 @@ internal sealed class OverlayForm : Form
         else if (_kukla.Sonuc is { } ks) KartModelKur(ks);
         _sure = (s.FightOver ? "Sonuç · " : "") + Bicim.Sure(s.FightDuration);
         _sureRakam = !s.FightOver;
-        _kupYakinda = Math.Max(0, s.KupYakinda);
-        _kupMetin = _kupYakinda switch { 0 => "", 1 => "Küp yakında", _ => _kupYakinda.ToString(Bicim.Tr) + " küp yakında" };
+        _kupYakinda = Math.Max(0, s.KupYakinda); // menzildeyken alt satırda yalnız küp simgesi (yazı ekran ortasındaki afişte)
         GenislikleriOlc();
     }
 
@@ -1910,7 +2072,7 @@ internal sealed class OverlayForm : Form
         _ipucuW = Olc(_ipucu, _yaziKucuk);
         _alarmMetinW = AlarmKurulu ? Math.Max(Olc("Alarm 00:00", _yaziKucuk), Olc(_alarmMetin, _yaziKucuk)) : 0;
         _saatW = SaatBoy + (_alarmMetinW > 0 ? P(5) + _alarmMetinW : 0);
-        _kupW = _kupMetin.Length > 0 ? KupBoy + P(4) + Olc(_kupMetin, _yaziKucuk) : 0;
+        _kupW = _kupYakinda > 0 ? KupBoy : 0;
         _pingW = _pingMetin.Length > 0 ? _rYari.Genislik(_pingMetin) : 0;
         gerek = Math.Max(gerek, 2 * pad + AltSolW() + (_ipucuW > 0 ? P(12) + _ipucuW : 0) + P(12) + _saatW + (_kupW > 0 ? _kupW + P(12) : 0)
             + (_pingW > 0 ? _pingW + P(12) : 0));
@@ -1979,6 +2141,7 @@ internal sealed class OverlayForm : Form
         _ikonlar.BoyutAyarla(IkonW);
         GenislikleriSifirla();
         GenislikleriOlc();
+        _kenar?.Yerlestir(Bounds, _olcek); // ölçek değişti: sekme yeni boyutta
     }
 
     private void RakamlariBirak()
@@ -2179,10 +2342,9 @@ internal sealed class OverlayForm : Form
         }
         if (_kupW > 0)
         {
-            // Gizli Küp yakında: saatin solunda küçük küp + kısa metin
+            // Gizli Küp menzilde: saatin solunda küçük küp simgesi
             int kx = x1 - _kupW;
             CizKup(g, kx, y + altH / 2);
-            TextRenderer.DrawText(g, _kupMetin, _yaziKucuk, new Rectangle(kx + KupBoy + P(4), y, _kupW - KupBoy - P(4), altH), Palet.Kup, Sol);
             x1 = kx - P(12);
         }
 
@@ -2293,21 +2455,8 @@ internal sealed class OverlayForm : Form
     }
 
     /// <summary>Gizli Küp işareti: kodla çizilmiş küçük izometrik küp (üst yüz açık, yan yüzler koyu).</summary>
-    private void CizKup(Graphics g, int x, int cy)
-    {
-        float w = KupBoy, h = KupBoy;
-        float mx = x + w / 2f, ust = cy - h / 2f, alt = cy + h / 2f, q = h / 4f;
-        var eski = g.SmoothingMode;
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        var n = _kupNokta;
-        n[0] = new PointF(mx, ust); n[1] = new PointF(x + w, ust + q); n[2] = new PointF(mx, cy); n[3] = new PointF(x, ust + q);
-        g.FillPolygon(_fircaKupUst, n);
-        n[0] = new PointF(x, ust + q); n[1] = new PointF(mx, cy); n[2] = new PointF(mx, alt); n[3] = new PointF(x, alt - q);
-        g.FillPolygon(_fircaKupSol, n);
-        n[0] = new PointF(mx, cy); n[1] = new PointF(x + w, ust + q); n[2] = new PointF(x + w, alt - q); n[3] = new PointF(mx, alt);
-        g.FillPolygon(_fircaKupSag, n);
-        g.SmoothingMode = eski;
-    }
+    private void CizKup(Graphics g, int x, int cy) =>
+        KupSimgesi.Ciz(g, x, cy, KupBoy, _fircaKupUst, _fircaKupSol, _fircaKupSag, _kupNokta);
 
     /// <summary>Boss bloğu: ad / % · ince can çubuğu (yazısız) · süre · Kalan · Öfke · Yetişir ..... can.</summary>
     private void CizBoss(Graphics g, int x0, int x1, int y)
@@ -2436,7 +2585,7 @@ internal sealed class OverlayForm : Form
         }
         else if (e.Button == MouseButtons.Right && _tepsi is not null)
         {
-            _tepsi.Menu.Show(Cursor.Position);
+            MenuAc(this, Cursor.Position, ToolStripDropDownDirection.BelowRight);
         }
     }
 
@@ -2616,7 +2765,7 @@ internal sealed class OverlayForm : Form
             if (b) _sabitId = id;
         }
         _detay.TiklanmazAyarla(_kilitli && !_altAcik);
-        _detay.Goster(id, Bounds); // SW_SHOWNOACTIVATE
+        _detay.Goster(id, DetayCapasi); // SW_SHOWNOACTIVATE
         GorunurlukUygula();
         Invalidate();
     }
@@ -2647,6 +2796,7 @@ internal sealed class OverlayForm : Form
             // İmleç sayacın/detayın üstündeyse Alt sayaca aittir; değilse çevirmene. İkisi birden asla.
             // Savaş dışında gizliyken de overlay'in yeri sayılır: Alt ile üstüne gelince görünür olsun.
             bool bizimUstunde = (_sertGorunur && Bounds.Contains(imlec)) || (_detay is { Visible: true } && _detay.Bounds.Contains(imlec)) ||
+                                (_kenar is { Acik: true } && _kenar.Alan.Contains(imlec)) ||
                                 (_alarmSecici is { Visible: true } && _alarmSecici.Bounds.Contains(imlec));
 
             if (_kilitli)
@@ -2695,6 +2845,7 @@ internal sealed class OverlayForm : Form
     }
 
     private static bool TusBasili(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
+    private static bool TusBasildi(int vk) => (Native.GetAsyncKeyState(vk) & 0x8001) != 0;
 
     private void AltBirakildi()
     {
@@ -2776,13 +2927,15 @@ internal sealed class OverlayForm : Form
     protected override void OnLocationChanged(EventArgs e)
     {
         base.OnLocationChanged(e);
-        _detay?.Yerlestir(Bounds);
+        _kenar?.Yerlestir(Bounds, _olcek);
+        _detay?.Yerlestir(DetayCapasi);
     }
 
     protected override void OnSizeChanged(EventArgs e)
     {
         base.OnSizeChanged(e);
-        _detay?.Yerlestir(Bounds);
+        _kenar?.Yerlestir(Bounds, _olcek);
+        _detay?.Yerlestir(DetayCapasi);
     }
 
     // ---------------- Komutlar ----------------
@@ -2833,6 +2986,7 @@ internal sealed class OverlayForm : Form
         _fareCikis = DateTime.MinValue;
         Cursor = Cursors.Default;
         AltZamanlayiciGuncelle(); // kilitsizken Alt yoklaması durur
+        EtkinlikTick(); // geri sayım paneli kilitsizken hemen taşınabilir olur
         TepsiGuncelle();
         IpucuGuncelle();
         _onceki = null; // ipucu genişliği değişti: modeli yeniden kur
@@ -2842,11 +2996,41 @@ internal sealed class OverlayForm : Form
         AyarKaydet();
     }
 
+    /// <summary>Geri sayım ve boss listesi: oyun önde, tam ekran değil, kullanıcı gizlemedi (= _sertGorunur) iken görünür.</summary>
+    private void EtkinlikTick()
+    {
+        try { _etkinlik.Tick(DateTime.UtcNow, gorunebilir: _sertGorunur, kilitli: _kilitli); }
+        catch (Exception ex) { HataLog.Yaz("Etkinlik zamanlayıcısı", ex); }
+    }
+
+    // Ön plan değişince beklemeden görünürlüğü yeniden hesapla: Alt+Tab ile özel tam ekran oyuna dönülürken pencerelerimiz
+    // 5 Hz tiki beklerken (≤200 ms) oyunun üstünde kalmasın (denetim bulgusu 5). Temsilci alanda tutulur (GC toplamasın).
+    private Native.WinEventProc? _onPlanGeriCagri;
+    private IntPtr _onPlanKancasi;
+
+    private void OnPlanKancasiKur()
+    {
+        _onPlanGeriCagri = (_, _, _, _, _, _, _) =>
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try
+            {
+                GorunurlukUygula();
+                EtkinlikTick();
+                MenuyuGerekirseKapat();
+            }
+            catch (Exception ex) { HataLog.Yaz("Ön plan değişimi", ex); }
+        };
+        _onPlanKancasi = Native.SetWinEventHook(Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero,
+            _onPlanGeriCagri, 0, 0, Native.WINEVENT_OUTOFCONTEXT | Native.WINEVENT_SKIPOWNPROCESS);
+    }
+
     private void GosterDegistir()
     {
         _kullaniciGizledi = !_kullaniciGizledi;
         if (_kullaniciGizledi) DetayKapat();
         GorunurlukUygula(); // SW_HIDE / SW_SHOWNOACTIVATE
+        EtkinlikTick();
         if (_sertGorunur) Tick();
         TepsiGuncelle();
     }
@@ -2893,6 +3077,8 @@ internal sealed class OverlayForm : Form
         if (disposing)
         {
             SystemEvents.DisplaySettingsChanged -= EkranDegisti;
+            if (_onPlanKancasi != IntPtr.Zero) Native.UnhookWinEvent(_onPlanKancasi);
+            _onPlanKancasi = IntPtr.Zero;
             _zamanlayici.Dispose();
             _altZamanlayici.Dispose();
             _gecisZamanlayici.Dispose();
@@ -2903,8 +3089,12 @@ internal sealed class OverlayForm : Form
             Zil.Birak();
             _ayarlarFormu?.Dispose();
             _cevirmen.Dispose();
+            _etkinlik.Dispose();
             DetayKapat();
+            _kenar?.Dispose();
+            _kupAfisi?.Dispose();
             _kisayol?.Dispose();
+            if (_tepsi is not null && _menuBagli) _tepsi.Menu.Closed -= MenuKapandi;
             _tepsi?.Dispose();
             _ikonlar.Dispose();
             _yazi?.Dispose(); _yaziYari?.Dispose(); _yaziKucuk?.Dispose(); _yaziBaslik?.Dispose(); _yaziBoss?.Dispose();

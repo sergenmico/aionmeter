@@ -1900,12 +1900,11 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     // Called under _gate.
     private IReadOnlyList<PlayerDamage> BuildPlayers(Aion2EntityDirectory dir, List<Row> rows)
     {
-        bool rosterKnown = dir.RosterKnown;
         var byId = new Dictionary<int, PlayerDamage>();
-        var pseudo = new List<Row>();
         IsLocal(dir, 0); // önbellek süresi dolduysa yenilenir
 
-        // Hasar yapan bilinen oyuncular: yerel oyuncu, roster'daki parti; roster hiç gelmediyse aynı hedeflere vuranlar (upstream Corps kapsamı gibi).
+        // Tabloda yalnız yerel oyuncu ve roster'daki parti (kullanıcı isteği): partideyken partinin satırları, partisizken yalnız kendi satırın.
+        // Yabancılar ve "aynı hedefe vuranlar" (sözde parti) gösterilmez; hasarları yine süre çizelgesine ve boss'un kalan süre tahminine girer.
         foreach (Row row in rows)
         {
             if (!dir.IsKnownPlayer(row.Id))
@@ -1914,23 +1913,12 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             }
 
             bool local = row.Id == _localId;
-            // Dövüş boss'una hasar veren her bilinen oyuncu listede (dünya boss'u, 20 kişilik etkinlik); 5 kişilik zindanda bunlar zaten partidir.
-            if (!local && !dir.IsPartyMemberId(row.Id) && !row.HitFightBoss)
+            if (!local && !dir.IsPartyMemberId(row.Id))
             {
-                if (!rosterKnown && row.SharesTarget)
-                {
-                    pseudo.Add(row);
-                }
-
                 continue;
             }
 
             byId[row.Id] = Player(dir, row, local);
-        }
-
-        foreach (Row row in pseudo.OrderByDescending(r => r.Total).Take(MaxPseudoParty))
-        {
-            byId[row.Id] = Player(dir, row, false);
         }
 
         // Henüz vurmamış parti üyeleri ve yerel oyuncu da görünür (Total = 0).

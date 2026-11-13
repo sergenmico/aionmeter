@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using AionMeter.Core;
 
 namespace AionMeter;
 
@@ -61,6 +62,12 @@ internal sealed class Ayarlar
     public bool KupSesi = true;
     public int KupSes = 40;        // yüzde, 10..100
 
+    // Etkinlik geri sayımı: başlamasına 10 dk kalan etkinlik/bosslar ekranın üstünde (varsayılan açık).
+    public bool Zamanlayici = true;
+    public SunucuBolgesi Bolge = SunucuBolgesi.Avrupa; // takvim saatleri bu bölgenin yerel saati
+    // Geri sayım panelinin yatay ortası ve üst kenarı (fiziksel px; satır sayısı/genişlik değişince ortada kalır).
+    // Yoksa (int.MinValue) oyunun bulunduğu ekranın üst ortası.
+    public int ZamanlayiciX = int.MinValue, ZamanlayiciY = int.MinValue;
     // Gecikme uyarısı: ping eşiği aşınca overlay'de kırmızı "320 ms" (normalken hiçbir şey görünmez).
     public bool PingUyari = true;
     public int PingEsik = PingUyarisi.VarsayilanEsik; // ms, PingUyarisi.Esikler'den biri
@@ -116,7 +123,7 @@ internal sealed class Ayarlar
         "X", "Y", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
         "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
         "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
-        "KuklaKisayol", "KupSesi", "KupSes", "PingUyari", "PingEsik",
+        "KuklaKisayol", "KupSesi", "KupSes", "Zamanlayici", "Bolge", "ZamanlayiciX", "ZamanlayiciY", "PingUyari", "PingEsik",
     };
 
     private readonly List<string> _bilinmeyen = new(); // tanınmayan satırlar, Kaydet'te sona aynen yazılır
@@ -183,6 +190,10 @@ internal sealed class Ayarlar
                     case "AlarmDk" when sayi: a.AlarmDk = Math.Clamp(n, 1, EnFazlaAlarmDk); break;
                     case "KupSesi": a.KupSesi = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                     case "KupSes" when sayi: a.KupSes = Math.Clamp(n, EnAzAlarmSes, EnFazlaAlarmSes); break;
+                    case "Zamanlayici": a.Zamanlayici = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
+                    case "Bolge": a.Bolge = BolgeOku(deger); break;
+                    case "ZamanlayiciX" when sayi: a.ZamanlayiciX = n; break;
+                    case "ZamanlayiciY" when sayi: a.ZamanlayiciY = n; break;
                     case "PingUyari": a.PingUyari = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                     case "PingEsik" when sayi && Array.IndexOf(PingUyarisi.Esikler, n) >= 0: a.PingEsik = n; break;
                     case "KuklaKisayol":
@@ -256,6 +267,12 @@ internal sealed class Ayarlar
                 "KuklaKisayol=" + (KuklaKisayol.Length > 0 ? KuklaKisayol : "yok") + Environment.NewLine +
                 "KupSesi=" + (KupSesi ? "1" : "0") + Environment.NewLine +
                 "KupSes=" + KupSes.ToString(inv) + Environment.NewLine +
+                "Zamanlayici=" + (Zamanlayici ? "1" : "0") + Environment.NewLine +
+                "Bolge=" + BolgeAnahtarlari[(int)Bolge] + Environment.NewLine +
+                (ZamanlayiciX != int.MinValue && ZamanlayiciY != int.MinValue
+                    ? "ZamanlayiciX=" + ZamanlayiciX.ToString(inv) + Environment.NewLine +
+                      "ZamanlayiciY=" + ZamanlayiciY.ToString(inv) + Environment.NewLine
+                    : "") +
                 "PingUyari=" + (PingUyari ? "1" : "0") + Environment.NewLine +
                 "PingEsik=" + PingEsik.ToString(inv) + Environment.NewLine +
                 (_bilinmeyen.Count > 0 ? string.Join(Environment.NewLine, _bilinmeyen) + Environment.NewLine : "");
@@ -277,6 +294,16 @@ internal sealed class Ayarlar
             if (SinifRenk[i] is int r)
                 s += "Renk." + Palet.SinifSirasi[i] + "=" + r.ToString("X6", CultureInfo.InvariantCulture) + Environment.NewLine;
         return s;
+    }
+
+    // ayarlar.ini'deki bölge adları (SunucuBolgesi sırasıyla).
+    private static readonly string[] BolgeAnahtarlari = { "avrupa", "na-dogu", "na-bati", "latin-amerika", "asya" };
+
+    /// <summary>"na-bati" → NaBati; bilinmeyen metin varsayılana (Avrupa) döner.</summary>
+    private static SunucuBolgesi BolgeOku(string deger)
+    {
+        int i = Array.FindIndex(BolgeAnahtarlari, b => b.Equals(deger, StringComparison.OrdinalIgnoreCase));
+        return i >= 0 ? (SunucuBolgesi)i : SunucuBolgesi.Avrupa;
     }
 
     /// <summary>"62A4F0" ya da "#62A4F0" → 0xRRGGBB; geçersizse null (varsayılan).</summary>

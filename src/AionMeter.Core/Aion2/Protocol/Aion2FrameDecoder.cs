@@ -11,8 +11,11 @@ namespace AionDPS.Aion2.Protocol;
 /// <see cref="Aion2Protocol"/>. Knows nothing the JSON does not say: an opcode outside the tables
 /// is skipped, a frame shorter than a field it needs is skipped and counted, never guessed.
 /// </summary>
-public sealed class Aion2FrameDecoder
+public sealed partial class Aion2FrameDecoder
 {
+    // İsteğe bağlı yerel tanı eklentisi: gövdesi yoksa derleyici bu çağrıyı siler. Paket çerçevesi açıldıktan sonraki her iç çerçeve için çağrılır.
+    partial void YerelCerceve(ReadOnlySpan<byte> frame, int opcode, DateTime at);
+
     private readonly Aion2Protocol _protocol;
     private readonly Aion2EntityDirectory _entities;
 
@@ -31,6 +34,11 @@ public sealed class Aion2FrameDecoder
         _protocol = protocol;
         _entities = entities;
     }
+
+    /// <summary>Değiştirildi (eklendi): saha bossu listesinin (0x0191) yazıldığı depo; denetimde ayrı bir depo verilir.</summary>
+    public AionMeter.Core.SahaBossDeposu SahaBosslari { get; set; } = AionMeter.Core.SahaBossDeposu.Ortak;
+
+    private readonly List<SahaBossKaydi> _sahaKayitlar = new();
 
     /// <summary>The zone frame: <c>opcode | counter u32 | zone id u32 | position ...</c>. Sent at login and on every map or instance change
     /// (recordings 2026-10-11: 1010 Verteron, 600001 Krao Cave as an instance).</summary>
@@ -190,7 +198,7 @@ public sealed class Aion2FrameDecoder
 
     // Değiştirildi: sadece hasar ölçer ve boss canı için gereken dallar bırakıldı (bilet, ganimet, tarif, sıralama, lejyon,
     // bekleme süresi, alan bossları, zamanlayıcı, sunucu saati, ekipman, beceri listeleri, evcil hayvan, konum, buff, sersemletme,
-    // hedef değişimi, öldürme/kaçınma olayları çıkarıldı).
+    // hedef değişimi, öldürme/kaçınma olayları çıkarıldı). Alan bosslarının liste çerçevesi (0x0191) sonradan geri eklendi.
     private IEnumerable<DamageEvent> DecodeFrame(ReadOnlySpan<byte> frame, DateTime timestamp, bool nested)
     {
         FrameLayout layout = _protocol.FrameLayout;
@@ -206,6 +214,8 @@ public sealed class Aion2FrameDecoder
             return DecodeBundle(frame, timestamp);
         }
 
+        YerelCerceve(frame, opcode, timestamp);
+
         if ((opcode & 0xFF) == 0xE2)
         {
             NoteNamedServers(frame); // not final: the frame is read by whatever else knows its opcode
@@ -220,6 +230,17 @@ public sealed class Aion2FrameDecoder
         if (opcode == WindupOpcode)
         {
             DecodeWindup(frame, timestamp);
+            return Array.Empty<DamageEvent>();
+        }
+
+        if (opcode == Aion2SahaBosslari.Opcode)
+        {
+            // Değiştirildi (geri eklendi): haritanın saha bossu listesi; bu opcode'un liste gibi okunmayan çerçeveleri atlanır.
+            if (Aion2SahaBosslari.TryParse(frame, out int harita, _sahaKayitlar))
+            {
+                SahaBosslari.Guncelle(harita, _sahaKayitlar, timestamp);
+            }
+
             return Array.Empty<DamageEvent>();
         }
 

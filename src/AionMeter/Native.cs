@@ -110,6 +110,19 @@ internal static class Native
     [DllImport("shell32.dll")]
     public static extern int SHQueryUserNotificationState(out int state);
 
+    // Ön plan değişimi bildirimi (WINEVENT_OUTOFCONTEXT: geri çağrı kancayı kuran UI iş parçacığının mesaj döngüsünde gelir)
+    public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+    public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+
+    public delegate void WinEventProc(IntPtr hook, uint olay, IntPtr hwnd, int nesne, int cocuk, uint isParcacigi, uint zaman);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetWinEventHook(uint olayMin, uint olayMax, IntPtr modul, WinEventProc geriCagri, uint surec, uint isParcacigi, uint bayraklar);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWinEvent(IntPtr hook);
+
     [DllImport("user32.dll")]
     public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 
