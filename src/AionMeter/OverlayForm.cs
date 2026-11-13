@@ -185,6 +185,7 @@ internal sealed class OverlayForm : Form
     // Yumuşak: savaş dışında soluk / gizli (motor okunmaya devam eder ki savaş başlayınca açılsın).
     private readonly OnPlanIzleyici _onPlan = new();
     private readonly Cevirmen.CevirmenDenetleyici _cevirmen;
+    private readonly Zamanlayici.ZamanlayiciDenetleyici _etkinlik; // etkinlik geri sayımı ve boss listesi
     private bool _kullaniciGizledi, _sadeceOyunda, _sertGorunur = true, _pencereAcik = true, _tamEkran;
     private bool _savasta;
     private DateTime _sonSavas = DateTime.MinValue;
@@ -266,6 +267,7 @@ internal sealed class OverlayForm : Form
         _kareZamanlayici = new System.Windows.Forms.Timer { Interval = 15 }; // ~60 fps, sadece geçiş sürerken
         _kareZamanlayici.Tick += (_, _) => KareTick();
         _cevirmen = new Cevirmen.CevirmenDenetleyici(ayar, () => _dpiOlcek, BizimPencereler, m => _tepsi?.Bildir(m));
+        _etkinlik = new Zamanlayici.ZamanlayiciDenetleyici(ayar, () => _olcek, () => _onPlan.SonOyunPenceresi);
         _cevirmen.DurumDegisti += () =>
         {
             TepsiGuncelle();
@@ -350,6 +352,7 @@ internal sealed class OverlayForm : Form
         _tepsi = new Tepsi(KilitDegistir, GosterDegistir, Sifirla, Detayim, _cevirmen.BolgeCevir, AyarlariAc, GuncellemeDenetle, Close,
             sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc, KuklaKisayolBasildi);
         _tepsi.Menu.Opening += (_, _) => TepsiGuncelle(); // alarmın kalan süresi menü açılırken güncellenir
+        _tepsi.BossZamanlari = () => { _etkinlik.BossListesiDegistir(); EtkinlikTick(); };
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
         var alinamayan = new List<string>(3);
@@ -657,6 +660,7 @@ internal sealed class OverlayForm : Form
     private IEnumerable<Rectangle> BizimPencereler()
     {
         if (IsHandleCreated && _pencereAcik && _alfa > 0) yield return Bounds;
+        foreach (var r in _etkinlik.Pencereler) yield return r;
         if (_kenar is { Acik: true }) yield return _kenar.Alan;
         if (_detay is { Visible: true }) yield return _detay.Bounds;
         if (_ayarlarFormu is { Visible: true }) yield return _ayarlarFormu.Bounds;
@@ -796,6 +800,7 @@ internal sealed class OverlayForm : Form
             if (_tikSayaci == 15) GC.Collect(); // açılıştan ~3 sn sonra bir kez: başlangıç çöplerini bırak
             FareYokla();
             GorunurlukUygula();
+            EtkinlikTick(); // overlay savaş dışında gizli/soluk olsa da geri sayım çalışır; tam ekranda/gizliyken kapalı
             AltZamanlayiciGuncelle();
             if (!_sertGorunur)
             {
@@ -2948,6 +2953,7 @@ internal sealed class OverlayForm : Form
         _fareCikis = DateTime.MinValue;
         Cursor = Cursors.Default;
         AltZamanlayiciGuncelle(); // kilitsizken Alt yoklaması durur
+        EtkinlikTick(); // geri sayım paneli kilitsizken hemen taşınabilir olur
         TepsiGuncelle();
         IpucuGuncelle();
         _onceki = null; // ipucu genişliği değişti: modeli yeniden kur
@@ -2957,11 +2963,19 @@ internal sealed class OverlayForm : Form
         AyarKaydet();
     }
 
+    /// <summary>Geri sayım ve boss listesi: oyun önde, tam ekran değil, kullanıcı gizlemedi (= _sertGorunur) iken görünür.</summary>
+    private void EtkinlikTick()
+    {
+        try { _etkinlik.Tick(DateTime.UtcNow, gorunebilir: _sertGorunur, kilitli: _kilitli); }
+        catch (Exception ex) { HataLog.Yaz("Etkinlik zamanlayıcısı", ex); }
+    }
+
     private void GosterDegistir()
     {
         _kullaniciGizledi = !_kullaniciGizledi;
         if (_kullaniciGizledi) DetayKapat();
         GorunurlukUygula(); // SW_HIDE / SW_SHOWNOACTIVATE
+        EtkinlikTick();
         if (_sertGorunur) Tick();
         TepsiGuncelle();
     }
@@ -3018,6 +3032,7 @@ internal sealed class OverlayForm : Form
             Zil.Birak();
             _ayarlarFormu?.Dispose();
             _cevirmen.Dispose();
+            _etkinlik.Dispose();
             DetayKapat();
             _kenar?.Dispose();
             _kupAfisi?.Dispose();

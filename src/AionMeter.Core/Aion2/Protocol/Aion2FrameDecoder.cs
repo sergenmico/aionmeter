@@ -11,8 +11,11 @@ namespace AionDPS.Aion2.Protocol;
 /// <see cref="Aion2Protocol"/>. Knows nothing the JSON does not say: an opcode outside the tables
 /// is skipped, a frame shorter than a field it needs is skipped and counted, never guessed.
 /// </summary>
-public sealed class Aion2FrameDecoder
+public sealed partial class Aion2FrameDecoder
 {
+    // İsteğe bağlı yerel tanı eklentisi: gövdesi yoksa derleyici bu çağrıyı siler. Paket çerçevesi açıldıktan sonraki her iç çerçeve için çağrılır.
+    partial void YerelCerceve(ReadOnlySpan<byte> frame, int opcode, DateTime at);
+
     private readonly Aion2Protocol _protocol;
     private readonly Aion2EntityDirectory _entities;
 
@@ -205,6 +208,8 @@ public sealed class Aion2FrameDecoder
         {
             return DecodeBundle(frame, timestamp);
         }
+
+        YerelCerceve(frame, opcode, timestamp);
 
         if ((opcode & 0xFF) == 0xE2)
         {
