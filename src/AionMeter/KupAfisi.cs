@@ -30,11 +30,37 @@ internal static class KupSimgesi
 }
 
 /// <summary>
+/// En yakın küpün pusula yönü ve mesafesi (afiş ve overlay rozeti). Yön harita kuzeyine göredir (karakterin ya da kameranın bakışına
+/// göre değil: oyun bakış yönü göndermez); 5° adımlıdır ki küçük oynamalarda yeniden çizilmesin. Tahmini: oyuncunun yeri kesin değil.
+/// </summary>
+internal readonly record struct KupYonu(int Derece, int Metre, bool Tahmini)
+{
+    private static readonly string[] Yonler = { "K", "KD", "D", "GD", "G", "GB", "B", "KB" };
+
+    /// <summary>Anlık görüntüde yön ve mesafe varsa; yoksa null (afiş ve rozet eski görünümde kalır).</summary>
+    public static KupYonu? Den(MeterSnapshot s) =>
+        s.KupYonDerece is double d && double.IsFinite(d) && s.KupMesafe is int m && m >= 0
+            ? new KupYonu(((int)Math.Round(d / 5.0) * 5 % 360 + 360) % 360, Math.Min(m, 999), s.KupKonumTahmini)
+            : null;
+
+    /// <summary>Sekiz bölgeli pusula kısaltması: K, KD, D, GD, G, GB, B, KB.</summary>
+    public string YonAdi => Yonler[(int)Math.Round(Derece / 45.0) % 8];
+
+    /// <summary>"38 m"; tahminiyse "~38 m".</summary>
+    public string MesafeMetni => (Tahmini ? "~" : "") + Metre + " m";
+
+    /// <summary>Afişteki yazı: "KD · 38 m".</summary>
+    public string Metin => YonAdi + " · " + MesafeMetni;
+}
+
+/// <summary>
 /// Gizli Küp afişi: küp sesiyle aynı anda, oyunun bulunduğu ekranın yatay ortasında, üstten ~%30'da büyük
 /// "Küp var" yazısı. Her zaman tıklanmaz (WS_EX_TRANSPARENT), odak çalmaz, piksel başına saydam.
 /// ~150 ms belirir, ~4 sn bekler, ~600 ms'de söner; sonra gizlenir ve zamanlayıcı durur (boşta CPU/RAM yok:
 /// yüzey bitmap'i çizimden hemen sonra bırakılır). Oyun özel tam ekrandayken ya da önde değilken overlay hiç göstermez,
 /// gösterirken bu duruma geçilirse <see cref="Kapat"/> ile hemen kapanır.
+/// Oyuncunun yeri biliniyorsa yazının sağında pusula oku ve "KD · 38 m"; görünürken <see cref="YonGuncelle"/> ile canlı güncellenir
+/// (yalnız değer değişince yeniden çizilir; sürekli çizim yok). Yer bilinmiyorsa eski görünüm aynen kalır.
 /// </summary>
 internal sealed class KupAfisi : KatmanPencere
 {
@@ -45,6 +71,7 @@ internal sealed class KupAfisi : KatmanPencere
     private readonly Stopwatch _saat = new();
     private float _sonOlcek = -1f;
     private Rectangle _sonEkran;
+    private KupYonu? _yon;
 
     public KupAfisi() : base(tiklanmaz: true, "AionMeter Küp")
     {
@@ -55,20 +82,18 @@ internal sealed class KupAfisi : KatmanPencere
     /// Afişi <paramref name="hedef"/> alanının (oyun penceresi ya da ekranı, fiziksel px) ortasında gösterir.
     /// Zaten görünüyorsa yeniden belirmeden tam görünür hale gelir ve bekleme baştan başlar.
     /// </summary>
-    public void Goster(Rectangle hedef)
+    public void Goster(Rectangle hedef, KupYonu? yon = null)
     {
         try
         {
             float olcek = Olcek(hedef);
-            if (!Acik || olcek != _sonOlcek || hedef != _sonEkran)
+            if (!Acik || olcek != _sonOlcek || hedef != _sonEkran || yon != _yon)
             {
                 _sonOlcek = olcek;
                 _sonEkran = hedef;
-                var boyut = Boyut(olcek);
-                var konum = new Point(hedef.Left + (hedef.Width - boyut.Width) / 2,
-                                      hedef.Top + (int)(hedef.Height * 0.30f) - boyut.Height / 2);
+                _yon = yon;
                 if (!Acik) AlfaAyarla(0);
-                Bas(new Rectangle(konum, boyut), g => Ciz(g, boyut, olcek));
+                Yerlestir();
             }
             if (Acik)
             {
@@ -94,6 +119,32 @@ internal sealed class KupAfisi : KatmanPencere
     }
 
     private long _saatKaydir; // yeniden tetiklenince belirme evresi atlanır
+
+    /// <summary>Görünürken yön/mesafe değiştiyse yeniden çizer (aynıysa hiçbir şey yapmaz). Bekleme süresine dokunmaz.</summary>
+    public void YonGuncelle(KupYonu? yon)
+    {
+        if (!Acik || yon == _yon) return;
+        try
+        {
+            _yon = yon;
+            Yerlestir();
+        }
+        catch (Exception ex)
+        {
+            HataLog.Yaz("Küp afişi", ex);
+        }
+    }
+
+    /// <summary>Yüzeyi çizer; boyut değişirse (yön ilk kez geldi / gitti) hedefin ortasına yeniden oturtur.</summary>
+    private void Yerlestir()
+    {
+        float olcek = _sonOlcek;
+        var yon = _yon;
+        var boyut = Boyut(olcek, yon is not null);
+        var konum = new Point(_sonEkran.Left + (_sonEkran.Width - boyut.Width) / 2,
+                              _sonEkran.Top + (int)(_sonEkran.Height * 0.30f) - boyut.Height / 2);
+        Bas(new Rectangle(konum, boyut), g => Ciz(g, boyut, olcek, yon));
+    }
 
     /// <summary>Hemen gizler (tam ekran / oyun arkada).</summary>
     public void Kapat()
@@ -146,18 +197,39 @@ internal sealed class KupAfisi : KatmanPencere
         return yol;
     }
 
-    internal static Size Boyut(float olcek)
+    private static GraphicsPath MetinYolu(Font f, string metin)
+    {
+        var yol = new GraphicsPath();
+        yol.AddString(metin, f.FontFamily, (int)f.Style, f.Size, PointF.Empty, StringFormat.GenericTypographic);
+        return yol;
+    }
+
+    /// <summary>Yön yazısı: ana yazıdan küçük.</summary>
+    private static Font YonYazisi(float olcek) => Palet.RakamTipi(22f * olcek, yariKalin: true);
+
+    /// <summary>Yön yazısının yeri en geniş haline göre ayrılır ki mesafe değişirken afiş genişleyip daralmasın.</summary>
+    private const string EnGenisYon = "KB · ~888 m";
+
+    private static float YonYeri(float olcek)
+    {
+        using var f = YonYazisi(olcek);
+        using var yol = MetinYolu(f, EnGenisYon);
+        return yol.GetBounds().Width;
+    }
+
+    internal static Size Boyut(float olcek, bool yonVar = false)
     {
         using var f = Yazi(olcek);
         using var yol = MetinYolu(f);
         var b = yol.GetBounds();
         int kup = P(26, olcek);
         int w = P(22, olcek) + kup + P(14, olcek) + (int)MathF.Ceiling(b.Width) + P(24, olcek);
+        if (yonVar) w += P(18, olcek) + P(26, olcek) + P(8, olcek) + (int)MathF.Ceiling(YonYeri(olcek));
         int h = Math.Max(kup, (int)MathF.Ceiling(f.GetHeight())) + 2 * P(12, olcek);
         return new Size(w, h);
     }
 
-    internal static void Ciz(Graphics g, Size boyut, float olcek)
+    internal static void Ciz(Graphics g, Size boyut, float olcek, KupYonu? yon = null)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
@@ -197,6 +269,59 @@ internal sealed class KupAfisi : KatmanPencere
         using (var golge = new Pen(Color.FromArgb(210, 0, 0, 0), Math.Max(2f, 4f * olcek)) { LineJoin = LineJoin.Round })
             g.DrawPath(golge, metin);
         using (var dolgu = new SolidBrush(Palet.Kup))
+            g.FillPath(dolgu, metin);
+
+        if (yon is { } y)
+        {
+            float ox = tx + b.Left + b.Width + P(18, olcek); // pusula kadranının sol kenarı
+            CizYon(g, ox, cy, olcek, y);
+        }
+    }
+
+    /// <summary>
+    /// Pusula kadranı (halka + kuzey çentiği) içinde harita kuzeyine göre dönmüş ok, sağında "KD · 38 m".
+    /// Ok yukarı = harita kuzeyi (karakterin baktığı yön değil).
+    /// </summary>
+    private static void CizYon(Graphics g, float x, float cy, float olcek, KupYonu y)
+    {
+        float cap = P(26, olcek), r = cap / 2f, mx = x + r;
+        using (var halka = new Pen(Color.FromArgb(120, Palet.Kup), Math.Max(1f, 1.5f * olcek)))
+            g.DrawEllipse(halka, mx - r, cy - r, cap, cap);
+        // kuzey çentiği: halkanın tepesinde kısa açık çizgi (harita kuzeyi)
+        using (var centik = new Pen(Color.FromArgb(235, 240, 240, 240), Math.Max(1.5f, 2f * olcek)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(centik, mx, cy - r - P(2, olcek), mx, cy - r + P(3, olcek));
+
+        using (var ok = new GraphicsPath())
+        {
+            ok.AddPolygon(new[]
+            {
+                new PointF(mx, cy - r * 0.80f),
+                new PointF(mx + r * 0.46f, cy + r * 0.58f),
+                new PointF(mx, cy + r * 0.28f),
+                new PointF(mx - r * 0.46f, cy + r * 0.58f),
+            });
+            using (var m = new Matrix())
+            {
+                m.RotateAt(y.Derece, new PointF(mx, cy)); // ekranda y aşağı: pozitif açı saat yönünde = pusula
+                ok.Transform(m);
+            }
+            using (var golge = new Pen(Color.FromArgb(200, 0, 0, 0), Math.Max(1.5f, 2.5f * olcek)) { LineJoin = LineJoin.Round })
+                g.DrawPath(golge, ok);
+            using var dolgu = new SolidBrush(Palet.Kup);
+            g.FillPath(dolgu, ok);
+        }
+
+        using var f = YonYazisi(olcek);
+        using var metin = MetinYolu(f, y.Metin);
+        var b = metin.GetBounds();
+        using (var m = new Matrix())
+        {
+            m.Translate(x + cap + P(8, olcek) - b.Left, cy - (b.Top + b.Height / 2f));
+            metin.Transform(m);
+        }
+        using (var golge = new Pen(Color.FromArgb(210, 0, 0, 0), Math.Max(2f, 3.5f * olcek)) { LineJoin = LineJoin.Round })
+            g.DrawPath(golge, metin);
+        using (var dolgu = new SolidBrush(y.Tahmini ? Color.FromArgb(214, 216, 220) : Color.FromArgb(246, 246, 246)))
             g.FillPath(dolgu, metin);
     }
 

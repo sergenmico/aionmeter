@@ -73,7 +73,14 @@ public sealed record MeterSnapshot(
     int KupYakinda = 0,
     // Oyun bağlantısının pingi (ms): son 5 sn'deki örneklerin alt çeyreği, yakalanan trafikten (paket gönderilmez).
     // Bilinmiyorsa ya da ölçüm güvenilir değilse null; overlay null'da hiçbir şey göstermez.
-    int? PingMs = null);
+    int? PingMs = null,
+    // En yakın menzildeki küpün pusula yönü: derece, harita kuzeyinden saat yönünde (0 = K, 90 = D). Oyuncunun yeri bilinmiyorsa null.
+    // Karakterin ya da kameranın bakışına göre değildir (oyun bakış yönü göndermez).
+    double? KupYonDerece = null,
+    // O küpe mesafe (tam metre); yer bilinmiyorsa null.
+    int? KupMesafe = null,
+    // Oyuncunun yeri tahmin (çevredeki varlıkların ortası ya da birkaç saniyelik eski bildirim): mesafe "~" ile gösterilir.
+    bool KupKonumTahmini = false);
 
 public interface IMeterEngine : IDisposable
 {

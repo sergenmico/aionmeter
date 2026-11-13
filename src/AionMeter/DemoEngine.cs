@@ -275,9 +275,14 @@ internal sealed class DemoEngine : IMeterEngine
             // Gizli Küp: 20. saniyeden sonra her 60 sn'de bir küp gelir ve 25 sn menzilde kalır (ses ve rozet görünsün).
             int kupGelis = t < 20 ? 0 : (int)((t - 20) / 60) + 1;
             int kupYakinda = t >= 20 && (t - 20) % 60 < 25 ? 1 : 0;
+            // Demo: küp kuzeydoğudan yaklaşır (yön yavaşça döner, mesafe 95 m'den azalır).
+            double kupSn = (t - 20) % 60;
+            double? kupYon = kupYakinda > 0 ? (40 + kupSn * 3) % 360 : null;
+            int? kupMesafe = kupYakinda > 0 ? (int)Math.Max(3, 95 - kupSn * 3.6) : null;
             // Savaşta: boss ölene dek. Ölümden sonraki ~10 sn'lik donmuş sonuçta overlay ~8 sn sonra soluklaşır.
             return new MeterSnapshot(EngineState.Connected, null, liste, boss, sure, FightOver: _bossOldu,
-                Savasta: !_bossOldu, YerelAd: yerelAd, KupGelis: kupGelis, KupYakinda: kupYakinda);
+                Savasta: !_bossOldu, YerelAd: yerelAd, KupGelis: kupGelis, KupYakinda: kupYakinda,
+                KupYonDerece: kupYon, KupMesafe: kupMesafe);
         }
     }
 

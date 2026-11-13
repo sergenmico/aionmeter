@@ -79,6 +79,7 @@ public sealed partial class Aion2FrameDecoder
         // What the frame was for (u32 at 34): 0 for the first one of a visit, 2 for a move inside the zone (the next run's entrance, a cut scene's door),
         // 4 for a revival at an obelisk or kisk (seen in the recordings; a kisk can stand anywhere, so only a move can start a run).
         uint kind = frame.Length >= 38 ? BinaryPrimitives.ReadUInt32LittleEndian(frame[34..]) : 0;
+        KonumBolge(place, yeniBolge: zoneId != CurrentZoneId); // Değiştirildi (eklendi): oyuncunun yeri (Gizli Küp yönü)
 
         if (zoneId == CurrentZoneId)
         {
@@ -242,6 +243,11 @@ public sealed partial class Aion2FrameDecoder
             }
 
             return Array.Empty<DamageEvent>();
+        }
+
+        if (KonumCercevesi(frame, opcode))
+        {
+            return Array.Empty<DamageEvent>(); // Değiştirildi (geri eklendi): konum, hareket, etki çerçevelerinden yalnız yerler (Aion2FrameDecoder.Konum.cs)
         }
 
         OpcodeFamily family = _protocol.FamilyOf(opcode);
@@ -451,6 +457,7 @@ public sealed partial class Aion2FrameDecoder
         }
 
         _entities.NoteRemoved(unchecked((int)entityId), frame[^1], timestamp);
+        _entities.Konum.Unut(unchecked((int)entityId));
         _entities.Combat.NoteGone(unchecked((int)entityId), timestamp);
         _entities.Combat.ForgetEntity(unchecked((int)entityId));
     }
@@ -490,6 +497,7 @@ public sealed partial class Aion2FrameDecoder
 
         p += 3;
         int npcId = unchecked((int)BinaryPrimitives.ReadUInt32LittleEndian(frame[p..]));
+        KonumDogus(frame, p, entityId); // Değiştirildi (eklendi): canavarın yeri, oyuncunun yer tahmini için
         _entities.NoteSpawned(unchecked((int)entityId));
         _entities.RegisterNpc(unchecked((int)entityId), npcId);
         _entities.HitPoints.NoteSpawn(unchecked((int)entityId), ReadSpawnHitPoints(frame, p + 4));

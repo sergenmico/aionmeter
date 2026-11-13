@@ -1723,7 +1723,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss, TimeSpan Active, TimeSpan BossActive);
 
     // Olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime). Ping dövüşten bağımsızdır: donmuş sonuçta da günceldir.
-    public MeterSnapshot Snapshot() => SnapshotCore(DateTime.Now) with { PingMs = _source?.PingMs };
+    public MeterSnapshot Snapshot() => KupYonuEkle(SnapshotCore(DateTime.Now)) with { PingMs = _source?.PingMs };
 
     private MeterSnapshot SnapshotCore(DateTime now)
     {
