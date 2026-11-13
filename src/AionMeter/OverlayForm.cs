@@ -579,20 +579,12 @@ internal sealed class OverlayForm : Form
         }
     }
 
-    /// <summary>Kenar düğmesine tıklandı: tepsi menüsü düğmenin yanında, overlay'den dışarı doğru açılır (açıksa kapanır).</summary>
+    /// <summary>Kenar düğmesine tıklandı: doğrudan Ayarlar penceresi (açıksa öne gelir). Menü için tepsi simgesi ya da sağ tık (kilitsizken).</summary>
     private void KenarTiklandi()
     {
-        if (_kenar is null || _tepsi is null) return;
-        // Menü açıkken düğmeye basmak menüyü (fare basılınca) kapatır; bırakılınca yeniden açılmasın.
-        if (_menuKapanisNedeni == ToolStripDropDownCloseReason.AppClicked && Environment.TickCount64 - _menuKapandiMs < 400) return;
-        if (_tepsi.Menu.Visible)
-        {
-            _tepsi.Menu.Close(ToolStripDropDownCloseReason.CloseCalled);
-            return;
-        }
-        var a = _kenar.Alan;
-        if (_kenar.Sagda) MenuAc(_kenar, new Point(a.Right, a.Top), ToolStripDropDownDirection.BelowRight);
-        else MenuAc(_kenar, new Point(a.Left, a.Top), ToolStripDropDownDirection.BelowLeft);
+        if (_kenar is null) return;
+        if (_tepsi?.Menu is { Visible: true } menu) menu.Close(ToolStripDropDownCloseReason.CloseCalled);
+        AyarlariAc();
     }
 
     /// <summary>
@@ -609,6 +601,9 @@ internal sealed class OverlayForm : Form
             _menuBagli = true;
             menu.Closed += MenuKapandi;
         }
+        // Menüyü açan tıklamanın "son yoklamadan beri basıldı" bitini tüket: ilk yoklamada menü dışına tık sayılıp menü hemen kapanmasın.
+        Native.GetAsyncKeyState(Native.VK_LBUTTON);
+        Native.GetAsyncKeyState(Native.VK_RBUTTON);
         IntPtr on = Native.GetForegroundWindow();
         Native.GetWindowThreadProcessId(on, out uint pid);
         _menuOnceki = on != IntPtr.Zero && pid != (uint)Environment.ProcessId ? on : IntPtr.Zero;
@@ -733,6 +728,7 @@ internal sealed class OverlayForm : Form
             KuklaIptal = KuklaIptal,
             KuklaEtkin = () => _kukla.Etkin,
             AlarmKur = () => { _ayarlarFormu?.Close(); AlarmSeciciAc(); },
+            BossZamanlari = () => { _ayarlarFormu?.Close(); if (!_etkinlik.BossListesiAcik) _etkinlik.BossListesiDegistir(); EtkinlikTick(); }, // pencere kapanır, liste oyunun üstünde kalır
             AlarmIptal = AlarmIptal,
             AlarmKalan = AlarmKalan,
             KuklaKisayol = () => _ayar.KuklaKisayol,

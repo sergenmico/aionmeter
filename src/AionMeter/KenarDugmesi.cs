@@ -3,21 +3,25 @@ using System.Drawing.Drawing2D;
 namespace AionMeter;
 
 /// <summary>
-/// Overlay'in dış kenarına (ekran kenarından uzak tarafa) yapışık küçük sekme: tıklayınca tepsi menüsü yanında açılır,
+/// Overlay'in dış kenarına (ekran kenarından uzak tarafa) yapışık küçük sekme: tıklayınca Ayarlar penceresi açılır,
 /// Alt+Tab ile ayarlara gitmek gerekmez. Overlay kilitli ve tıklanmazken de her zaman tıklanır (hiçbir zaman
 /// WS_EX_TRANSPARENT değil), ama odak çalmaz (WS_EX_NOACTIVATE + MA_NOACTIVATE). Görünürlüğünü ve opaklığını overlay yönetir;
 /// fare üstündeyken tam görünür ve belirginleşir. Yüzey yalnız boyut/taraf/üstünde durumu değişince yeniden çizilir.
 /// </summary>
 internal sealed class KenarDugmesi : KatmanPencere
 {
-    private const float GenislikPx = 12f, YukseklikPx = 30f, UstBoslukPx = 8f;
+    // Kolay tıklansın: 12×30'da oyuncular ıskalıyordu (kullanıcı geri bildirimi).
+    private const float GenislikPx = 18f, YukseklikPx = 40f, UstBoslukPx = 6f;
+
+    /// <summary>Overlay soluk/saydamken de sekme bulunabilsin: opaklığı bunun altına inmez.</summary>
+    private const byte EnAzAlfa = 170;
 
     private float _olcek = 1f;
     private bool _sagda = true;   // sekme overlay'in sağında (overlay ekranın sol yarısında)
     private bool _ustunde;
     private byte _overlayAlfa = 255;
 
-    /// <summary>Sol ya da sağ tıkla basıldı.</summary>
+    /// <summary>Sol ya da sağ tuşa basıldı (bırakmayı beklemeden: oyun fareyi geri alsa da tıklama kaçmaz).</summary>
     public event Action? Tiklandi;
 
     /// <summary>Sekme overlay'in sağında mı (menü bu yöne açılır).</summary>
@@ -54,7 +58,7 @@ internal sealed class KenarDugmesi : KatmanPencere
     /// <summary>Overlay'in o anki opaklığı (0..255); fare üstündeyken yok sayılır (tam görünür).</summary>
     public void OverlayAlfa(int alfa)
     {
-        _overlayAlfa = (byte)Math.Clamp(alfa, 0, 255);
+        _overlayAlfa = alfa <= 0 ? (byte)0 : (byte)Math.Clamp(alfa, EnAzAlfa, 255);
         if (!_ustunde) AlfaAyarla(_overlayAlfa);
     }
 
@@ -93,11 +97,10 @@ internal sealed class KenarDugmesi : KatmanPencere
         UstundeAyarla(false);
     }
 
-    protected override void OnMouseUp(MouseEventArgs e)
+    protected override void OnMouseDown(MouseEventArgs e)
     {
-        base.OnMouseUp(e);
-        if ((e.Button == MouseButtons.Left || e.Button == MouseButtons.Right) && new Rectangle(Point.Empty, Alan.Size).Contains(e.Location))
-            Tiklandi?.Invoke();
+        base.OnMouseDown(e);
+        if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right) Tiklandi?.Invoke();
     }
 
     /// <summary>Overlay gizlenince ya da menü kapanınca: fare durumunu sıfırla.</summary>

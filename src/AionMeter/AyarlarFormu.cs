@@ -35,6 +35,7 @@ internal sealed class AyarlarFormu : Form
         public Action KuklaIptal { get; init; } = () => { };
         public Func<bool> KuklaEtkin { get; init; } = () => false;
         public Action AlarmKur { get; init; } = () => { };
+        public Action BossZamanlari { get; init; } = () => { };
         public Action AlarmIptal { get; init; } = () => { };
         public Func<string?> AlarmKalan { get; init; } = () => null;
         public Func<string> KuklaKisayol { get; init; } = () => "";
@@ -279,6 +280,7 @@ internal sealed class AyarlarFormu : Form
             i => { _ayar.PingEsik = PingUyarisi.Esikler[i]; _ayar.Kaydet(); }) { Etkin = () => _ayar.PingUyari });
 
         _ogeler.Add(new Bolum("Etkinlik ve alarm"));
+        _ogeler.Add(new Dugme(() => "", () => "Boss zamanları", () => _b.BossZamanlari()) { Baslikta = true }); // oyun içinden boss listesi
         // Zamanlayıcı ayarları her tikte okur: burada yalnız kaydetmek yeter (geri sayım paneli kendini günceller).
         _ogeler.Add(new Anahtar("Etkinlik geri sayımı", null, () => _ayar.Zamanlayici, () =>
         {
