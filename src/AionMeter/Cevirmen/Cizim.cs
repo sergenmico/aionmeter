@@ -49,6 +49,26 @@ internal static class Cizim
         g.SmoothingMode = eski;
     }
 
+    /// <summary>
+    /// Beş köşeli yıldız (favori boss işareti): (<paramref name="cx"/>, <paramref name="cy"/>) merkez, <paramref name="r"/> dış yarıçap.
+    /// Dolgu ya da kalem (ya da ikisi) verilir. <paramref name="n"/>: 10 noktalık yeniden kullanılan tampon (çizimde ayırma yok).
+    /// </summary>
+    public static void Yildiz(Graphics g, Brush? dolgu, Pen? kalem, float cx, float cy, float r, PointF[] n)
+    {
+        cy += r * 0.08f; // yıldızın ağırlık merkezi biraz aşağıda: satırda dikey ortada dursun
+        for (int i = 0; i < 10; i++)
+        {
+            double a = (-90 + i * 36) * Math.PI / 180;
+            float yr = i % 2 == 0 ? r : r * 0.46f;
+            n[i] = new PointF(cx + (float)Math.Cos(a) * yr, cy + (float)Math.Sin(a) * yr);
+        }
+        var eski = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        if (dolgu is not null) g.FillPolygon(dolgu, n);
+        if (kalem is not null) g.DrawPolygon(kalem, n);
+        g.SmoothingMode = eski;
+    }
+
     public static void YuvarlakCiz(Graphics g, Pen kalem, RectangleF r, float yaricap)
     {
         var eski = g.SmoothingMode;

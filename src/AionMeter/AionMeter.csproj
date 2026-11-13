@@ -54,6 +54,9 @@
     <!-- Beceri ikonları (48x48 PNG): detay paneli açıkken diskten tembel okunur, exe'ye gömülmez. -->
     <None Include="..\..\assets\aion2\skills\icons\**\*.png" Link="assets\aion2\skills\icons\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- Güncellemeden sonra bir kez gösterilen "Yenilikler" kartının metni. -->
+    <None Include="..\..\assets\yenilikler.txt" Link="assets\yenilikler.txt"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
   <ItemGroup>

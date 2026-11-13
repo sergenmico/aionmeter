@@ -75,6 +75,11 @@ internal sealed class Ayarlar
     // Gecikme uyarısı: ping eşiği aşınca overlay'de kırmızı "320 ms" (normalken hiçbir şey görünmez).
     public bool PingUyari = true;
     public int PingEsik = PingUyarisi.VarsayilanEsik; // ms, PingUyarisi.Esikler'den biri
+    // Favori bosslar (Ayarlar → Bosslar'da satıra tıklanır): doğmadan 5 dk önce ses; geri sayımda saha bosslarından yalnız bunlar.
+    // Anahtarlar dile bağlı değil (FavoriBoss): "t:Watcher Kaira", "y:101004".
+    public readonly HashSet<string> FavoriBosslar = new(StringComparer.Ordinal);
+    // Yenilikler kartı: en son hangi sürümle açıldı (null: bu özellikten önceki sürüm ya da ilk kurulum).
+    public string? SonSurum;
 
     public const int EnAzSolukOpaklik = 10, EnFazlaSolukOpaklik = 60;
     public const int EnAzYazi = 80, EnFazlaYazi = 130;
@@ -128,6 +133,7 @@ internal sealed class Ayarlar
         "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
         "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
         "KuklaKisayol", "KupSesi", "KupSes", "Zamanlayici", "Bolge", "ZamanlayiciX", "ZamanlayiciY", "PingUyari", "PingEsik",
+        "FavoriBosslar", "SonSurum",
     };
 
     private readonly List<string> _bilinmeyen = new(); // tanınmayan satırlar, Kaydet'te sona aynen yazılır
@@ -203,6 +209,8 @@ internal sealed class Ayarlar
                     case "ZamanlayiciY" when sayi: a.ZamanlayiciY = n; break;
                     case "PingUyari": a.PingUyari = !(deger == "0" || deger.Equals("hayir", StringComparison.OrdinalIgnoreCase)); break;
                     case "PingEsik" when sayi && Array.IndexOf(PingUyarisi.Esikler, n) >= 0: a.PingEsik = n; break;
+                    case "FavoriBosslar": FavoriBoss.Oku(deger, a.FavoriBosslar); break;
+                    case "SonSurum": a.SonSurum = deger.Length > 0 ? deger : null; break;
                     case "KuklaKisayol":
                         // "yok" = kısayol kapalı; geçersiz metin varsayılana döner
                         a.KuklaKisayol = deger.Equals("yok", StringComparison.OrdinalIgnoreCase) ? ""
@@ -284,6 +292,8 @@ internal sealed class Ayarlar
                     : "") +
                 "PingUyari=" + (PingUyari ? "1" : "0") + Environment.NewLine +
                 "PingEsik=" + PingEsik.ToString(inv) + Environment.NewLine +
+                (FavoriBosslar.Count > 0 ? "FavoriBosslar=" + FavoriBoss.Yaz(FavoriBosslar) + Environment.NewLine : "") +
+                (string.IsNullOrWhiteSpace(SonSurum) ? "" : "SonSurum=" + SonSurum.Trim() + Environment.NewLine) +
                 (_bilinmeyen.Count > 0 ? string.Join(Environment.NewLine, _bilinmeyen) + Environment.NewLine : "");
             // Önce geçici dosyaya yaz, sonra değiştir: yarıda kesilirse eski dosya bozulmaz.
             string gecici = Dosya + ".tmp";

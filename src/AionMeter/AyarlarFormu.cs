@@ -12,6 +12,7 @@ namespace AionMeter;
 /// Pencere en uzun sekmenin boyundadır; %100'de ~560 px, %150 ölçekte de 1080p ekrana sığar.
 /// Pencere odak alabilir (Esc kapatır); kapanınca overlay odağı oyuna geri verir. Tanı kaydı burada yoktur.
 /// Bosslar sekmesi tüm bossları (takvim + saha) gruplu ve kalan süreleriyle gösterir; yalnız o sekme açıkken saniyede bir yenilenir.
+/// Bir boss satırına tıklamak onu favori yapar ya da favoriden çıkarır (yıldız; doğmadan 5 dk önce ses, geri sayımda görünür).
 /// </summary>
 internal sealed class AyarlarFormu : Form
 {
@@ -136,6 +137,7 @@ internal sealed class AyarlarFormu : Form
     private int _bossKaydirma, _bossIcerikH;
     private bool _bossCubukSurukle, _bossCubukUstunde;
     private int _bossCubukBasY, _bossKaydirmaBas;
+    private string? _bossUstundeki; // fare üstündeki boss satırının favori anahtarı
     private readonly Rectangle[] _sekmeKutu = new Rectangle[Sekmeler.Length];
     private int _sekme;
     private int _sekmeUstunde = -1;
@@ -631,7 +633,7 @@ internal sealed class AyarlarFormu : Form
                     break;
                 case BossListesiOge:
                     if (_bossCizim is null) break;
-                    _bossCizim.Ciz(g, r, _bossKaydirma);
+                    _bossCizim.Ciz(g, r, _bossKaydirma, _bossUstundeki);
                     if (_bossKaydirma > 0) g.DrawLine(_kalemKenar, r.Left, r.Top, r.Right, r.Top); // liste kaydırıldı: üstünde ince çizgi
                     _bossCizim.CubukCiz(g, BossIz(), _bossKaydirma, _bossIcerikH, _bossCubukUstunde || _bossCubukSurukle);
                     break;
@@ -639,7 +641,7 @@ internal sealed class AyarlarFormu : Form
         }
 
         string alt = _sekme == BossSekmesi
-            ? "Takvim " + EtkinlikTakvimi.BolgeAdlari[(int)_ayar.Bolge] + " saatine göre · bölge Uyarılar sekmesinde"
+            ? BossNotu
             : "Her değişiklik anında kaydedilir.";
         TextRenderer.DrawText(g, alt, _yaziKucuk, new Rectangle(pad, h - P(30), w - 2 * pad, P(22)), Palet.CokSoluk, Sol);
 
@@ -872,11 +874,34 @@ internal sealed class AyarlarFormu : Form
 
     // ---------------- Bosslar sekmesi ----------------
 
+    /// <summary>Bosslar sekmesinin alt notu: favori ipucu ve takvimin saati.</summary>
+    private string BossNotu => "Bossa tıkla, doğmadan 5 dk önce ses çalsın · " + EtkinlikTakvimi.BolgeAdlari[(int)_ayar.Bolge] + " saati";
+
+    /// <summary>Satıra tıklandı: favoriye ekler ya da çıkarır, hemen kaydeder (geri sayım ve ses bir sonraki tikte uyar).</summary>
+    private void FavoriDegistir(string anahtar)
+    {
+        if (!_ayar.FavoriBosslar.Remove(anahtar)) _ayar.FavoriBosslar.Add(anahtar);
+        _ayar.Kaydet();
+        BossListesiYenile();
+        Invalidate(Rectangle.Union(_bossOge.Alan, BossIz()));
+    }
+
+    /// <summary>Fare üstündeki boss satırını günceller (satır hafif aydınlanır, favori değilse soluk yıldız görünür).</summary>
+    private void BossUstundekiAyarla(Point p)
+    {
+        string? a = _sekme == BossSekmesi && _palet is null && !_bossCubukSurukle && _bossCizim is not null
+            ? _bossCizim.AnahtarBul(_bossOge.Alan, _bossKaydirma, p) : null;
+        if (a == _bossUstundeki) return;
+        _bossUstundeki = a;
+        Invalidate(_bossOge.Alan);
+    }
+
     /// <summary>Sekmeyi değiştirir; Bosslar sekmesine geçince liste hemen yenilenir ve en başa döner.</summary>
     private void SekmeSec(int si)
     {
         _sekme = si;
         _ustunde = null;
+        _bossUstundeki = null;
         if (si == BossSekmesi)
         {
             _bossKaydirma = 0;
@@ -949,6 +974,7 @@ internal sealed class AyarlarFormu : Form
         base.OnMouseWheel(e);
         if (_sekme != BossSekmesi || _bossCizim is null || _bossCubukSurukle) return;
         BossKaydir(_bossKaydirma - e.Delta * _bossCizim.TekerAdimi / 120);
+        BossUstundekiAyarla(e.Location); // liste fare altından kaydı
     }
 
     protected override void OnVisibleChanged(EventArgs e)
@@ -1052,6 +1078,7 @@ internal sealed class AyarlarFormu : Form
                 _bossCubukUstunde = ust;
                 Invalidate(Rectangle.Inflate(BossIz(), P(6), 0));
             }
+            BossUstundekiAyarla(e.Location);
         }
         if (_pencereSurukle)
         {
@@ -1083,7 +1110,7 @@ internal sealed class AyarlarFormu : Form
             _kisayolUstunde = ku;
             Invalidate();
         }
-        bool el = (o is not null && o.EtkinMi) || _kapatKutusu.Contains(e.Location) || (si >= 0 && si != _sekme);
+        bool el = (o is not null && o.EtkinMi) || _kapatKutusu.Contains(e.Location) || (si >= 0 && si != _sekme) || _bossUstundeki is not null;
         Cursor = el ? Cursors.Hand : Cursors.Default;
         if (o != _ustunde)
         {
@@ -1095,6 +1122,11 @@ internal sealed class AyarlarFormu : Form
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
+        if (_bossUstundeki is not null)
+        {
+            _bossUstundeki = null;
+            Invalidate(_bossOge.Alan);
+        }
         if (_ustunde is null && _sekmeUstunde < 0) return;
         _ustunde = null;
         _sekmeUstunde = -1;
@@ -1148,6 +1180,11 @@ internal sealed class AyarlarFormu : Form
         if (si >= 0)
         {
             if (si != _sekme) SekmeSec(si);
+            return;
+        }
+        if (_sekme == BossSekmesi && _bossCizim?.AnahtarBul(_bossOge.Alan, _bossKaydirma, e.Location) is string anahtar)
+        {
+            FavoriDegistir(anahtar);
             return;
         }
         var o = OgeBul(e.Location);

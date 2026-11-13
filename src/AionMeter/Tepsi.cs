@@ -6,7 +6,7 @@ namespace AionMeter;
 internal sealed class Tepsi : IDisposable
 {
     private readonly NotifyIcon _simge;
-    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaKisa, _kuklaOzel, _kuklaIptal, _alarm, _boss;
+    private readonly ToolStripMenuItem _kilit, _goster, _denetle, _kukla, _kuklaKisa, _kuklaOzel, _kuklaIptal, _alarm, _boss, _yenilikler;
     private readonly ToolStripMenuItem[] _kuklaSureleri;
     private readonly IntPtr _hIcon;
     private readonly Icon _icon;
@@ -46,9 +46,11 @@ internal sealed class Tepsi : IDisposable
 
         var ayar = new ToolStripMenuItem("Ayarlar…", null, (_, _) => ayarlar());
         _denetle = new ToolStripMenuItem("Güncellemeleri denetle", null, (_, _) => guncellemeDenetle());
+        // Yenilikler: iş (Yenilikler) verilene kadar menüde görünmez.
+        _yenilikler = new ToolStripMenuItem("Yenilikler", null, (_, _) => _yeniliklerIs?.Invoke()) { Available = false };
         var cik = new ToolStripMenuItem("Çıkış", null, (_, _) => cikis());
         Menu.Items.AddRange(new ToolStripItem[] { _kilit, _goster, sifir, detay, new ToolStripSeparator(), bolge,
-            _kukla, _alarm, _boss, new ToolStripSeparator(), ayar, _denetle, new ToolStripSeparator(), cik });
+            _kukla, _alarm, _boss, new ToolStripSeparator(), ayar, _denetle, _yenilikler, new ToolStripSeparator(), cik });
 
         (_icon, _hIcon) = SimgeCiz();
         _simge = new NotifyIcon
@@ -71,6 +73,19 @@ internal sealed class Tepsi : IDisposable
         {
             _bossZamanlari = value;
             _boss.Available = value is not null;
+        }
+    }
+
+    private Action? _yeniliklerIs;
+
+    /// <summary>"Yenilikler" öğesinin işi (son sürümün yenilikler kartı). Boşken öğe menüde görünmez.</summary>
+    public Action? Yenilikler
+    {
+        get => _yeniliklerIs;
+        set
+        {
+            _yeniliklerIs = value;
+            _yenilikler.Available = value is not null;
         }
     }
 

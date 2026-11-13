@@ -5,6 +5,8 @@ namespace AionMeter.Zamanlayici;
 /// <summary>
 /// Etkinlik zamanlayıcısının arayüz cephesi. Overlay ~5 Hz'de <see cref="Tick"/> çağırır; bu sınıf takvime bakar, geri sayım
 /// panelini (başlamasına 10 dk kalanlar + girişi açık etkinlikler) ve istenince boss listesini gösterir/gizler.
+/// <para>Favori bosslar (<see cref="Ayarlar.FavoriBosslar"/>): doğmadan 5 dk önce her doğuş için bir kez ses (<see cref="FavoriZili"/>);
+/// pencereler gizliyken de çalar (ses pencere açmaz), geri sayım kapalıysa çalmaz. Geri sayıma saha bosslarından yalnız favoriler girer.</para>
 /// <para>Pencereler yalnız gerektiğinde yaratılır (ayar kapalıysa hiç yaratılmaz). <c>gorunebilir=false</c> (oyun özel tam
 /// ekranda, oyun önde değil, kullanıcı gizledi) gelince her şey hemen gizlenir. Bölge ve açık/kapalı ayarı her tikte okunur:
 /// Ayarlar penceresinde değişince ayrıca bildirim gerekmez. Hepsi UI iş parçacığından çağrılır.</para>
@@ -25,6 +27,8 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     private BossListesiPaneli? _boss;
     private bool _bossAcik, _bossYerles, _disposed;
     private float _sonOlcek = -1f;
+    private readonly FavoriZili _favoriZili = new();
+    private DateTime _sonFavoriDenetimi = DateTime.MinValue;
 
     // Tik başına yeniden kullanılan listeler (ayırma yok denecek kadar az)
     private readonly List<TakvimOlayi> _olaylar = new();
@@ -88,13 +92,21 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
 
     private void TickIc(DateTime utc, bool gorunebilir, bool kilitli)
     {
+        // Favori sesi saniyede bir denetlenir; favori yoksa ya da geri sayım kapalıysa hiç (gizliyken takvim de okunmaz).
+        bool favoriVakti = _ayar.Zamanlayici && _ayar.FavoriBosslar.Count > 0 && (utc - _sonFavoriDenetimi).Duration() >= TimeSpan.FromSeconds(1);
         if (!gorunebilir)
         {
             _geri?.Gizle();
             _boss?.Gizle();
+            if (favoriVakti)
+            {
+                Hazirla(utc);
+                FavoriDenetle(utc);
+            }
             return;
         }
         Hazirla(utc);
+        if (favoriVakti) FavoriDenetle(utc);
         float olcek = _olcek();
         bool olcekDegisti = olcek != _sonOlcek;
         _sonOlcek = olcek;
@@ -128,7 +140,7 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             }
             _boss.OlcekAyarla(olcek);
             _boss.AlfaAyarla(alfa);
-            BossSatirlariKur(_takvim!, utc, _saha, _bossSira, _bossSatirlar);
+            BossSatirlariKur(_takvim!, utc, _saha, _ayar.FavoriBosslar, _bossSira, _bossSatirlar);
             bool degisti = _boss.Guncelle(_bossSatirlar, EtkinlikTakvimi.BolgeAdlari[(int)_takvim!.Bolge], sahaVar: _saha.Count > 0);
             if (degisti || olcekDegisti || _bossYerles || !_boss.Visible) BossYerlestir();
             _boss.Goster();
@@ -159,29 +171,57 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         if (_disposed) return false;
         var utc = utcSimdi.Kind == DateTimeKind.Local ? utcSimdi.ToUniversalTime() : utcSimdi;
         Hazirla(utc);
-        BossSatirlariKur(_takvim!, utc, _saha, _bossSira, hedef);
+        BossSatirlariKur(_takvim!, utc, _saha, _ayar.FavoriBosslar, _bossSira, hedef);
         return _saha.Count > 0;
+    }
+
+    // ---------------- Favori sesi ----------------
+
+    /// <summary>Doğmasına 5 dk kalan favori varsa (bu doğuş için ilk kez) kısa ses; aynı anda birkaç favori varsa tek ses.</summary>
+    private void FavoriDenetle(DateTime utc)
+    {
+        _sonFavoriDenetimi = utc;
+        var fav = _ayar.FavoriBosslar;
+        bool cal = false;
+        foreach (var k in _takvim!.Kalemler)
+        {
+            if (k.Tur != TakvimTuru.Boss) continue;
+            string anahtar = FavoriBoss.TakvimAnahtari(k.Ad);
+            if (fav.Contains(anahtar)) cal |= _favoriZili.Denetle(anahtar, _takvim.Sonraki(k, utc).BaslangicUtc, utc);
+        }
+        foreach (var s in _saha)
+        {
+            if (s.Canli || s.ZamanUtc == DateTime.MinValue || SahaBossDeposu.Belirsiz(s, utc)) continue;
+            string anahtar = FavoriBoss.SahaAnahtari(s.Yer);
+            if (fav.Contains(anahtar)) cal |= _favoriZili.Denetle(anahtar, s.ZamanUtc, utc);
+        }
+        _favoriZili.Temizle(utc);
+        if (cal) Zil.Favori(_ayar.AlarmSes);
     }
 
     // ---------------- Geri sayım satırları ----------------
 
     /// <summary>Gösterilecek satır varsa true. Kilitsizken boşsa sıradaki etkinlik soluk gösterilir (paneli yerleştirebilmek için).</summary>
     private bool GeriSayimSatirlari(DateTime utc, bool kilitli) =>
-        GeriSayimSatirlariKur(_takvim!, utc, kilitli, _saha, _olaylar, _gsSira, _gsSatirlar);
+        GeriSayimSatirlariKur(_takvim!, utc, kilitli, _saha, _ayar.FavoriBosslar, _olaylar, _gsSira, _gsSatirlar);
 
     /// <summary>
-    /// Takvim + saha bosslarının geri gelişi (10 dk kala; doğunca 60 sn "şimdi"), en yakın üstte. Pencere açmadan da çağrılabilir
+    /// Takvim + favori saha bosslarının geri gelişi (10 dk kala; doğunca 60 sn "şimdi"), en yakın üstte. Takvimdekiler hep girer;
+    /// saha bosslarından yalnız favoriler (onlarca saha bossu paneli doldurmasın). Favoriler yıldızlı. Pencere açmadan da çağrılabilir
     /// (ekran dışı çizim denemesi). <paramref name="tampon"/> ve <paramref name="sira"/> çalışma listeleri.
     /// </summary>
     internal static bool GeriSayimSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, bool kilitli, IReadOnlyList<SahaBossDurumu> saha,
-                                               List<TakvimOlayi> tampon, List<(DateTime Utc, GeriSayimSatiri Satir)> sira, List<GeriSayimSatiri> hedef)
+                                               IReadOnlySet<string> favoriler, List<TakvimOlayi> tampon,
+                                               List<(DateTime Utc, GeriSayimSatiri Satir)> sira, List<GeriSayimSatiri> hedef)
     {
         takvim.Yaklasanlar(utc, Pencere, tampon);
         sira.Clear();
-        foreach (var o in tampon) sira.Add((o.BaslangicUtc, Satir(o, utc)));
+        foreach (var o in tampon)
+            sira.Add((o.BaslangicUtc, Satir(o, utc, o.Tur == TakvimTuru.Boss && favoriler.Contains(FavoriBoss.TakvimAnahtari(o.Ad)))));
         foreach (var s in saha)
         {
             if (s.Canli || s.ZamanUtc == DateTime.MinValue || SahaBossDeposu.Belirsiz(s, utc)) continue;
+            if (!favoriler.Contains(FavoriBoss.SahaAnahtari(s.Yer))) continue;
             var kalan = s.ZamanUtc - utc;
             if (kalan > Pencere || -kalan >= EtkinlikTakvimi.BossSimdiSuresi) continue;
             GeriSayimSatiri satir;
@@ -189,9 +229,9 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             {
                 var k = Yukari(kalan);
                 satir = new GeriSayimSatiri(s.GorunenAd, TakvimTuru.Boss, Bicim.Kalan(k), null,
-                    k <= TimeSpan.FromMinutes(1) ? Palet.Yerel : Palet.Dps, Rakam: true, Soluk: false);
+                    k <= TimeSpan.FromMinutes(1) ? Palet.Yerel : Palet.Dps, Rakam: true, Soluk: false, Favori: true);
             }
-            else satir = new GeriSayimSatiri(s.GorunenAd, TakvimTuru.Boss, "şimdi", null, Palet.Kirmizi, Rakam: false, Soluk: false);
+            else satir = new GeriSayimSatiri(s.GorunenAd, TakvimTuru.Boss, "şimdi", null, Palet.Kirmizi, Rakam: false, Soluk: false, Favori: true);
             if (!Var(sira, satir)) sira.Add((s.ZamanUtc, satir)); // aynı haritadaki eş adlılar aynı anda gelirse tek satır
         }
         KararliSirala(sira);
@@ -215,17 +255,17 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         return hedef.Count > 0;
     }
 
-    private static GeriSayimSatiri Satir(TakvimOlayi o, DateTime utc)
+    private static GeriSayimSatiri Satir(TakvimOlayi o, DateTime utc, bool favori)
     {
         if (!o.BasladiMi(utc))
         {
             var kalan = Yukari(o.BaslangicUtc - utc);
             var renk = kalan <= TimeSpan.FromMinutes(1) ? Palet.Yerel : Palet.Dps; // son dakika: sıcak vurgu
-            return new GeriSayimSatiri(o.Ad, o.Tur, Bicim.Kalan(kalan), null, renk, Rakam: true, Soluk: false);
+            return new GeriSayimSatiri(o.Ad, o.Tur, Bicim.Kalan(kalan), null, renk, Rakam: true, Soluk: false, Favori: favori);
         }
         if (o.GirisBitisUtc is DateTime bitis)
-            return new GeriSayimSatiri(o.Ad, o.Tur, Bicim.Kalan(Yukari(bitis - utc)), "başladı", Palet.Yesil, Rakam: true, Soluk: false);
-        return new GeriSayimSatiri(o.Ad, o.Tur, "şimdi", null, Palet.Kirmizi, Rakam: false, Soluk: false);
+            return new GeriSayimSatiri(o.Ad, o.Tur, Bicim.Kalan(Yukari(bitis - utc)), "başladı", Palet.Yesil, Rakam: true, Soluk: false, Favori: favori);
+        return new GeriSayimSatiri(o.Ad, o.Tur, "şimdi", null, Palet.Kirmizi, Rakam: false, Soluk: false, Favori: favori);
     }
 
     /// <summary>Saniyeye yukarı yuvarlar: 0:01'den sonra doğrudan "başladı" gelir, 0:00 görünmez.</summary>
@@ -238,9 +278,10 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
     /// Takvim + saha bossları, en yakın doğuş üstte. Saha bossu ölüyse geri gelişine kalan süre (doğunca 60 sn "şimdi"); canlıysa ya da
     /// geri gelme anı geçtiyse yeşil "canlı", listenin sonunda (yer kimliği sırasıyla). Bilgi belirsizleştiyse (<see cref="SahaBossDeposu.Belirsiz"/>:
     /// 60 dk'dan eski "canlı" ya da geri gelişinin üstünden 60 dk geçmiş) soluk "canlı?", en sonda. Gizlenmez: boss kaybolursa kullanıcı
-    /// nereye gittiğini merak eder; soluk soru işareti "muhtemelen canlı, haritadan bak" der. Pencere açmadan da çağrılabilir.
+    /// nereye gittiğini merak eder; soluk soru işareti "muhtemelen canlı, haritadan bak" der. Her satır favori anahtarını taşır
+    /// (<see cref="FavoriBoss"/>; Ayarlar'da tıklanınca bu anahtar eklenir/çıkar). Pencere açmadan da çağrılabilir.
     /// </summary>
-    internal static void BossSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, IReadOnlyList<SahaBossDurumu> saha,
+    internal static void BossSatirlariKur(EtkinlikTakvimi takvim, DateTime utc, IReadOnlyList<SahaBossDurumu> saha, IReadOnlySet<string> favoriler,
                                           List<(DateTime Utc, BossSatiri Satir)> tampon, List<BossSatiri> hedef)
     {
         tampon.Clear();
@@ -248,7 +289,11 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
         {
             if (k.Tur != TakvimTuru.Boss) continue;
             var o = takvim.Guncel(k, utc);
-            tampon.Add((o.BaslangicUtc, BossSatir(k.Ad, o.BaslangicUtc, utc, AbyssGrubu)));
+            string anahtar = FavoriBoss.TakvimAnahtari(k.Ad);
+            tampon.Add((o.BaslangicUtc, BossSatir(k.Ad, o.BaslangicUtc, utc, AbyssGrubu) with
+            {
+                Anahtar = anahtar, Favori = favoriler.Contains(anahtar),
+            }));
         }
         foreach (var s in saha)
         {
@@ -273,7 +318,9 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
                 sira = DateTime.MaxValue.AddTicks(-1); // takvimden sonra, belirsizlerden önce
                 satir = new BossSatiri(ad, "canlı", Palet.Yesil, Rakam: false, Canli: true, Grup: grup);
             }
-            if (!Var(tampon, satir)) tampon.Add((sira, satir)); // aynı haritadaki eş adlılar aynı durumdaysa tek satır
+            string anahtar = FavoriBoss.SahaAnahtari(s.Yer);
+            satir = satir with { Anahtar = anahtar, Favori = favoriler.Contains(anahtar) };
+            if (!Var(tampon, satir)) tampon.Add((sira, satir));
         }
         KararliSirala(tampon);
         hedef.Clear();

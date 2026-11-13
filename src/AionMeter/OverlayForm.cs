@@ -39,6 +39,8 @@ internal sealed class OverlayForm : Form
     private DetayForm? _detay;
     private Tepsi? _tepsi;
     private AyarlarFormu? _ayarlarFormu;
+    private YeniliklerKarti? _yenilikKarti;
+    private List<Core.YenilikBolumu>? _acilisYenilikleri; // güncellemeden sonra bir kez gösterilecekler (yoksa null)
 
     // Önbelleğe alınmış çizim nesneleri (renkler ortak paletten)
     private Font? _yazi, _yaziYari, _yaziKucuk, _yaziBaslik, _yaziBoss;
@@ -382,6 +384,8 @@ internal sealed class OverlayForm : Form
             sn => KuklaTepsiden(sn > 0 ? sn : -1), KuklaIptal, AlarmSeciciAc, KuklaKisayolBasildi);
         _tepsi.Menu.Opening += (_, _) => TepsiGuncelle(); // alarmın kalan süresi menü açılırken güncellenir
         _tepsi.BossZamanlari = () => { _etkinlik.BossListesiDegistir(); EtkinlikTick(); };
+        _tepsi.Yenilikler = () => YeniliklerGoster(null);
+        YenilikleriHazirla();
         if (!_demo) OnPlanKancasiKur();
         _kisayol = new KisayolPenceresi();
         _kisayol.Basildi += KisayolBasildi;
@@ -402,7 +406,12 @@ internal sealed class OverlayForm : Form
         }
         else if (AcilisBildirimi is not null)
         {
-            _tepsi.Bildir(AcilisBildirimi); // ör. "AionMeter v0.2.1 sürümüne güncellendi"
+            // ör. "AionMeter v0.2.1 sürümüne güncellendi"; oyun öndeyse kart açılmaz, yeniliklerin yeri balonda söylenir
+            _tepsi.Bildir(_acilisYenilikleri is not null && OyunUstunde() ? AcilisBildirimi.TrimEnd('.') + ". " + YenilikBalonu : AcilisBildirimi);
+        }
+        else if (_acilisYenilikleri is not null && OyunUstunde())
+        {
+            _tepsi.Bildir(YenilikBalonu);
         }
         else if (_ayar.IlkAcilis)
         {
@@ -423,6 +432,66 @@ internal sealed class OverlayForm : Form
         Tick();
         KenarYarat();
         _zamanlayici.Start();
+        // Güncellemeden sonraki ilk açılış: oyun önde değilse yenilikler kartı (oyun öndeyse OnLoad'da tepsi balonu verildi).
+        if (_acilisYenilikleri is { } yeni && !OyunUstunde()) YeniliklerGoster(yeni);
+    }
+
+    // ---------------- Yenilikler ----------------
+
+    private const string YenilikBalonu = "Neler yeni: tepsi menüsü → Yenilikler";
+
+    /// <summary>Oyun önde ya da özel tam ekranda mı (kart açılmaz, odak çalınmaz)? Demo modunda hep hayır.</summary>
+    private bool OyunUstunde() => !_demo && (_onPlan.OzelTamEkran() || _onPlan.OyunGercektenOnde());
+
+    /// <summary>
+    /// Sürüm değiştiyse gösterilecek yenilikleri seçer ve son görülen sürümü yazar (kaydı OnLoad sonundaki AyarKaydet yapar).
+    /// İlk kurulumda kart yok; ayar dosyası var ama sürüm yazılı değilse (bu özellikten önceki sürümden gelindi) şimdiki sürümünkiler.
+    /// </summary>
+    private void YenilikleriHazirla()
+    {
+        try
+        {
+            var mevcut = Guncelleyici.MevcutSurum;
+            var (goster, onceki) = Core.YenilikNotlari.AcilisKarari(_ayar.SonSurum, _ayar.IlkAcilis, mevcut);
+            if (goster)
+            {
+                var secilen = Core.YenilikNotlari.Secilenler(YeniliklerKarti.DosyadanOku(), onceki, mevcut);
+                if (secilen.Count > 0) _acilisYenilikleri = secilen;
+            }
+            _ayar.SonSurum = mevcut.ToString(3);
+        }
+        catch (Exception ex) { HataLog.Yaz("Yenilikler", ex); }
+    }
+
+    /// <summary>Kartı açar (<paramref name="bolumler"/> null: tepsiden, son sürümün yenilikleri). Açıksa yenisiyle değişir.</summary>
+    private void YeniliklerGoster(List<Core.YenilikBolumu>? bolumler)
+    {
+        try
+        {
+            bolumler ??= Core.YenilikNotlari.Secilenler(YeniliklerKarti.DosyadanOku(), null, Guncelleyici.MevcutSurum);
+            if (bolumler.Count == 0)
+            {
+                _tepsi?.Bildir("Bu sürüm için yenilik notu yok.");
+                return;
+            }
+            if (!_demo && _onPlan.OzelTamEkran()) return; // tam ekran oyunun üstünde pencere açılmaz
+            _yenilikKarti?.Close();
+            var kart = new YeniliklerKarti(bolumler, _dpiOlcek);
+            kart.FormClosed += (_, _) =>
+            {
+                if (ReferenceEquals(_yenilikKarti, kart)) _yenilikKarti = null;
+                kart.Dispose();
+            };
+            // Overlay'in bulunduğu ekranın ortası (çalışma alanına kıstırılır).
+            var alan = Screen.FromRectangle(Bounds).WorkingArea;
+            var b = kart.Size;
+            kart.Location = new Point(
+                Math.Clamp(alan.Left + (alan.Width - b.Width) / 2, alan.Left, Math.Max(alan.Left, alan.Right - b.Width)),
+                Math.Clamp(alan.Top + (alan.Height - b.Height) / 2, alan.Top, Math.Max(alan.Top, alan.Bottom - b.Height)));
+            _yenilikKarti = kart;
+            kart.Show(); // ShowWithoutActivation: odak alınmaz
+        }
+        catch (Exception ex) { HataLog.Yaz("Yenilikler kartı", ex); }
     }
 
     // ---------------- Görünürlük ----------------
@@ -466,6 +535,7 @@ internal sealed class OverlayForm : Form
             _cevirmen.PencereleriKapat();
             TamEkranUyar();
         }
+        if (tamEkran) _yenilikKarti?.Close(); // tam ekran oyunun üstünde hiçbir pencere kalmaz (tepsiden yeniden açılır)
         // Küp afişi / çipi: tam ekrana geçildi ya da oyun arkaya düştüyse hemen kapanır (küp yakında kalırsa çip sonra döner).
         if (_kupAfisi is { Gorunur: true } && (tamEkran || !(_demo || _onPlan.OyunOnde()))) _kupAfisi.Kapat();
         if (sert != _sertGorunur || tamEkranDegisti)
@@ -692,6 +762,7 @@ internal sealed class OverlayForm : Form
         if (_detay is { Visible: true }) yield return _detay.Bounds;
         if (_ayarlarFormu is { Visible: true }) yield return _ayarlarFormu.Bounds;
         if (_alarmSecici is { Visible: true }) yield return _alarmSecici.Bounds;
+        if (_yenilikKarti is { Visible: true }) yield return _yenilikKarti.Bounds;
     }
 
     // ---------------- Ayarlar penceresi ----------------
@@ -3304,6 +3375,7 @@ internal sealed class OverlayForm : Form
             _alarmSecici?.Dispose();
             Zil.Birak();
             _ayarlarFormu?.Dispose();
+            _yenilikKarti?.Dispose();
             _cevirmen.Dispose();
             _etkinlik.Dispose();
             DetayKapat();

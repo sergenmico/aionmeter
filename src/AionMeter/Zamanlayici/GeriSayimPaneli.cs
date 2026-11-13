@@ -1,12 +1,14 @@
+using AionMeter.Cevirmen;
 using AionMeter.Core;
 
 namespace AionMeter.Zamanlayici;
 
 /// <summary>
 /// Geri sayım satırı. <see cref="Etiket"/> doluysa ("başladı") süre girişin kapanmasına kalan zamandır.
-/// <see cref="Rakam"/>: süre Bahnschrift rakamlarla mı (yoksa "şimdi" gibi düz yazı mı).
+/// <see cref="Rakam"/>: süre Bahnschrift rakamlarla mı (yoksa "şimdi" gibi düz yazı mı). <see cref="Favori"/>: adın yanında yıldız.
 /// </summary>
-internal readonly record struct GeriSayimSatiri(string Ad, TakvimTuru Tur, string Sure, string? Etiket, Color SureRengi, bool Rakam, bool Soluk);
+internal readonly record struct GeriSayimSatiri(string Ad, TakvimTuru Tur, string Sure, string? Etiket, Color SureRengi, bool Rakam, bool Soluk,
+                                                bool Favori = false);
 
 /// <summary>
 /// Başlamasına 10 dk kalan etkinlik/bosslar ve girişi hâlâ açık etkinlikler: solda ad, sağda süre. Kendisi karar vermez;
@@ -23,6 +25,8 @@ internal sealed class GeriSayimPaneli : KatmanliPanel
     private readonly SolidBrush _fircaSoluk = new(Palet.CokSoluk);
     private readonly Pen _kalemKenar = new(Palet.Cizgi);
     private readonly Pen _kalemKilitsiz = new(Palet.Vurgu);
+    private readonly SolidBrush _fircaFavori = new(Palet.Favori);
+    private readonly PointF[] _yildiz = new PointF[10];
 
     // Yerleşim (Guncelle'de hesaplanır)
     private int _sureW, _etiketW;
@@ -45,6 +49,7 @@ internal sealed class GeriSayimPaneli : KatmanliPanel
     private int PadY => P(5);
     private int SatirH => Math.Max(P(22), _rakam!.Yukseklik + P(4));
     private int NoktaCap => Math.Max(4, P(6));
+    private int YildizAlani => P(17); // favori: adın sağında boşluk + yıldız
 
     /// <summary>Satırları alır; içerik aynıysa false döner (çizim yok). Boyutu <see cref="Boyut"/> verir.</summary>
     public bool Guncelle(IReadOnlyList<GeriSayimSatiri> satirlar, bool kilitsiz)
@@ -68,13 +73,13 @@ internal sealed class GeriSayimPaneli : KatmanliPanel
         int adW = 0, sureW = _rakam!.Genislik("00:00"), etiketW = 0;
         foreach (var s in _satirlar)
         {
-            adW = Math.Max(adW, Olc(s.Ad, _yazi!));
+            adW = Math.Max(adW, Math.Min(Olc(s.Ad, _yazi!), P(260)) + (s.Favori ? YildizAlani : 0));
             sureW = Math.Max(sureW, s.Rakam ? _rakam.Genislik(s.Sure) : Olc(s.Sure, _yaziSimdi!));
             if (s.Etiket is not null) etiketW = Math.Max(etiketW, Olc(s.Etiket, _yaziEtiket!) + P(6));
         }
         _sureW = sureW;
         _etiketW = etiketW;
-        int w = PadX + NoktaCap + P(7) + Math.Min(adW, P(260)) + P(20) + etiketW + sureW + PadX;
+        int w = PadX + NoktaCap + P(7) + adW + P(20) + etiketW + sureW + PadX;
         int h = 2 * PadY + Math.Max(1, _satirlar.Count) * SatirH;
         return new Size(Math.Max(w, P(180)), h);
     }
@@ -103,8 +108,14 @@ internal sealed class GeriSayimPaneli : KatmanliPanel
             else if (_etiketW > 0) adSag = sureKutu.Left - _etiketW - P(14);
 
             int adX = x0 + cap + P(7);
-            TextRenderer.DrawText(g, s.Ad, _yazi!, new Rectangle(adX, y, Math.Max(0, adSag - adX), satirH),
-                s.Soluk ? Palet.Soluk : Palet.Yazi, Sol);
+            int adW = Math.Max(0, adSag - adX);
+            if (s.Favori) adW = Math.Min(Olc(s.Ad, _yazi!) + 1, Math.Max(0, adW - YildizAlani));
+            TextRenderer.DrawText(g, s.Ad, _yazi!, new Rectangle(adX, y, adW, satirH), s.Soluk ? Palet.Soluk : Palet.Yazi, Sol);
+            if (s.Favori)
+            {
+                float r = P(5.5f);
+                Cizim.Yildiz(g, _fircaFavori, null, adX + adW + P(6) + r, orta, r, _yildiz);
+            }
             y += satirH;
         }
         g.DrawRectangle(_kilitsiz ? _kalemKilitsiz : _kalemKenar, 0, 0, w - 1, h - 1);
@@ -116,7 +127,7 @@ internal sealed class GeriSayimPaneli : KatmanliPanel
         {
             _yazi?.Dispose(); _yaziEtiket?.Dispose(); _yaziSimdi?.Dispose(); _rakam?.Dispose();
             _fircaEtkinlik.Dispose(); _fircaBoss.Dispose(); _fircaSoluk.Dispose();
-            _kalemKenar.Dispose(); _kalemKilitsiz.Dispose();
+            _kalemKenar.Dispose(); _kalemKilitsiz.Dispose(); _fircaFavori.Dispose();
         }
         base.Dispose(disposing);
     }

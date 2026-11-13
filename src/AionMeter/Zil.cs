@@ -6,6 +6,7 @@ namespace AionMeter;
 /// Kodla üretilen kısa, yumuşak sesler (pakette ses dosyası yok):
 /// - Alarm: iki notalık çan (E5 → C5, iki kez).
 /// - Gizli Küp: yükselen üç nota (E5 · G#5 · B5, majör arpej), daha kısa ve daha hafif; alarmdan inişle değil çıkışla ayrılır.
+/// - Favori boss: iki nota, bir beşli yukarı (A4 → E5); ikisinden de pes ve tek seferlik, aralık daha geniş.
 /// Her nota yavaş açılır ve üstel söner (tık sesi yok); tepe genliği ses ayarıyla ölçeklenir.
 /// Dalga %TEMP% altında bir kez dosyaya yazılır ve yoldan çalınır (eşzamansız çalarken bellek tamponunun ömrüne bağlı
 /// kalınmaz); ses seviyesi değişince dosya yeniden üretilir. Windows aynı anda tek bir PlaySound çalar: yenisi eskisini keser.
@@ -39,11 +40,22 @@ internal static class Zil
             notaSure: 0.50, toplam: 0.75, sonum: 9.0, tepe: 0.24 * ses),
     };
 
+    private static readonly Ses FavoriSesi = new()
+    {
+        Dosya = Path.Combine(Path.GetTempPath(), "aionmeter-favori.wav"),
+        Ad = "Favori boss sesi",
+        Uret = ses => Dalga(new (double, double)[] { (440.00, 0.00), (659.25, 0.20) },
+            notaSure: 0.60, toplam: 0.90, sonum: 6.0, tepe: 0.32 * ses),
+    };
+
     /// <summary>Alarm çanı.</summary>
     public static void Cal(int sesYuzde) => Oynat(AlarmSesi, sesYuzde);
 
     /// <summary>Gizli Küp yakında: yükselen üç nota.</summary>
     public static void Kup(int sesYuzde) => Oynat(KupSesi, sesYuzde);
+
+    /// <summary>Favori boss doğmak üzere: iki nota yukarı.</summary>
+    public static void Favori(int sesYuzde) => Oynat(FavoriSesi, sesYuzde);
 
     private static void Oynat(Ses s, int sesYuzde)
     {
@@ -71,6 +83,7 @@ internal static class Zil
     {
         Durdur(AlarmSesi);
         Durdur(KupSesi);
+        Durdur(FavoriSesi);
     }
 
     private static void Durdur(Ses s)

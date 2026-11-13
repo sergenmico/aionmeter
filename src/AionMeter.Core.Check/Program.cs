@@ -48,6 +48,7 @@ ok &= TakvimKontrol.Calistir(); // Etkinlik takvimi: bölge saatleri, yaz saati,
 ok &= SahaBossKontrol.Calistir(assets); // Saha bossu listesi (0x0191): çözüm, depo, kalıcılık
 ok &= PingKontrol.Calistir(); // ping: sentetik zaman damgalı parçalarla RTT ve uyarı histerezisi
 ok &= PartiKontrol.Calistir(assets); // parti roster'ı: bölge değişiminden sonra roster gelmezse parti bayat
+ok &= FavoriKontrol.Calistir(assets); // favori boss: anahtarın kalıcılığı, doğuş başına bir ses; yenilikler kartı
 #if YEREL_TANI
 ok &= DogrulukKontrol.Calistir(assets); // isteğe bağlı yerel tanı eklentisi (-p:YerelTani=true)
 #endif

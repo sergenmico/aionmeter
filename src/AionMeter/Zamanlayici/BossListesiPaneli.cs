@@ -3,9 +3,10 @@ using System.Drawing.Drawing2D;
 namespace AionMeter.Zamanlayici;
 
 /// <summary>Boss listesi satırı: ad ve bir sonraki doğuşa kalan süre ("1 sa 41 dk", "41:20", "şimdi"). <see cref="Soluk"/>: bilgi belirsiz
-/// ("canlı?"), ad ve nokta soluk. <see cref="Canli"/>: saha bossu şu an canlı. <see cref="Grup"/>: "Abyss" (takvim) ya da harita adı.</summary>
+/// ("canlı?"), ad ve nokta soluk. <see cref="Canli"/>: saha bossu şu an canlı. <see cref="Grup"/>: "Abyss" (takvim) ya da harita adı.
+/// <see cref="Anahtar"/>: favori anahtarı (Core.FavoriBoss); <see cref="Favori"/>: adın yanında yıldız.</summary>
 internal readonly record struct BossSatiri(string Ad, string Sure, Color SureRengi, bool Rakam, bool Soluk = false, bool Canli = false,
-                                           string Grup = "");
+                                           string Grup = "", string Anahtar = "", bool Favori = false);
 
 /// <summary>
 /// İstendiğinde açılan boss listesi: Ayarlar'daki Bosslar sekmesiyle aynı gruplu görünüm (<see cref="BossListesiCizimi"/>). Kullanıcı

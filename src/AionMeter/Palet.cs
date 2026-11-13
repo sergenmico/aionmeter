@@ -186,6 +186,9 @@ internal static class Palet
     /// <summary>Gizli Küp rozeti (sıcak altın: hazine; alarm mavisi ve öfke kırmızısından ayrı).</summary>
     public static readonly Color Kup = Color.FromArgb(236, 204, 122);
 
+    /// <summary>Favori boss yıldızı (sıcak altın; küp rozetinden biraz daha doygun, sınıf renkleriyle karışmaz).</summary>
+    public static readonly Color Favori = Color.FromArgb(244, 196, 84);
+
     /// <summary>Boss can çubuğunda yeni alınan hasarın kısa süre kalan açık izi.</summary>
     public static readonly Color BossHasarIzi = Color.FromArgb(222, 136, 112);
 

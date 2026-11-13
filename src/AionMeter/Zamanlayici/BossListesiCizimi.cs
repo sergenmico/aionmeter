@@ -8,6 +8,8 @@ namespace AionMeter.Zamanlayici;
 /// Satırlar <see cref="ZamanlayiciDenetleyici.BossSatirlariniDoldur"/>'dan gelir; burada yalnız gruplanır: önce "Abyss" (takvimli
 /// bosslar), sonra haritalar (<see cref="ZamanlayiciDenetleyici.GrupSirasi"/>). Grup içinde gelen sıra korunur: en yakın doğuş üstte,
 /// canlılar (yeşil nokta) ve belirsizler (soluk) sonda. Liste verilen alana kırpılır, <c>kaydirma</c> kadar yukarı kayar.
+/// Favori bosslar adın hemen sağında küçük altın yıldızla belli olur; Ayarlar'da fare üstündeki satır hafif aydınlanır ve
+/// favori değilse soluk boş yıldız gösterir (tıklayınca favori olur: <see cref="AnahtarBul"/>).
 /// </summary>
 internal sealed class BossListesiCizimi : IDisposable
 {
@@ -36,6 +38,10 @@ internal sealed class BossListesiCizimi : IDisposable
     private readonly SolidBrush _fircaTopuz = new(Palet.AyiriciAcik);
     private readonly SolidBrush _fircaTopuzUst = new(Palet.Soluk);
     private readonly Pen _kalemAyirac = new(Palet.Cizgi);
+    private readonly SolidBrush _fircaFavori = new(Palet.Favori);
+    private readonly SolidBrush _fircaUstunde = new(Palet.Panel);
+    private readonly Pen _kalemYildizIpucu = new(Palet.CokSoluk);
+    private readonly PointF[] _yildiz = new PointF[10];
 
     public BossListesiCizimi(float olcek) => OlcekAyarla(olcek);
 
@@ -59,6 +65,7 @@ internal sealed class BossListesiCizimi : IDisposable
         _sure = Palet.RakamTipi(13f * olcek, yariKalin: true); // süreler ve "canlı" / "şimdi" aynı yazıyla: sütun tek parça okunur
         _sureW = Olc("23 sa 59 dk", _sure) + P(2);             // süre kısalınca sütun zıplamasın
         _ipucuW = -1;
+        _kalemYildizIpucu.Width = Math.Max(1f, 1.2f * olcek);
     }
 
     private static int Olc(string metin, Font font) =>
@@ -127,13 +134,43 @@ internal sealed class BossListesiCizimi : IDisposable
     public int IstenenGenislik(int enFazlaAd)
     {
         int adW = 0, grupW = 0;
-        foreach (var s in _satirlar) adW = Math.Max(adW, Olc(s.Ad, _ad));
+        foreach (var s in _satirlar) adW = Math.Max(adW, Olc(s.Ad, _ad) + (s.Favori ? YildizAlani : 0));
         foreach (var g in _gruplar) grupW = Math.Max(grupW, Olc(g.Ad, _grup) + P(72)); // grup adı + sağda "12 canlı"
         return Math.Max(P(16) + Math.Min(adW, enFazlaAd) + P(14) + _sureW, grupW);
     }
 
-    /// <summary>Listeyi <paramref name="alan"/> içine, <paramref name="kaydirma"/> px yukarı kaymış çizer (alan dışı kırpılır).</summary>
-    public void Ciz(Graphics g, Rectangle alan, int kaydirma)
+    /// <summary>Yıldızın adın sağında kapladığı yer (boşluk + yıldız).</summary>
+    private int YildizAlani => P(17);
+
+    /// <summary>
+    /// <paramref name="p"/> noktasındaki satırın favori anahtarı (çizimle aynı yerleşim); satır yoksa null. Grup başlıkları ve
+    /// ipucu satır sayılmaz.
+    /// </summary>
+    public string? AnahtarBul(Rectangle alan, int kaydirma, Point p)
+    {
+        if (!alan.Contains(p)) return null;
+        int y = alan.Top - kaydirma, satirH = SatirH, grupH = GrupH;
+        if (_satirlar.Count == 0) return null;
+        foreach (var grup in _gruplar)
+        {
+            y += grupH;
+            if (p.Y < y) return null; // grup başlığı
+            int i = (p.Y - y) / satirH;
+            if (i < grup.Sayi)
+            {
+                string a = _satirlar[grup.Ilk + i].Anahtar;
+                return a.Length > 0 ? a : null;
+            }
+            y += grup.Sayi * satirH;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Listeyi <paramref name="alan"/> içine, <paramref name="kaydirma"/> px yukarı kaymış çizer (alan dışı kırpılır).
+    /// <paramref name="ustundeki"/>: fare üstündeki satırın anahtarı (Ayarlar'da; yüzen listede null).
+    /// </summary>
+    public void Ciz(Graphics g, Rectangle alan, int kaydirma, string? ustundeki = null)
     {
         var durum = g.Save();
         g.SetClip(alan, CombineMode.Intersect);
@@ -168,12 +205,22 @@ internal sealed class BossListesiCizimi : IDisposable
             {
                 if (y + satirH < alan.Top || y > alan.Bottom) continue;
                 var s = _satirlar[i];
+                bool ustunde = ustundeki is not null && s.Anahtar == ustundeki;
+                if (ustunde) Cizim.YuvarlakDoldur(g, _fircaUstunde, new RectangleF(x0 - P(6), y, x1 - x0 + P(8), satirH), P(4));
                 var firca = s.Soluk ? _fircaSoluk : s.Canli ? _fircaCanli : _fircaBekliyor;
                 var eski = g.SmoothingMode;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.FillEllipse(firca, x0 + P(2), y + satirH / 2f - cap / 2f, cap, cap);
                 g.SmoothingMode = eski;
-                TextRenderer.DrawText(g, s.Ad, _ad, new Rectangle(adX, y, adW, satirH), s.Soluk ? Palet.Soluk : Palet.Yazi, Sol);
+                bool yildiz = s.Favori || ustunde;
+                int adGenislik = yildiz ? Math.Min(Olc(s.Ad, _ad) + 1, Math.Max(0, adW - YildizAlani)) : adW;
+                TextRenderer.DrawText(g, s.Ad, _ad, new Rectangle(adX, y, adGenislik, satirH), s.Soluk ? Palet.Soluk : Palet.Yazi, Sol);
+                if (yildiz)
+                {
+                    float r = P(5.5f);
+                    Cizim.Yildiz(g, s.Favori ? _fircaFavori : null, s.Favori ? null : _kalemYildizIpucu,
+                        adX + adGenislik + P(6) + r, y + satirH / 2f, r, _yildiz);
+                }
                 TextRenderer.DrawText(g, s.Sure, _sure, new Rectangle(sureKutuX, y, _sureW, satirH), s.SureRengi, Sag);
             }
         }
@@ -211,5 +258,6 @@ internal sealed class BossListesiCizimi : IDisposable
         _ad?.Dispose(); _grup?.Dispose(); _kucuk?.Dispose(); _sure?.Dispose();
         _fircaBekliyor.Dispose(); _fircaCanli.Dispose(); _fircaSoluk.Dispose();
         _fircaIz.Dispose(); _fircaTopuz.Dispose(); _fircaTopuzUst.Dispose(); _kalemAyirac.Dispose();
+        _fircaFavori.Dispose(); _fircaUstunde.Dispose(); _kalemYildizIpucu.Dispose();
     }
 }

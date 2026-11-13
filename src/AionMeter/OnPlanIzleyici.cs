@@ -34,6 +34,16 @@ internal sealed class OnPlanIzleyici
         return _sonSonuc;
     }
 
+    /// <summary>Önde gerçekten oyunun kendisi mi? (<see cref="OyunOnde"/>'den farkı: bizim pencerelerimiz ve alıntı araçları sayılmaz.)</summary>
+    public bool OyunGercektenOnde()
+    {
+        IntPtr hwnd = Native.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return _sonOyun;
+        Native.GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == 0 || pid == _kendiPid) return false;
+        return OyunOnde() && _sonOyun;
+    }
+
     /// <summary>En son önde görülen oyun penceresi (bizim pencerelerimiz hariç; ekran alıntısı araçları dahil); bilinmiyorsa 0.</summary>
     public IntPtr SonOyunPenceresi { get; private set; }
 

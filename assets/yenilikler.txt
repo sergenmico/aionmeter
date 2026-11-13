@@ -1,0 +1,12 @@
+; Güncellemeden sonra açılan "Yenilikler" kartının içeriği. Her sürüm "## 0.6.0" başlığıyla, maddeler "- " ile.
+; En önemli madde en üstte; sürüm başına en çok ~8 kısa madde. Yeni sürüm en üste eklenir.
+
+## 0.6.0
+- Tam ekranda sayaç kendini gizler (oyun çökmesin diye). Görmek için oyunda ekran modunu Pencereli tam ekran yap
+- Shugo, Rift, Invasion, Arena, takvimli bosslar ve günlük/haftalık sıfırlama 10 dk kala ekranda geri sayılır
+- Ayarlar sekmelere ayrıldı. Bosslar sekmesinde Abyss ve saha bosslarının ne zaman doğacağı var (saha bossları için oyunda haritayı M ile bir kez aç)
+- Bosslar sekmesinde bir bossa tıkla: yıldız alır, doğmadan 5 dk önce ses çalar, geri sayımda da görünür
+- Gizli Küp yakına gelince ekranda "Küp var", yönü ve mesafesiyle; sonra küçük bir çip olarak kalır
+- Overlay'in kenarındaki üç noktalı düğme Ayarlar'ı oyunun üstünde açar, Alt+Tab'a gerek yok
+- Ping yükselince saatin yanında kırmızı ms yazar
+- Partideyken tabloda yalnız parti görünür; DPS'in yanındaki ▲/▼ son 10 sn'nin gidişini gösterir
