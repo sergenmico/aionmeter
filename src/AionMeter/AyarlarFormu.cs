@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using AionMeter.Cevirmen;
+using AionMeter.Core;
 
 namespace AionMeter;
 
@@ -188,6 +189,14 @@ internal sealed class AyarlarFormu : Form
             v => { _ayar.SolukOpaklik = v; _b.SolukDegisti(); }, _ayar.Kaydet)
         { Etkin = () => _ayar.SavasDisi == SavasDisiModu.Soluk });
         _ogeler.Add(new Anahtar("Sadece oyun öndeyken göster", null, _b.SadeceOyunda, _b.SadeceOyundaDegistir));
+        // Zamanlayıcı ayarları her tikte okur: burada yalnız kaydetmek yeter (geri sayım paneli kendini günceller).
+        _ogeler.Add(new Anahtar("Etkinlik geri sayımı", null, () => _ayar.Zamanlayici, () =>
+        {
+            _ayar.Zamanlayici = !_ayar.Zamanlayici;
+            _ayar.Kaydet();
+        }));
+        _ogeler.Add(new Secim("Sunucu bölgesi", EtkinlikTakvimi.BolgeAdlari, () => (int)_ayar.Bolge,
+            i => { _ayar.Bolge = (SunucuBolgesi)i; _ayar.Kaydet(); }));
         _ogeler.Add(new Anahtar("Sadece benim satırım", "Diğerleri arka planda sayılır; sıran #3 gibi görünür", () => _ayar.SadeceBen, () =>
         {
             _ayar.SadeceBen = !_ayar.SadeceBen;
@@ -369,9 +378,22 @@ internal sealed class AyarlarFormu : Form
                         int parcaW = 0;
                         foreach (string m in s.Secenekler) parcaW = Math.Max(parcaW, Olc(m, _yaziKucuk) + P(16));
                         int toplam = parcaW * n;
+                        // Eşit parçalar etiketin yanına sığmıyorsa (ör. bölge seçimi) her parça kendi metni kadar geniş.
+                        bool dar = toplam > x1 - x0 - Olc(s.Etiket, _yazi) - P(12);
+                        var genislik = new int[n];
+                        if (dar)
+                        {
+                            toplam = 0;
+                            for (int i = 0; i < n; i++) toplam += genislik[i] = Olc(s.Secenekler[i], _yaziKucuk) + P(12);
+                        }
+                        else Array.Fill(genislik, parcaW);
                         int sx = x1 - toplam, syy = y + (P(38) - P(26)) / 2;
                         s.Parcalar = new Rectangle[n];
-                        for (int i = 0; i < n; i++) s.Parcalar[i] = new Rectangle(sx + i * parcaW, syy, parcaW, P(26));
+                        for (int i = 0; i < n; i++)
+                        {
+                            s.Parcalar[i] = new Rectangle(sx, syy, genislik[i], P(26));
+                            sx += genislik[i];
+                        }
                         break;
                     }
                     case Kaydirici kd:
