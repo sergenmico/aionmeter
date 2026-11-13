@@ -6,13 +6,17 @@ namespace AionMeter.Zamanlayici;
 internal readonly record struct BossSatiri(string Ad, string Sure, Color SureRengi, bool Rakam);
 
 /// <summary>
-/// İstendiğinde açılan boss listesi: takvim bossları (ve ileride saha bossları), en yakın doğuş üstte. Kullanıcı kendisi
+/// İstendiğinde açılan boss listesi: takvim ve saha bossları, en yakın doğuş üstte (canlı saha bossları sonda). Kullanıcı kendisi
 /// açtığı için kilitliyken de tıklanır (odak yine alınmaz): sağ üstteki × kapatır, başka yerden tutup taşınır.
 /// </summary>
 internal sealed class BossListesiPaneli : KatmanliPanel
 {
     private readonly List<BossSatiri> _satirlar = new();
     private string _altBaslik = "";
+    private string? _ipucu;
+    private int _ipucuH;
+    private const TextFormatFlags IpucuBicimi = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak |
+                                                TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
     private Font? _yazi, _yaziBaslik, _yaziKucuk, _yaziSimdi;
     private RakamYazisi? _rakam;
     private readonly SolidBrush _fircaBoss = new(Palet.Kirmizi);
@@ -48,16 +52,17 @@ internal sealed class BossListesiPaneli : KatmanliPanel
     private int BaslikH => P(28);
     private int SatirH => Math.Max(P(22), _rakam!.Yukseklik + P(4));
 
-    /// <summary>Satırları alır; içerik aynıysa false (çizim yok).</summary>
-    public bool Guncelle(IReadOnlyList<BossSatiri> satirlar, string altBaslik)
+    /// <summary>Satırları alır; içerik aynıysa false (çizim yok). <paramref name="ipucu"/>: listenin altında soluk not (yoksa null).</summary>
+    public bool Guncelle(IReadOnlyList<BossSatiri> satirlar, string altBaslik, string? ipucu = null)
     {
-        if (altBaslik == _altBaslik && satirlar.Count == _satirlar.Count)
+        if (altBaslik == _altBaslik && ipucu == _ipucu && satirlar.Count == _satirlar.Count)
         {
             bool ayni = true;
             for (int i = 0; i < satirlar.Count && ayni; i++) ayni = satirlar[i] == _satirlar[i];
             if (ayni) return false;
         }
         _altBaslik = altBaslik;
+        _ipucu = ipucu;
         _satirlar.Clear();
         _satirlar.AddRange(satirlar);
         Invalidate();
@@ -77,6 +82,13 @@ internal sealed class BossListesiPaneli : KatmanliPanel
         _sureW = sureW;
         int w = Pad + P(13) + Math.Min(adW, P(260)) + P(20) + sureW + Pad;
         int h = Pad / 2 + BaslikH + P(4) + Math.Max(1, _satirlar.Count) * SatirH + Pad;
+        _ipucuH = 0;
+        if (_ipucu is { Length: > 0 })
+        {
+            // Panel ipucu için genişlemez: sığmazsa alt satıra geçer.
+            _ipucuH = TextRenderer.MeasureText(_ipucu, _yaziKucuk!, new Size(w - 2 * Pad, int.MaxValue), IpucuBicimi).Height;
+            h += P(6) + _ipucuH;
+        }
         return new Size(w, h);
     }
 
@@ -117,6 +129,9 @@ internal sealed class BossListesiPaneli : KatmanliPanel
             TextRenderer.DrawText(g, s.Ad, _yazi!, new Rectangle(adX, y, Math.Max(0, sureKutu.Left - P(16) - adX), satirH), Palet.Yazi, Sol);
             y += satirH;
         }
+        if (_satirlar.Count == 0) y += satirH;
+        if (_ipucuH > 0)
+            TextRenderer.DrawText(g, _ipucu, _yaziKucuk!, new Rectangle(x0, y + P(6), x1 - x0, _ipucuH), Palet.CokSoluk, IpucuBicimi);
         g.DrawRectangle(_kalemKenar, 0, 0, w - 1, h - 1);
     }
 
