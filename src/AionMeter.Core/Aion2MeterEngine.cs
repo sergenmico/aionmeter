@@ -332,6 +332,69 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         public DateTime First = DateTime.MaxValue; // bu oyuncunun bu denemede bu hedefe ilk vuruşu (BossDps paydası)
         public DateTime Last;
         public HitTally? Tally;
+        public SecondRing? Recent; // son saniyelerin hasarı (boss modunda anlık DPS oku); yalnız detaylı oyuncularda
+    }
+
+    /// <summary>
+    /// Bir oyuncunun bir hedefe son 16 saniyedeki saniyelik hasarı (saniye = dövüş başından, detay kovalarıyla aynı).
+    /// Boss modunda anlık DPS oku yalnız son ~10 sn'ye bakar: bütün dövüşün kovaları yerine sabit 16 kova yeter (vuruşta ayırma yok,
+    /// uzun dövüşte birleştirme gerekmez).
+    /// </summary>
+    private sealed class SecondRing
+    {
+        public const int Size = 16; // RecentSeconds + içinde bulunulan saniye + pay
+        private readonly long[] _sums = new long[Size];
+        private long _newest = -1;
+
+        public void Add(long second, long amount)
+        {
+            if (second < 0)
+            {
+                return;
+            }
+
+            if (second > _newest)
+            {
+                long clear = Math.Min(Size, second - _newest); // aradaki vuruşsuz saniyeler 0
+                for (long i = 1; i <= clear; i++)
+                {
+                    _sums[(int)((_newest + i) % Size)] = 0;
+                }
+
+                _newest = second;
+            }
+            else if (second <= _newest - Size)
+            {
+                return; // halkadan eski
+            }
+
+            _sums[(int)(second % Size)] += amount;
+        }
+
+        /// <summary>[<paramref name="from"/>, <paramref name="to"/>] saniyelerinin toplamı; halkada olmayan saniyeler 0.</summary>
+        public long Sum(long from, long to)
+        {
+            long sum = 0;
+            for (long i = Math.Max(Math.Max(0, from), _newest - Size + 1); i <= Math.Min(to, _newest); i++)
+            {
+                sum += _sums[(int)(i % Size)];
+            }
+
+            return sum;
+        }
+
+        /// <summary>Deneme birleşmesi: <paramref name="other"/>'ın saniyeleri <paramref name="offset"/> sn kaydırılarak eklenir.</summary>
+        public void Absorb(SecondRing other, long offset)
+        {
+            for (long i = Math.Max(0, other._newest - Size + 1); i <= other._newest; i++)
+            {
+                long v = other._sums[(int)(i % Size)];
+                if (v != 0)
+                {
+                    Add(i + offset, v);
+                }
+            }
+        }
     }
 
     private sealed class Aggregate
@@ -380,6 +443,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             foreach (TargetAgg t in Targets.Values)
             {
                 t.Tally = null;
+                t.Recent = null;
             }
         }
 
@@ -400,6 +464,11 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
                 if (theirs.Tally is { } tally)
                 {
                     (mine.Tally ??= new HitTally()).AbsorbTally(tally, MaxSkillsPerTarget);
+                }
+
+                if (theirs.Recent is { } recent)
+                {
+                    (mine.Recent ??= new SecondRing()).Absorb(recent, bucketOffset);
                 }
             }
 
@@ -1099,10 +1168,11 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
                 }
             }
 
+            long second = (long)(ev.Timestamp - fightStart).TotalSeconds;
             if (agg.Detail is { } det)
             {
                 det.Record(ev, MaxSkillsPerPlayer);
-                det.AddToBucket((long)(ev.Timestamp - fightStart).TotalSeconds, ev.Amount);
+                det.AddToBucket(second, ev.Amount);
             }
 
             // Her hedef için (canı henüz okunmamış olsa da): hedef sonradan boss sayılınca önceki vuruşlar da BossTotal'a girer.
@@ -1113,6 +1183,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
             if (agg.Detail is not null)
             {
                 (onTarget.Tally ??= new HitTally()).Record(ev, MaxSkillsPerTarget);
+                (onTarget.Recent ??= new SecondRing()).Add(second, ev.Amount);
             }
 
             if (!party)
@@ -1548,7 +1619,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     /// Satırla aynı denemeden detay. Boss varken (boss kümesi) toplam, DPS, aktif süre, vuruş sayaçları ve beceriler kümeye vurulanlardır
     /// (satırdaki BossTotal/BossDps ile aynı); DPS grafiği her zaman bütün hedeflere vurulanı gösterir.
     /// </summary>
-    public PlayerDetail? Detail(long playerId)
+    public PlayerDetail? Detail(long playerId, bool? bossModu = null)
     {
         if (_source is null || playerId is < int.MinValue or > int.MaxValue)
         {
@@ -1572,7 +1643,8 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
                 return new PlayerDetail(row.Id, row.Name, row.ClassName, row.CombatPower, 0, 0, TimeSpan.Zero, new HitStats(0, 0, 0, 0, 0, 0, 0), Array.Empty<SkillDamage>());
             }
 
-            bool bossMode = snap.Boss is not null && a.Cluster.Count > 0;
+            // Overlay satırının modu (verildiyse): başlıktaki DPS, Toplam ve Aktif aynı kaynaktan (boss/sn ya da /sn) olur.
+            bool bossMode = (bossModu ?? snap.Boss is not null) && a.Cluster.Count > 0;
             HitTally? tally = agg.Detail; // kalabalıkta ilk 30 dışındaki yabancının detayı yok: yalnız toplam
             if (bossMode && agg.Detail is not null)
             {
@@ -1721,7 +1793,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     }
 
     private readonly record struct Row(int Id, long Total, bool SharesTarget, long BossDamage, bool HitFightBoss, TimeSpan Active, TimeSpan BossActive,
-        double? Recent = null);
+        double? Recent = null, double? BossRecent = null);
 
     /// <summary>Son-DPS penceresi (anlık DPS oku): tamamlanmış kovalardan en az bu kadar saniye.</summary>
     internal const int RecentSeconds = 10;
@@ -1731,7 +1803,9 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
     /// Kovalar dövüş başından saniyeliktir (uzun dövüşte birleşir, <paramref name="bucketSeconds"/> büyür; pencere kova katına yuvarlanır).
     /// Vuruşsuz saniyeler 0 sayılır (oyuncu durursa düşer). Tamamlanmış kova yoksa null.
     /// </summary>
-    internal static double? RecentDps(IReadOnlyList<long>? buckets, int bucketSeconds, double secondsFromStart)
+    /// <param name="firstSecond">Oyuncunun ilk vuruşu (dövüş başından sn): pencere bundan önce başlamaz (dövüşe geç giren için
+    /// katılmadığı saniyeler 0 sayılıp ok yanlışlıkla ▼ olmasın).</param>
+    internal static double? RecentDps(IReadOnlyList<long>? buckets, int bucketSeconds, double secondsFromStart, double firstSecond = 0)
     {
         if (buckets is null || secondsFromStart < 0)
         {
@@ -1740,13 +1814,14 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
         int bs = Math.Max(1, bucketSeconds);
         long last = (long)secondsFromStart / bs - 1; // son tamamlanmış kova
-        if (last < 0)
+        long own = (long)Math.Max(0, firstSecond) / bs; // oyuncunun ilk kovası
+        if (last < own)
         {
             return null;
         }
 
         int n = (RecentSeconds + bs - 1) / bs;
-        long first = Math.Max(0, last - n + 1);
+        long first = Math.Max(own, last - n + 1);
         long sum = 0;
         for (long i = first; i <= last && i < buckets.Count; i++)
         {
@@ -1754,6 +1829,45 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         }
 
         return sum / (double)((last - first + 1) * bs);
+    }
+
+    /// <summary>
+    /// Son ~<see cref="RecentSeconds"/> sn'de oyuncunun boss kümesine DPS'i (<see cref="SecondRing"/>; tamamlanmış saniyeler, vuruşsuz saniyeler 0,
+    /// pencere oyuncunun kümeye ilk vuruşundan önce başlamaz). Kümeye vurmadıysa ya da tamamlanmış saniye yoksa null. Called under _gate.
+    /// </summary>
+    private static double? RecentOnCluster(Attempt a, Aggregate agg, DateTime start, DateTime now)
+    {
+        DateTime firstHit = DateTime.MaxValue;
+        foreach (int member in a.Cluster)
+        {
+            if (agg.Targets.TryGetValue(member, out TargetAgg? t) && t.Amount > 0 && t.Recent is not null && t.First < firstHit)
+            {
+                firstHit = t.First;
+            }
+        }
+
+        if (firstHit == DateTime.MaxValue)
+        {
+            return null;
+        }
+
+        long last = (long)(now - start).TotalSeconds - 1; // son tamamlanmış saniye
+        long first = Math.Max((long)Math.Max(0, (firstHit - start).TotalSeconds), last - RecentSeconds + 1);
+        if (last < first)
+        {
+            return null;
+        }
+
+        long sum = 0;
+        foreach (int member in a.Cluster)
+        {
+            if (agg.Targets.TryGetValue(member, out TargetAgg? t) && t.Recent is { } ring)
+            {
+                sum += ring.Sum(first, last);
+            }
+        }
+
+        return sum / (double)(last - first + 1);
     }
 
     // Olay zamanları yerel saat (NpcapCaptureService: Timeval.ToLocalTime). Ping dövüşten bağımsızdır: donmuş sonuçta da günceldir.
@@ -1922,11 +2036,18 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
 
             // Oyuncu başı payda: aktif sürenin oyuncunun ilk ve son vuruşu arasındaki kısmı (uzun boşluklar sayılmaz); canlıyken kuyruk dahil.
             (TimeSpan active, TimeSpan bossActive) = PlayerActive(_cur, agg, now, live: !over);
-            // Anlık DPS oku: son ~10 sn (bütün hedeflere, detay kovalarından); donmuş sonuçta yok.
-            double? recent = !over && _cur.Start is { } start
-                ? RecentDps(agg.Detail?.Buckets, agg.Detail?.BucketSeconds ?? 1, (now - start).TotalSeconds) : null;
+            // Anlık DPS oku: son ~10 sn (bütün hedeflere, detay kovalarından; oyuncunun ilk vuruşundan önce başlamaz); donmuş sonuçta yok.
+            // Boss modunda aynısı yalnız kümeye vurulanla (oyuncunun kümeye ilk vuruşundan; BossDps ile karşılaştırılır).
+            double? recent = null, bossRecent = null;
+            if (!over && _cur.Start is { } start)
+            {
+                recent = RecentDps(agg.Detail?.Buckets, agg.Detail?.BucketSeconds ?? 1, (now - start).TotalSeconds, (agg.First - start).TotalSeconds);
+                bossRecent = bossId is null ? null : RecentOnCluster(_cur, agg, start, now);
+            }
+
             rows.Add(new Row(id, agg.Total, agg.SharesTarget, onCluster,
-                _fightBoss is int f && agg.Targets.TryGetValue(f, out TargetAgg? onFightBoss) && onFightBoss.Amount > 0, active, bossActive, recent));
+                _fightBoss is int f && agg.Targets.TryGetValue(f, out TargetAgg? onFightBoss) && onFightBoss.Amount > 0, active, bossActive, recent,
+                bossRecent));
         }
 
         // Dövüş süresi: denemenin aktif süresi (kuyruksuz; deneme içinde azalmaz, kukla testi ve süre göstergesi buna dayanır).
@@ -2006,7 +2127,7 @@ public sealed partial class Aion2MeterEngine : IMeterEngine
         double bossSeconds = Math.Max(1.0, row.BossActive.TotalSeconds);
         string name = DisplayName(dir.NameFor(row.Id), row.Id);
         return new PlayerDamage(row.Id, name, row.Total, row.Total / seconds, local, dir.ClassOf(row.Id) ?? dir.PartyClassOf(name), dir.CombatPowerOf(name),
-            row.BossDamage / bossSeconds, row.BossDamage, _cur.Deaths.GetValueOrDefault(row.Id), row.Recent);
+            row.BossDamage / bossSeconds, row.BossDamage, _cur.Deaths.GetValueOrDefault(row.Id), row.Recent, row.Active, row.BossRecent, row.BossActive);
     }
 
     /// <summary>

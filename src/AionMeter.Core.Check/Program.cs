@@ -40,6 +40,8 @@ AuditChecks();
 PlayerTargetChecks();
 DurationChecks();
 RecentDpsChecks();
+RecentDpsLateChecks();
+OverlayYeriChecks();
 ok &= KupKontrol.Calistir(assets); // Gizli Küp: çerçeve çözümü ve sayaçlar
 ok &= KupYonKontrol.Calistir(assets); // Gizli Küp: oyuncunun yeri, küpe pusula yönü ve mesafe
 ok &= TakvimKontrol.Calistir(); // Etkinlik takvimi: bölge saatleri, yaz saati, giriş penceresi
@@ -1540,6 +1542,192 @@ void RecentDpsChecks()
         hepsi &= DpsEgilimi.Hesapla(1, 200_000, 100_000, on, true) == 0;
         hepsi &= DpsEgilimi.Hesapla(0, null, 100_000, on, false) == 0 && DpsEgilimi.Hesapla(0, 50_000, 0, on, false) == 0;
         Check("anlık (d): histerezis %15 / %8, ilk 15 sn ve donmuşta ok yok", hepsi, iz);
+    }
+}
+
+// Anlık DPS oku: dövüşe geç giren oyuncu ve boss modu (ok satırdaki sayıyla aynı tabanda), detayın modu.
+void RecentDpsLateChecks()
+{
+    Console.WriteLine("[anlık DPS oku: geç giren, boss modu]");
+    const int me = 500, friend = 600, boss = 900, trash = 950;
+    const int catalogNpc = 2300708;
+    DamageEvent H(int src, DateTime at, int target, long amount, int skill = 11010000) => new(at, src, target, amount, false, SkillId: skill);
+    PlayerDamage? P(MeterSnapshot s, int id) => s.Players.FirstOrDefault(p => p.Id == id);
+    bool Near(double a, double b) => Math.Abs(a - b) <= Math.Max(1e-6, Math.Abs(b) * 1e-9);
+
+    (Aion2MeterEngine E, Aion2EntityDirectory D) Party()
+    {
+        var (e, d, _) = New();
+        d.SetLocalCharacter(new Aion2CharacterInfo(me, "Ben", 6, 50, DateTime.Now));
+        d.NoteClass(me, "Gladiator");
+        d.Register(friend, "Arkadas"); d.NoteClass(friend, "Ranger");
+        d.NoteParty(new[] { "Ben", "Arkadas" }, DateTime.Now);
+        return (e, d);
+    }
+
+    // (e) Ben 0-80 sn 10.000/sn; arkadaş 40. sn'de giriyor, sabit 20.000/sn. Eskiden pencere dövüş başından ve 15 sn eşiği dövüş süresine
+    //     bağlıydı: 41-50 sn arası ok ▼ çıkıyordu. Şimdi pencere arkadaşın ilk vuruşundan, eşik onun kendi aktif süresinden: hiç ok yok.
+    {
+        var (e, _) = Party();
+        DateTime t0 = DateTime.Now.AddSeconds(-200);
+        int ok = 0, okluAn = -1;
+        string iz = "";
+        for (int i = 0; i <= 80; i++)
+        {
+            e.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000));
+            if (i >= 40) { e.InjectHit(H(friend, t0.AddSeconds(i), trash, 20_000, 13010000)); }
+            MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(i + 0.5));
+            if (P(s, friend) is not { } f) { continue; }
+            ok = DpsEgilimi.Hesapla(ok, f.SonDps, f.Dps, f.Aktif, s.FightOver);
+            if (ok != 0 && okluAn < 0) { okluAn = i; iz = $"{i} sn: son {f.SonDps:N0}, ort. {f.Dps:N0}, aktif {f.Aktif.TotalSeconds:0.0} sn"; }
+        }
+
+        Check("anlık (e): 40. sn'de giren sabit DPS'li oyuncuda hiçbir anda ok yok", okluAn < 0, okluAn < 0 ? "ok hiç çıkmadı" : iz);
+
+        var (e2, _) = Party();
+        for (int i = 0; i <= 45; i++)
+        {
+            e2.InjectHit(H(me, t0.AddSeconds(i), trash, 10_000));
+            if (i >= 40) { e2.InjectHit(H(friend, t0.AddSeconds(i), trash, 20_000, 13010000)); }
+        }
+
+        MeterSnapshot k = e2.SnapshotAt(t0.AddSeconds(45.5));
+        Check("anlık (e): 45,5 sn'de son DPS pencere ilk vuruştan (40-44: 20.000, katılmadığı saniyeler sayılmaz), aktif < 15 sn",
+            P(k, friend) is { SonDps: double son } kf && Near(son, 20_000) && kf.Aktif < DpsEgilimi.EnAzSure
+            && DpsEgilimi.Hesapla(0, kf.SonDps, kf.Dps, kf.Aktif, k.FightOver) == 0
+            && DpsEgilimi.Hesapla(0, kf.SonDps * 0.5, kf.Dps, k.FightDuration, k.FightOver) == -1, // eski eşik (dövüş süresi) ▼ verirdi
+            $"son {P(k, friend)?.SonDps:N1}, aktif {P(k, friend)?.Aktif.TotalSeconds:0.0} sn, dövüş {k.FightDuration.TotalSeconds:0.0} sn");
+
+        Check("anlık (e): saf hesap: ilk vuruş kovasından önce null, sonra yalnız kendi kovaları",
+            Aion2MeterEngine.RecentDps(new long[] { 0, 0, 0, 5_000, 5_000 }, 1, 3.5, 3.0) is null
+            && Aion2MeterEngine.RecentDps(new long[] { 0, 0, 0, 5_000, 5_000, 1 }, 1, 5.5, 3.0) is double v && Near(v, 5_000),
+            $"{Aion2MeterEngine.RecentDps(new long[] { 0, 0, 0, 5_000, 5_000, 1 }, 1, 5.5, 3.0):N1}");
+    }
+
+    // (f) Boss modu: ben boss'a sabit 100.000/sn; 30-39 sn yanında çöpe 200.000/sn. Genel son DPS ▲ ama satırdaki sayı boss/sn: boss oku yok.
+    //     40-49 sn boss'a 20.000/sn: boss oku ▼. Arkadaş boss'a 25. sn'de giriyor, sabit 300.000/sn: onda boss oku hiç yok.
+    {
+        var (e, d) = Party();
+        d.RegisterNpc(boss, catalogNpc);
+        DateTime t0 = DateTime.Now.AddSeconds(-50); // son vuruş şimdiye yakın: detay (canlı deneme) aşağıda DateTime.Now ile okunur
+        d.HitPoints.Note(boss, t0.AddSeconds(-1), 1_000_000_000);
+        long hp = 1_000_000_000;
+        int okArkadas = 0, okluAn = -1;
+        MeterSnapshot? s40 = null;
+        for (int i = 0; i <= 49; i++)
+        {
+            long bana = i < 40 ? 100_000 : 20_000;
+            e.InjectHit(H(me, t0.AddSeconds(i), boss, bana)); hp -= bana;
+            if (i is >= 30 and < 40) { e.InjectHit(H(me, t0.AddSeconds(i), trash, 200_000)); }
+            if (i >= 25) { e.InjectHit(H(friend, t0.AddSeconds(i), boss, 300_000, 13010000)); hp -= 300_000; }
+            d.HitPoints.Note(boss, t0.AddSeconds(i), hp);
+            MeterSnapshot s = e.SnapshotAt(t0.AddSeconds(i + 0.5));
+            if (i == 39) { s40 = s; }
+            if (P(s, friend) is { } f)
+            {
+                okArkadas = DpsEgilimi.Hesapla(okArkadas, f.SonBossDps, f.BossDps, f.BossAktif, s.FightOver);
+                if (okArkadas != 0 && okluAn < 0) { okluAn = i; }
+            }
+        }
+
+        PlayerDamage? m40 = s40 is null ? null : P(s40, me);
+        Check("anlık (f): çöpe vururken genel ok ▲, boss/sn sabit: boss oku yok (son boss DPS = 100.000)",
+            s40?.Boss?.Id == boss && m40 is { SonBossDps: double sb } && Near(sb, 100_000)
+            && DpsEgilimi.Hesapla(0, m40.SonDps, m40.Dps, m40.Aktif, false) == 1
+            && DpsEgilimi.Hesapla(0, m40.SonBossDps, m40.BossDps, m40.BossAktif, false) == 0,
+            $"son {m40?.SonDps:N0} / ort. {m40?.Dps:N0}; boss son {m40?.SonBossDps:N0} / boss ort. {m40?.BossDps:N0}");
+
+        MeterSnapshot s50 = e.SnapshotAt(t0.AddSeconds(50));
+        PlayerDamage? m50 = P(s50, me);
+        Check("anlık (f): boss'a vuruş düşünce boss oku ▼ (son 10 sn 20.000/sn)",
+            m50 is { SonBossDps: double sb2 } && Near(sb2, 20_000) && DpsEgilimi.Hesapla(0, m50.SonBossDps, m50.BossDps, m50.BossAktif, false) == -1,
+            $"boss son {m50?.SonBossDps:N0} / boss ort. {m50?.BossDps:N0}");
+        Check("anlık (f): boss'a 25. sn'de giren sabit DPS'li arkadaşta boss oku hiç yok", okluAn < 0, okluAn < 0 ? "yok" : okluAn + ". sn'de çıktı");
+
+        // D7: detay overlay'in modunu izler: boss modunda bossa vurulan, değilse bütün hedeflere (başlık, Toplam ve Aktif aynı kaynaktan).
+        PlayerDetail? db = e.Detail(me, bossModu: true), dg = e.Detail(me, bossModu: false);
+        MeterSnapshot sn = e.SnapshotAt(DateTime.Now);
+        Check("detay: overlay boss modundaysa toplam boss'a vurulan, değilse bütün hedeflere",
+            db is { Total: var tb } && dg is { Total: var tg } && P(sn, me) is { } pm && tb == pm.BossTotal && tg == pm.Total && tg > tb,
+            $"boss {db?.Total:N0} / genel {dg?.Total:N0}");
+    }
+}
+
+// Overlay'in yeri (OverlayYeri): 5 açılış-kapanışta konum değişmez (100 % ve 150 % DPI, ekranın sol ve sağ yarısı); sabit kenar bırakılırken
+// bir kez seçilir; içeri itilen pencere küçülünce bırakıldığı yere döner; eski ayar dosyası (yalnız X/Y) okunur.
+void OverlayYeriChecks()
+{
+    Console.WriteLine("[overlay yeri]");
+    var alan = new System.Drawing.Rectangle(0, 0, 1920, 1040);
+    System.Drawing.Size Bo(int w, int h) => new(w, h);
+
+    foreach (float dpi in new[] { 1f, 1.5f })
+    {
+        int P(int v) => (int)MathF.Round(v * dpi);
+        foreach (bool sagYari in new[] { false, true })
+        {
+            // Kullanıcı pencereyi bırakıyor (boş overlay, P(300) genişlik).
+            var birakilan = new System.Drawing.Rectangle(sagYari ? 1920 - 60 - P(300) : 60, 200, P(300), P(140));
+            var yer = OverlayYeri.Birak(birakilan, alan);
+            // Ayar dosyası (Ayarlar.Kaydet / Yukle ile aynı alanlar)
+            int x = yer.Referans.Left, y = yer.Referans.Top, sag = yer.Referans.Right, yuk = yer.Referans.Height;
+            bool? sabit = yer.SagaSabit;
+            var izler = new List<string>();
+            bool ayni = true, kenar = true;
+            List<System.Drawing.Rectangle>? ilk = null;
+            for (int dongu = 0; dongu < 5; dongu++)
+            {
+                var acilan = OverlayYeri.Oku(x, y, sag, yuk, sabit, 300, alan)!.Value;
+                // Açılış: mantıksal genişlik henüz ölçeksiz (300) → ölçekli boş overlay → dövüş (geniş, uzun) → sıfırlama (boş).
+                var adimlar = new[] { Bo(300, 140), Bo(P(300), P(140)), Bo(P(520), P(330)), Bo(P(300), P(140)) }
+                    .Select(b => acilan.Yerlestir(b, alan)).ToList();
+                foreach (var a in adimlar)
+                {
+                    kenar &= sagYari ? a.Right == birakilan.Right : a.Left == birakilan.Left;
+                }
+
+                ilk ??= adimlar;
+                ayni &= adimlar.SequenceEqual(ilk);
+                izler.Add(string.Join(" ", adimlar.Select(a => $"{a.Left}..{a.Right}")));
+                // Kapanış (ve OnLoad'daki kayıt): referans yazılır, pencerenin o anki yeri değil.
+                (x, y, sag, yuk, sabit) = (acilan.Referans.Left, acilan.Referans.Top, acilan.Referans.Right, acilan.Referans.Height, acilan.SagaSabit);
+            }
+
+            Check($"yer: %{dpi * 100:0} DPI, {(sagYari ? "sağ" : "sol")} yarı: 5 açılış-kapanışta konum değişmez, {(sagYari ? "sağ" : "sol")} kenar sabit",
+                ayni && kenar && sabit == sagYari && x == birakilan.Left && y == birakilan.Top, izler[0] + " | son: " + izler[^1]);
+        }
+    }
+
+    // D4: sağa sabit, ortası ekran ortasının biraz sağında. Büyüyünce ortası sola geçer; küçülünce yine sağ kenar sabit (eskiden sol kenar sabitlenip kayardı).
+    {
+        var yer = OverlayYeri.Birak(new System.Drawing.Rectangle(1000, 200, 300, 150), alan);
+        var buyuk = yer.Yerlestir(Bo(1200, 300), alan);
+        var kucuk = yer.Yerlestir(Bo(300, 150), alan);
+        Check("yer: sabit kenar bırakılınca seçilir; büyürken ortası ekran ortasını geçse de küçülünce aynı yere döner",
+            yer.SagaSabit && buyuk.Right == 1300 && buyuk.Left + buyuk.Width / 2 < 960 && kucuk == new System.Drawing.Rectangle(1000, 200, 300, 150),
+            $"büyük {buyuk}, küçük {kucuk}");
+    }
+
+    // D5: alt kenar içerideyken büyüyünce yukarı itilir, küçülünce bırakıldığı yere iner; kullanıcı kısmen dışarı koyduysa dokunulmaz.
+    {
+        var yer = OverlayYeri.Birak(new System.Drawing.Rectangle(100, 900, 300, 120), alan);
+        var buyuk = yer.Yerlestir(Bo(300, 400), alan);
+        var kucuk = yer.Yerlestir(Bo(300, 120), alan);
+        var disari = OverlayYeri.Birak(new System.Drawing.Rectangle(100, 1000, 300, 120), alan).Yerlestir(Bo(300, 400), alan);
+        var solTasma = OverlayYeri.Birak(new System.Drawing.Rectangle(1700, 100, 200, 120), alan).Yerlestir(Bo(2000, 120), alan);
+        Check("yer: büyürken alt kenar taşmaz, küçülünce bırakıldığı yere döner; kullanıcının dışarı koyduğu kenara dokunulmaz",
+            buyuk.Top == 640 && buyuk.Bottom == 1040 && kucuk.Top == 900 && disari.Top == 1000 && solTasma.Left == 0,
+            $"büyük {buyuk}, küçük {kucuk}, dışarı {disari}, sol {solTasma}");
+    }
+
+    // Eski ayar dosyası (yalnız X/Y; Sag/Sabit yok): eski davranış (X/Y sol üst, sabit kenar ortaya göre); ilk kayıttan sonra sabit kalır.
+    {
+        var eski = OverlayYeri.Oku(1500, 200, int.MinValue, 140, null, 300, alan);
+        var yeni = eski is { } e1 ? OverlayYeri.Oku(e1.Referans.Left, e1.Referans.Top, e1.Referans.Right, e1.Referans.Height, e1.SagaSabit, 300, alan) : null;
+        Check("yer: eski ayar dosyası okunur (X/Y sol üst, sağ yarıda sağa sabit); yeni anahtarlarla geri okunuşu aynı; konum yoksa null",
+            eski is { SagaSabit: true } e && e.Referans == new System.Drawing.Rectangle(1500, 200, 300, 140) && yeni == eski
+            && OverlayYeri.Oku(int.MinValue, int.MinValue, int.MinValue, 0, null, 300, alan) is null,
+            $"{eski} → {yeni}");
     }
 }
 

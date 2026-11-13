@@ -172,7 +172,7 @@ internal sealed class DemoEngine : IMeterEngine
         return sonuc;
     }
 
-    public PlayerDetail? Detail(long playerId)
+    public PlayerDetail? Detail(long playerId, bool? bossModu = null)
     {
         lock (_kilit)
         {
@@ -185,8 +185,9 @@ internal sealed class DemoEngine : IMeterEngine
             double bitis = _bossOldu ? _olumZamani : t;
             double sure = Math.Max(0, bitis - _dovusBaslangic);
             var aktif = TimeSpan.FromSeconds(Math.Max(0, sure - o.SessizSure));
-            // Gerçek motor gibi: boss varken (demoda her zaman) toplam ve beceriler bossa vurulandan; grafik bütün hasardan.
-            long toplam = (long)o.BossToplam;
+            // Gerçek motor gibi: boss modunda (demoda boss hep var; overlay /sn'ye geçtiyse değil) toplam ve beceriler bossa vurulandan;
+            // grafik bütün hasardan.
+            long toplam = bossModu == false ? (long)o.Toplam : (long)o.BossToplam;
             double kritikOrani = 0.18 + 0.04 * (o.Id % 4);
 
             DemoBeceri[] adlar = o.Sinif is not null && _sinifBecerileri.TryGetValue(o.Sinif, out var a) ? a : _genelBeceriler;
@@ -266,8 +267,10 @@ internal sealed class DemoEngine : IMeterEngine
                     for (int i = ilk; i <= sonKova && i < o.Kovalar.Count; i++) top += o.Kovalar[i];
                     son = top / (double)(sonKova - ilk + 1);
                 }
+                // Demo: paydalar dövüş süresi; bossa son 10 sn toplamdaki boss payıyla (ok boss modunda da görünsün).
+                double? sonBoss = son is double sd && o.Toplam > 0 ? sd * (o.BossToplam / o.Toplam) : null;
                 liste.Add(new PlayerDamage(o.Id, o.Ad, toplam, toplam / sn, o.Yerel, o.Sinif, o.Cp, o.BossToplam / sn,
-                    (long)o.BossToplam, olum, son));
+                    (long)o.BossToplam, olum, son, sure, sonBoss, sure));
                 if (o.Yerel) yerelAd = o.Ad;
             }
             liste.Sort(static (a, b) => b.Total.CompareTo(a.Total));
@@ -383,7 +386,7 @@ internal sealed class HataliMotor(string mesaj) : IMeterEngine
     private readonly MeterSnapshot _anlik = new(EngineState.Failed, mesaj, Array.Empty<PlayerDamage>(), null, TimeSpan.Zero);
     public void Start() { }
     public MeterSnapshot Snapshot() => _anlik;
-    public PlayerDetail? Detail(long playerId) => null;
+    public PlayerDetail? Detail(long playerId, bool? bossModu = null) => null;
     public void Reset() { }
     public void YerelAdAyarla(string? ad) { }
     public void Dispose() { }

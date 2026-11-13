@@ -12,9 +12,15 @@ namespace AionMeter;
 /// Boss varken overlay Toplam ve Pay %'yi bundan hesaplar (kullanıcı kararı: DPS, Toplam, Pay aynı hedeften).</param>
 /// <param name="Olum">Bu denemede oyuncunun kaç kez öldüğü (protokolden kesin bilinen ölümler); bilinmiyorsa 0.</param>
 /// <param name="SonDps">Son ~10 sn'deki DPS (bütün hedeflere; tamamlanmış saniyelik kovalardan, boşta geçen saniyeler 0). Aynı tabanlı
-/// <see cref="Dps"/> ile karşılaştırılır (anlık DPS oku, <see cref="DpsEgilimi"/>). Dövüş bitmişse ya da kova yoksa null.</param>
+/// <see cref="Dps"/> ile karşılaştırılır (anlık DPS oku, <see cref="DpsEgilimi"/>). Pencere oyuncunun ilk vuruşundan önce başlamaz.
+/// Dövüş bitmişse ya da kova yoksa null.</param>
+/// <param name="Aktif">Oyuncunun kendi aktif süresi (<see cref="Dps"/> paydası). Anlık DPS oku ilk 15 sn'de buna göre gizlenir.</param>
+/// <param name="SonBossDps">Son ~10 sn'de bossa (boss kümesine) vurulan DPS: <see cref="BossDps"/> ile karşılaştırılır (boss modunda ok).
+/// Pencere oyuncunun bossa ilk vuruşundan önce başlamaz. Boss yoksa, dövüş bitmişse ya da oyuncu bossa vurmadıysa null.</param>
+/// <param name="BossAktif">Oyuncunun bossa vurduğu aktif süre (<see cref="BossDps"/> paydası).</param>
 public sealed record PlayerDamage(long Id, string Name, long Total, double Dps, bool IsLocal, string? ClassName = null, int? CombatPower = null,
-    double BossDps = 0, long BossTotal = 0, int Olum = 0, double? SonDps = null);
+    double BossDps = 0, long BossTotal = 0, int Olum = 0, double? SonDps = null, TimeSpan Aktif = default, double? SonBossDps = null,
+    TimeSpan BossAktif = default);
 
 /// <summary>Takip edilen boss. Max bilinmiyorsa 0'dır.</summary>
 /// <param name="TimeToKill">Kalan can ÷ son 30 sn'deki takım hasarının bossa DPS'i; tahmin edilemiyorsa null.</param>
@@ -94,7 +100,9 @@ public interface IMeterEngine : IDisposable
     MeterSnapshot Snapshot();
 
     /// <summary>Mevcut dövüşte bu oyuncunun detayı; yoksa null. Sadece detay paneli açıkken çağrılır.</summary>
-    PlayerDetail? Detail(long playerId);
+    /// <param name="bossModu">Overlay satırı boss modunda mı (true: toplam, DPS, aktif süre ve beceriler bossa vurulandan; false: bütün
+    /// hedeflere). Detay satırla aynı kaynaktan olsun diye overlay verir; null: motor kendi karar verir (boss varsa boss).</param>
+    PlayerDetail? Detail(long playerId, bool? bossModu = null);
 
     /// <summary>Mevcut dövüşün hasar tablosunu sıfırlar.</summary>
     void Reset();

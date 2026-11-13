@@ -149,21 +149,41 @@ internal sealed class KupAfisi : KatmanPencere
     }
 
     /// <summary>
-    /// Her okumada (~5 Hz): küp hâlâ yakında mı, yön/mesafe ne. Yalnız değer değişince yeniden çizer. Küp gidince çip söner;
-    /// sönerken geri gelirse tam görünür kalır.
+    /// Yeni küp duyuruldu ama oyun önde değil / özel tam ekranda: afiş gösterilmez (ses çaldı). Küp yakında kaldıkça oyun öne dönünce
+    /// <see cref="CipBekliyor"/> ile yalnız çip gelir (afiş ve ses tekrarlanmaz).
     /// </summary>
-    public void Guncelle(KupYonu? yon, bool menzilde)
+    public void Ertele(KupYonu? yon, bool menzilde)
+    {
+        Kapat();
+        _cipIstegi = true;
+        _menzilde = menzilde;
+        _yon = yon;
+    }
+
+    /// <summary>
+    /// Her okumada (~5 Hz): küp hâlâ yakında mı, yön/mesafe ne. Yalnız değer değişince yeniden çizer. Küp gidince çip söner;
+    /// sönerken geri gelirse tam görünür kalır. <paramref name="hedef"/>: oyun penceresinin şimdiki alanı (biliniyorsa); oyun penceresi
+    /// taşınınca ya da boyutu değişince afiş/çip yeni alanın ortasına geçer.
+    /// </summary>
+    public void Guncelle(KupYonu? yon, bool menzilde, Rectangle? hedef = null)
     {
         _menzilde = menzilde;
         try
         {
+            bool yerDegisti = false;
+            if (_evre != Evre.Kapali && hedef is Rectangle h && h != _sonEkran)
+            {
+                _sonEkran = h;
+                _sonOlcek = Olcek(h);
+                yerDegisti = true; // afiş: aşağıda yeniden yerleşir; çip: CipCiz (Hazirla) yeni alana taşır; geçiş: bitince çip yeni alanda
+            }
             switch (_evre)
             {
                 case Evre.Kapali:
                     if (!menzilde) _cipIstegi = false; // küp gitti: oyun öne dönünce çip gelmesin
                     break;
                 case Evre.Afis:
-                    if (yon != _yon)
+                    if (yon != _yon || yerDegisti)
                     {
                         _yon = yon;
                         Yerlestir();
@@ -179,7 +199,11 @@ internal sealed class KupAfisi : KatmanPencere
                     UsteAl();
                     break;
                 case Evre.CipSonme:
-                    if (!menzilde) break;
+                    if (!menzilde)
+                    {
+                        if (yerDegisti) CipCiz(_yon); // sönerken de oyunla birlikte taşınır
+                        break;
+                    }
                     _zamanlayici.Stop();
                     _evre = Evre.Cip;
                     _cip?.Opaklik(255);

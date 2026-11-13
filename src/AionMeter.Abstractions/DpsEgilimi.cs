@@ -4,7 +4,9 @@ namespace AionMeter;
 /// Anlık DPS oku (overlay kullanır, denetim aracı dener): oyuncunun son ~10 sn'deki DPS'i (<see cref="PlayerDamage.SonDps"/>) kendi dövüş
 /// ortalamasından (<see cref="PlayerDamage.Dps"/>) belirgin yüksekse ▲ (+1), belirgin düşükse ▼ (−1), değilse ok yok (0).
 /// Histerezis: ok %15 farkla çıkar, fark %8'in altına inince kalkar; sınırda gidip gelirken titremez.
-/// İlk 15 sn'de (ortalama henüz oturmadı) ve dövüş bitmişken ok yok.
+/// Oyuncunun kendi aktif süresinin ilk 15 sn'sinde (ortalama henüz oturmadı; dövüşe geç giren için de kendi ilk vuruşundan sayılır) ve
+/// dövüş bitmişken ok yok. Boss modunda aynı kural bossa vurulanla (<see cref="PlayerDamage.SonBossDps"/>, <see cref="PlayerDamage.BossDps"/>,
+/// <see cref="PlayerDamage.BossAktif"/>) uygulanır.
 /// </summary>
 public static class DpsEgilimi
 {
@@ -12,6 +14,7 @@ public static class DpsEgilimi
     public static readonly TimeSpan EnAzSure = TimeSpan.FromSeconds(15);
 
     /// <param name="simdi">Şu an gösterilen ok (−1, 0, +1).</param>
+    /// <param name="sure">Oyuncunun kendi aktif süresi (ortalamanın paydası).</param>
     public static int Hesapla(int simdi, double? sonDps, double ortalama, TimeSpan sure, bool bitti)
     {
         if (bitti || sure < EnAzSure || sonDps is not double son) return 0;

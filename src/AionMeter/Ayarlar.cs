@@ -17,10 +17,14 @@ internal sealed class Ayarlar
     public const int EnAzGenislik = 300;
     public const int EnFazlaGenislik = 800;
 
+    // Overlay'in yeri (OverlayYeri): kullanıcının bıraktığı dikdörtgen (X, Y, Sag, Y + Yukseklik) ve sabit kenar. Pencerenin o anki
+    // yeri değil: içeriğe göre büyüyüp küçülürken kayması kaydedilmez. Eski dosyada Sag/Sabit yoksa eski davranış (X/Y sol üst).
     public int X = int.MinValue;
     public int Y = int.MinValue;
+    public int Sag = int.MinValue;
+    public bool? SagaSabit;        // null = eski dosya (Sabit anahtarı yok)
     public int Genislik = VarsayilanGenislik;
-    public int Yukseklik;          // bilgi amaçlı (son çizilen yükseklik)
+    public int Yukseklik;          // bırakıldığı andaki yükseklik
     public bool Kilitli;
     public int Opaklik = 90;       // yüzde, 30..100
     public bool IlkAcilis = true;  // dosya yoksa true
@@ -120,7 +124,7 @@ internal sealed class Ayarlar
     // Kaydet'in yazdığı anahtarlar. Dosyada bunların dışında kalan satırlar (ör. başka sürümün ayarı) aynen korunur.
     private static readonly HashSet<string> Bilinen = new(StringComparer.Ordinal)
     {
-        "X", "Y", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
+        "X", "Y", "Sag", "Sabit", "Genislik", "Yukseklik", "Opaklik", "Kilitli", "SadeceOyundayken", "OtomatikGuncelleme", "AltCeviri",
         "Boyut", "CevirmenDusukRam", "SavasDisi", "SolukOpaklik", "OfkeSesi", "YerelAd", "Tani", "SadeceBen", "YerelRenk",
         "YaziAd", "YaziDps", "YaziBoss", "CubukOpaklik", "KuklaSure", "KuklaOzel", "KuklaOzelSure", "AlarmSes", "AlarmDk",
         "KuklaKisayol", "KupSesi", "KupSes", "Zamanlayici", "Bolge", "ZamanlayiciX", "ZamanlayiciY", "PingUyari", "PingEsik",
@@ -156,6 +160,9 @@ internal sealed class Ayarlar
                 {
                     case "X" when sayi: a.X = n; break;
                     case "Y" when sayi: a.Y = n; break;
+                    case "Sag" when sayi: a.Sag = n; break;
+                    case "Sabit": a.SagaSabit = deger.Equals("sag", StringComparison.OrdinalIgnoreCase) ? true
+                        : deger.Equals("sol", StringComparison.OrdinalIgnoreCase) ? false : null; break;
                     case "Genislik" when sayi: a.Genislik = Math.Clamp(n, EnAzGenislik, EnFazlaGenislik); break;
                     case "Yukseklik" when sayi: a.Yukseklik = n; break;
                     case "Opaklik" when sayi: a.Opaklik = Math.Clamp(n, 30, 100); break;
@@ -238,6 +245,8 @@ internal sealed class Ayarlar
                 "; AionMeter ayarları. Konum fiziksel piksel, Genislik 96 DPI ve %100 boyutta piksel, Opaklik ve Boyut yüzde." + Environment.NewLine +
                 "X=" + X.ToString(inv) + Environment.NewLine +
                 "Y=" + Y.ToString(inv) + Environment.NewLine +
+                (Sag != int.MinValue ? "Sag=" + Sag.ToString(inv) + Environment.NewLine : "") +
+                (SagaSabit is bool sabit ? "Sabit=" + (sabit ? "sag" : "sol") + Environment.NewLine : "") +
                 "Genislik=" + Genislik.ToString(inv) + Environment.NewLine +
                 "Yukseklik=" + Yukseklik.ToString(inv) + Environment.NewLine +
                 "Opaklik=" + Opaklik.ToString(inv) + Environment.NewLine +

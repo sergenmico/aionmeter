@@ -254,6 +254,7 @@ internal sealed class OverlayForm : Form
     private bool _surukle, _kenardan, _tasindi;
     private Point _fareBas, _konumBas;
     private int _genislikBas;
+    private OverlayYeri _yer; // kullanıcının bıraktığı yer ve sabit kenar: boyut değişince pencere buna göre kurulur (BoyutAyarla)
 
     public OverlayForm(IMeterEngine motor, Ayarlar ayar, bool demo)
     {
@@ -284,7 +285,8 @@ internal sealed class OverlayForm : Form
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 
-        Bounds = BaslangicKonumu();
+        _yer = BaslangicYeri();
+        Bounds = _yer.Referans;
         IpucuGuncelle();
 
         _zamanlayici = new System.Windows.Forms.Timer { Interval = 200 }; // 5 Hz motor okuma
@@ -924,8 +926,11 @@ internal sealed class OverlayForm : Form
         }
         else if (_kupAfisi is not null)
         {
-            _kupAfisi.Guncelle(yon, menzilde); // yön/mesafe canlı (değişince çizilir); küp gidince çip söner
-            if (_kupAfisi.CipBekliyor && KupHedefi(out var hedef)) _kupAfisi.CipGoster(hedef, yon); // oyun öne döndü, küp hâlâ yakında
+            // Oyun penceresinin şimdiki alanı yalnız afiş/çip görünürken ya da çip beklerken sorulur (oyun taşınınca çip de taşınır).
+            var hedef = Rectangle.Empty;
+            bool hedefVar = (_kupAfisi.Gorunur || _kupAfisi.CipBekliyor) && KupHedefi(out hedef);
+            _kupAfisi.Guncelle(yon, menzilde, hedefVar ? hedef : null); // yön/mesafe canlı (değişince çizilir); küp gidince çip söner
+            if (_kupAfisi.CipBekliyor && hedefVar) _kupAfisi.CipGoster(hedef, yon); // oyun öne döndü, küp hâlâ yakında
         }
         _kupGelisSon = gelis;
     }
@@ -955,9 +960,10 @@ internal sealed class OverlayForm : Form
     {
         try
         {
-            if (!KupHedefi(out var hedef)) return;
             _kupAfisi ??= new KupAfisi();
-            _kupAfisi.Goster(hedef, yon, menzilde);
+            // Oyun arkada / özel tam ekranda: afiş yok (ses çaldı), ama çip isteği kurulur ki oyun öne dönünce küp yakındaysa çip gelsin.
+            if (!KupHedefi(out var hedef)) _kupAfisi.Ertele(yon, menzilde);
+            else _kupAfisi.Goster(hedef, yon, menzilde);
         }
         catch (Exception ex)
         {
@@ -1323,10 +1329,13 @@ internal sealed class OverlayForm : Form
                 // Akan değerler: kesin metinle aynı sayılar (Bicim.Sayi yuvarlar, Bicim.Oran yüzde × 100)
                 AkisHedefle(m, DpsHedef(bossModu ? p.BossDps : p.Dps), bossModu ? DpsHedef(p.Dps) : 0, t,
                     partiToplam > 0 ? (double)t / partiToplam * 100.0 : 0, partiToplam > 0, yuva, ani, simdi);
-                // Anlık DPS oku: son ~10 sn'nin DPS'i oyuncunun kendi ortalamasına göre (ikisi de bütün hedeflere: aynı taban).
+                // Anlık DPS oku: son ~10 sn'nin DPS'i oyuncunun kendi ortalamasına göre, satırdaki sayıyla aynı tabanda (boss modunda bossa
+                // vurulan, değilse bütün hedeflere); ilk 15 sn oyuncunun kendi aktif süresinden sayılır (geç giren de yanlış ▼ görmez).
                 // Aynı oyuncu iki satırda (sabit üst + sıralı) olsa da sonuç aynıdır (Hesapla kendi çıktısıyla yeniden çağrılınca değişmez).
                 var ak = m.A!;
-                ak.Ok = DpsEgilimi.Hesapla(ak.Ok, p.SonDps, p.Dps, s.FightDuration, s.FightOver);
+                ak.Ok = bossModu
+                    ? DpsEgilimi.Hesapla(ak.Ok, p.SonBossDps, p.BossDps, p.BossAktif, s.FightOver)
+                    : DpsEgilimi.Hesapla(ak.Ok, p.SonDps, p.Dps, p.Aktif, s.FightOver);
                 m.Ok = ak.Ok;
             }
             _satirSayisi = n;
@@ -2206,7 +2215,7 @@ internal sealed class OverlayForm : Form
         _altEkW = 0;
         if (ek > 0)
         {
-            int taban = Math.Max(_icerikW, P(_ayar.Genislik));
+            int taban = Math.Clamp(Math.Max(_icerikW, P(_ayar.Genislik)), P(Ayarlar.EnAzGenislik), P(Ayarlar.EnFazlaGenislik)); // IstenenGenislik'in sınırları
             int tam = altTemel + ek;
             if (tam > taban && _partiEtiketW > 0 && _partiDegerW > 0)
             {
@@ -2310,26 +2319,23 @@ internal sealed class OverlayForm : Form
     }
 
     /// <summary>
-    /// Pencereyi içeriğe göre boyutlar. Overlay ekranın sağ yarısındaysa sağ kenarı sabit kalır (sola büyür/küçülür), sol yarısındaysa
-    /// sol kenarı. Büyürken çalışma alanının içindeki bir kenar dışarı taşmaz (pencere içeri itilir); kullanıcının kendisi kısmen dışarı
-    /// koyduğu kenara dokunulmaz. solSabit: kullanıcı sağ kenardan sürükleyerek genişletiyor (sol kenar yerinde kalmalı).
+    /// Pencereyi içeriğe göre boyutlar; yeri her seferinde kullanıcının bıraktığı yerden (<see cref="_yer"/>) kurulur: sağa sabitse sağ kenarı
+    /// yerinde kalır (sola büyür/küçülür), değilse sol kenarı. Büyürken çalışma alanının içindeki bir kenar dışarı taşmaz (pencere içeri
+    /// itilir), küçülünce bırakıldığı yere döner; kullanıcının kendisi kısmen dışarı koyduğu kenara dokunulmaz (OverlayYeri.Yerlestir).
     /// </summary>
-    private void BoyutAyarla(bool solSabit = false)
+    private void BoyutAyarla()
     {
         if (!IsHandleCreated) return;
         var yeni = new Size(IstenenGenislik(), HesaplaYukseklik());
-        if (Size == yeni) return;
         var eski = Bounds;
-        var alan = Screen.FromRectangle(eski).WorkingArea;
-        bool sagda = !solSabit && eski.Left + eski.Width / 2 > alan.Left + alan.Width / 2;
-        int x = sagda ? eski.Right - yeni.Width : eski.Left, y = eski.Top;
-        if (x + yeni.Width > alan.Right && eski.Right <= alan.Right) x = alan.Right - yeni.Width;
-        if (x < alan.Left && eski.Left >= alan.Left) x = alan.Left;
-        if (y + yeni.Height > alan.Bottom && eski.Bottom <= alan.Bottom) y = Math.Max(alan.Top, alan.Bottom - yeni.Height);
-        var hedef = new Rectangle(x, y, yeni.Width, yeni.Height);
+        var hedef = _yer.Yerlestir(yeni, Screen.FromRectangle(_yer.Referans).WorkingArea);
+        if (hedef == eski) return;
         if (hedef.Location == eski.Location) Size = yeni; // WinForms SetWindowPos'u SWP_NOACTIVATE ile çağırır
         else Bounds = hedef;                              // tek SetWindowPos (taşıma + boyut), yine etkinleştirmeden
     }
+
+    /// <summary>Kullanıcı pencereyi bıraktı ya da pencere ekrana geri alındı: şimdiki yer yeni referans, sabit kenar bir kez seçilir.</summary>
+    private void YerBirak() => _yer = OverlayYeri.Birak(Bounds, Screen.FromRectangle(Bounds).WorkingArea);
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
@@ -2339,16 +2345,16 @@ internal sealed class OverlayForm : Form
         Invalidate();
     }
 
-    private Rectangle BaslangicKonumu()
+    /// <summary>Kaydedilen yer (kullanıcının bıraktığı dikdörtgen ve sabit kenarı) ekranda görünüyorsa o, değilse birincil ekranın sağ üstü.</summary>
+    private OverlayYeri BaslangicYeri()
     {
         var bolge = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
-        int w = _ayar.Genislik, h = Math.Max(120, _ayar.Yukseklik);
-        if (_ayar.X != int.MinValue && _ayar.Y != int.MinValue)
-        {
-            var r = new Rectangle(_ayar.X, _ayar.Y, w, h);
-            if (EkrandaGorunur(r)) return r;
-        }
-        return new Rectangle(bolge.Right - w - 40, bolge.Top + 160, w, h);
+        int w = _ayar.Genislik, h = _ayar.Yukseklik > 0 ? _ayar.Yukseklik : 120;
+        if (OverlayYeri.Oku(_ayar.X, _ayar.Y, _ayar.Sag, h, _ayar.SagaSabit, w, Screen.FromPoint(new Point(_ayar.X, _ayar.Y)).WorkingArea)
+            is { } kayitli && EkrandaGorunur(kayitli.Referans))
+            return kayitli;
+        var r = new Rectangle(bolge.Right - w - 40, bolge.Top + 160, w, h);
+        return OverlayYeri.Birak(r, bolge);
     }
 
     /// <summary>Pencerenin en az 40×20 pikseli bir ekranın çalışma alanında mı?</summary>
@@ -2372,6 +2378,7 @@ internal sealed class OverlayForm : Form
                 if (EkrandaGorunur(Bounds)) return;
                 var bolge = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
                 Location = new Point(bolge.Right - Width - 40, bolge.Top + 160);
+                YerBirak();
                 AyarKaydet();
             }
             catch (Exception ex) { HataLog.Yaz("Ekran değişikliği", ex); }
@@ -2821,13 +2828,15 @@ internal sealed class OverlayForm : Form
             if (yeni != _ayar.Genislik)
             {
                 _ayar.Genislik = yeni;
-                BoyutAyarla(solSabit: true); // sağ kenardan sürükleniyor: sol kenar yerinde
+                _yer = new OverlayYeri(Bounds, SagaSabit: false); // sağ kenardan sürükleniyor: sol kenar yerinde (bırakınca yeniden seçilir)
+                BoyutAyarla();
                 Invalidate();
             }
         }
         else
         {
             Location = new Point(_konumBas.X + dx, _konumBas.Y + dy);
+            _yer = _yer with { Referans = Bounds }; // sürüklerken boyut değişirse pencere fareyle birlikte kalır; sabit kenar bırakınca seçilir
         }
     }
 
@@ -2837,7 +2846,11 @@ internal sealed class OverlayForm : Form
         if (!_surukle) return;
         _surukle = false;
         Capture = false;
-        if (_tasindi) AyarKaydet();
+        if (_tasindi)
+        {
+            YerBirak(); // sabit kenar burada bir kez seçilir (büyürken ortası ekran ortasını geçse de değişmez)
+            AyarKaydet();
+        }
         else if (!_kenardan && e.Button == MouseButtons.Left && !OzelTiklama(e.Location)) SatiraTiklandi(e.Y);
     }
 
@@ -3256,9 +3269,13 @@ internal sealed class OverlayForm : Form
     private void AyarKaydet()
     {
         if (WindowState != FormWindowState.Normal) return;
-        _ayar.X = Left;
-        _ayar.Y = Top;
-        _ayar.Yukseklik = Height;
+        // Pencerenin o anki yeri değil, kullanıcının bıraktığı yer: içeriğe göre büyüyüp küçülürken kayması kaydedilmez (her açılışta kayma olmaz).
+        var r = _yer.Referans;
+        _ayar.X = r.Left;
+        _ayar.Y = r.Top;
+        _ayar.Sag = r.Right;
+        _ayar.Yukseklik = r.Height;
+        _ayar.SagaSabit = _yer.SagaSabit;
         _ayar.Kilitli = _kilitli;
         _ayar.Kaydet();
     }

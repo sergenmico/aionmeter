@@ -228,7 +228,7 @@ internal sealed class DetayForm : Form
     public void Yenile()
     {
         PlayerDetail? d = null;
-        try { d = _motor.Detail(OyuncuId); }
+        try { d = _motor.Detail(OyuncuId, BossModu?.Invoke()); } // satırla aynı mod: başlıktaki DPS, Toplam ve Aktif aynı kaynaktan
         catch (Exception ex) { HataLog.Yaz("Detay", ex); }
         var p = _oyuncuAl(OyuncuId);
 
@@ -238,9 +238,17 @@ internal sealed class DetayForm : Form
         int kovaSayisi = kovalar?.Count ?? -2;
         long kovaDeger = kovaSayisi > 0 ? kovalar![kovaSayisi - 1] : -2;
         int olum = p?.Olum ?? 0;
-        long dps = (long)Math.Round(BaslikDps(d, p)); // satırdaki sayı (gösterilen tam sayı) değişince de yeniden kurulur
+        long dps = (long)Math.Round(BaslikDps(d, p)); // satırdaki sayı (gösterilen tam sayı)
         if (toplam == _sonToplam && vurus == _sonVurus && aktif == _sonAktifSn && beceri == _sonBeceri &&
-            kovaSayisi == _sonKovaSayisi && kovaDeger == _sonKovaDeger && olum == _sonOlum && dps == _sonDps) return;
+            kovaSayisi == _sonKovaSayisi && kovaDeger == _sonKovaDeger && olum == _sonOlum)
+        {
+            // Beceri modeli aynı: satırdaki DPS değiştiyse yalnız başlıktaki metin yenilenir (tam model kurulmaz).
+            if (dps == _sonDps || d is null) return;
+            _sonDps = dps;
+            DpsMetniKur(d, p);
+            Invalidate();
+            return;
+        }
         _sonToplam = toplam; _sonVurus = vurus; _sonAktifSn = aktif; _sonBeceri = beceri;
         _sonKovaSayisi = kovaSayisi; _sonKovaDeger = kovaDeger; _sonOlum = olum; _sonDps = dps;
 
@@ -248,6 +256,18 @@ internal sealed class DetayForm : Form
         Yerlestir(_sonOverlay);
         Invalidate();
     }
+
+    /// <summary>Başlıktaki DPS metni ve ikinci satırın genişliği (panel yalnız büyür; sığmazsa yeniden yerleşir).</summary>
+    private void DpsMetniKur(PlayerDetail d, PlayerDamage? p)
+    {
+        _dps = Bicim.Dps(BaslikDps(d, p));
+        int ikinci = IkinciSatirW();
+        if (ikinci <= _icerikW) return;
+        _icerikW = ikinci;
+        Yerlestir(_sonOverlay);
+    }
+
+    private int IkinciSatirW() => 2 * Pad + _rBuyuk.Genislik(_dps) + P(14) + Olc(_ozet, _yaziKucuk);
 
     /// <summary>Overlay'in sağına sığıyorsa sağa, değilse soluna yerleşir; ekran dışına taşmaz.</summary>
     public void Yerlestir(Rectangle overlay)
@@ -329,7 +349,7 @@ internal sealed class DetayForm : Form
         int pad = Pad, b = Bosluk;
         int tablo = 2 * pad + _adSutunW + b + _hasarW + b + _payW + b + _vurusW + b + _kritikW + b + _maksW;
         int baslik = 2 * pad + _ikonlar.Boyut + P(8) + Math.Min(Olc(_ad, _yaziAd), P(200)) + P(10) + Olc(_cp, _yaziKucuk) + P(30);
-        int ikinci = 2 * pad + _rBuyuk.Genislik(_dps) + P(14) + Olc(_ozet, _yaziKucuk);
+        int ikinci = IkinciSatirW();
         int istat = 2 * pad + IstatSutun * (Olc("Perfect", _yaziKucuk) + P(10) + _rYazi.Genislik("9.999.999")) + (IstatSutun - 1) * P(20);
         _icerikW = Math.Max(_icerikW, Math.Max(Math.Max(tablo, istat), Math.Max(baslik, ikinci)));
     }
