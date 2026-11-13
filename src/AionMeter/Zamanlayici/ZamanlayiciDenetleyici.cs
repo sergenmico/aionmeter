@@ -255,20 +255,23 @@ internal sealed class ZamanlayiciDenetleyici : IDisposable
             DateTime sira;
             BossSatiri satir;
             string grup = s.Yer < 10_000 ? AbyssGrubu : s.Harita.Length > 0 ? s.Harita : "Diğer";
+            // Liste haritaya göre gruplu: "High Commander Lagta · Verteron" Verteron başlığının altında tekrar olur.
+            string ad = s.Harita.Length > 0 && s.GorunenAd.EndsWith(" · " + s.Harita, StringComparison.Ordinal)
+                ? s.GorunenAd[..^(s.Harita.Length + 3)] : s.GorunenAd;
             if (SahaBossDeposu.Belirsiz(s, utc))
             {
                 sira = DateTime.MaxValue; // en sonda
-                satir = new BossSatiri(s.GorunenAd, "canlı?", Palet.CokSoluk, Rakam: false, Soluk: true, Grup: grup);
+                satir = new BossSatiri(ad, "canlı?", Palet.CokSoluk, Rakam: false, Soluk: true, Grup: grup);
             }
             else if (!s.Canli && s.ZamanUtc != DateTime.MinValue && utc - s.ZamanUtc < EtkinlikTakvimi.BossSimdiSuresi)
             {
                 sira = s.ZamanUtc;
-                satir = BossSatir(s.GorunenAd, s.ZamanUtc, utc, grup);
+                satir = BossSatir(ad, s.ZamanUtc, utc, grup);
             }
             else
             {
                 sira = DateTime.MaxValue.AddTicks(-1); // takvimden sonra, belirsizlerden önce
-                satir = new BossSatiri(s.GorunenAd, "canlı", Palet.Yesil, Rakam: false, Canli: true, Grup: grup);
+                satir = new BossSatiri(ad, "canlı", Palet.Yesil, Rakam: false, Canli: true, Grup: grup);
             }
             if (!Var(tampon, satir)) tampon.Add((sira, satir)); // aynı haritadaki eş adlılar aynı durumdaysa tek satır
         }

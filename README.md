@@ -33,7 +33,7 @@ Her açılışta güncellemeleri kontrol eder ve kendini günceller.
 | `Alt` + saate tıkla | Alarm kur / kapat (overlay'in sağ alt köşesi) |
 
 Kilit açıkken pencereyi sürükleyebilir, satıra tıklayıp detayı açabilirsin. Sağ alttaki tepsi simgesinden de aynı menüye ulaşılır.
-Tepsi menüsünde ya da overlay'in kenarındaki küçük düğmede **Ayarlar…** (dört sekme: Genel, Görünüm, Uyarılar, Kukla): boyut (%70–%125), opaklık (kaydırırken canlı görünür), savaş dışında davranış, uyarılar, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
+Tepsi menüsünde **Ayarlar…** ya da overlay'in kenarındaki üç noktalı düğme (beş sekme: Genel, Görünüm, Uyarılar, Kukla, Bosslar): boyut (%70–%125), opaklık (kaydırırken canlı görünür), savaş dışında davranış, uyarılar, çevirmen ve güncelleme ayarları. **Güncellemeleri denetle** kapatıp açmadan yeni sürüme bakar.
 **Savaş dışında** (Ayarlar): bir canavara vurunca overlay tam görünür; savaş bitince ~8 sn sonra `Soluk` (varsayılan), `Gizle` ya da `Hep görünür`. Kilit açıkken de geçerlidir; fareyi overlay'in üstüne (`Gizle`'de eski yerine) getirince tam görünür, çekince ~1 sn sonra kurala döner. Kilitliyken `Alt` basılı tutup üstüne gel.
 Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapatılabilir).
 Çevirmen çevrimdışı çalışır; çeviri modeli bir kez indirilir (ilk `Ctrl+Alt+T`'de ya da Ayarlar'dan "Çeviri modeli: İndir").
@@ -45,8 +45,8 @@ Varsayılan olarak sadece oyun penceresi öndeyken görünür (Ayarlar'dan kapat
 - **Alarm**: `Alt` basılı tutup overlay'deki saate tıkla, süreyi seç (hazır 1 / 3 / 5 / 10 / 15 / 30 dk; ±1 dk ile 1–180 dk), Başlat. Süre dolunca kısa ve yumuşak bir ses, tepsi bildirimi; ses seviyesi Ayarlar'da.
 - **Gizli Küp** (Hidden Cube): yakına bir küp gelince kısa bir ses ve ekranın ortasında "Küp var" yazısı; yanında küpün yönü (harita kuzeyine göre) ve mesafesi. Birkaç saniye sonra yazı küçük bir çipe iner, küp menzildeyken kalır. Aynı küpün başında dururken tekrar çalmaz. Ayarlar → Uyarılar → Gizli Küp.
 - **Etkinlik geri sayımı**: Shugo Festival, Dimensional Invasion, Spacetime Rift, Arena of Tactics, takvimli bosslar (Watcher Kaira, Argo, Guardian Lord Nahma, kuşatma) ve günlük/haftalık sıfırlama başlamadan 10 dk önce ekranda geri sayılır; kilit açıkken paneli sürükleyip yerini değiştirebilirsin. Ayarlar → Uyarılar (sunucu bölgesi de orada).
-- **Boss zamanları** (tepsi menüsü ya da kenar düğmesi): bütün bossların doğmasına kalan süre. Saha bossları için oyunda haritayı (`M`) açıp saha bossu listesine bir kez bakman yeterli.
-- **Kenar düğmesi**: overlay kilitliyken de tıklanır; menüyü oyunun üstünde açar (Alt+Tab gerekmez).
+- **Boss zamanları** (Ayarlar → Bosslar; "Ekranda göster" ile oyunun üstünde taşınabilir liste): Abyss ve saha bossları haritaya göre gruplu, doğmasına kalan süreyle. Saha bossları için oyunda haritayı (`M`) açıp saha bossu listesine bir kez bakman yeterli.
+- **Kenar düğmesi** (⋮): overlay kilitliyken de tıklanır; Ayarlar'ı oyunun üstünde açar (Alt+Tab gerekmez).
 - **Gecikme uyarısı**: ping eşiği aşınca (varsayılan 250 ms) saatin solunda kırmızı ms yazar; normalken görünmez. Ayarlar → Uyarılar.
 - **Tablo**: partideyken yalnız parti, partisizken yalnız sen. DPS'in yanındaki küçük ▲/▼ son ~10 sn'nin kendi ortalamanın belirgin üstünde/altında olduğunu gösterir.
 
