@@ -6,8 +6,9 @@ namespace AionMeter;
 
 /// <summary>
 /// Tepsi "Ayarlar…": tek küçük koyu pencere, tamamen kodla çizilir (overlay ile aynı palet ve yazı tipleri).
-/// Üç sekme: Genel · Renk ve yazı · Kukla ve alarm. Her değişiklik anında uygulanır ve ayarlar.ini'ye yazılır;
-/// saydamlık, renkler ve yazı boyutları değiştirilirken overlay (ve açık detay paneli) canlı değişir.
+/// Dört sekme: Genel · Görünüm · Uyarılar · Kukla. Her değişiklik anında uygulanır ve ayarlar.ini'ye yazılır;
+/// opaklık, renkler ve yazı boyutları değiştirilirken overlay (ve açık detay paneli) canlı değişir.
+/// Pencere en uzun sekmenin boyundadır; %100'de ~560 px, %150 ölçekte de 1080p ekrana sığar.
 /// Pencere odak alabilir (Esc kapatır); kapanınca overlay odağı oyuna geri verir. Tanı kaydı burada yoktur.
 /// </summary>
 internal sealed class AyarlarFormu : Form
@@ -64,6 +65,7 @@ internal sealed class AyarlarFormu : Form
         public readonly Func<int> Secili = secili;
         public readonly Action<int> Sec = sec;
         public Rectangle[] Parcalar = Array.Empty<Rectangle>();
+        public bool IkiSatir;   // seçenekler etiketin yanına sığmadı: alt satırda
     }
     private sealed class Kaydirici(string etiket, int min, int max, Func<int> deger, Action<int> ayarla, Action bitti,
                                    Func<int, string>? yazi = null) : Oge
@@ -90,6 +92,7 @@ internal sealed class AyarlarFormu : Form
         public readonly string? Aciklama = aciklama;
         public readonly Func<string> Metin = metin;
         public readonly Action Tikla = tikla;
+        public bool Baslikta;   // satır değil, üstteki bölüm başlığının sağında küçük düğme
         public Rectangle Kutu;
     }
     /// <summary>Renk seçimi: sınıf (yarım genişlik, ikonlu) ya da kendi satır rengin. Kutuya tıklayınca palet açılır.</summary>
@@ -106,16 +109,16 @@ internal sealed class AyarlarFormu : Form
         public Rectangle Kutu;
     }
 
-    /// <summary>Kukla kısayolu: [Ctrl+Alt+K] [Değiştir] [Kapat]; altta ipucu ya da kırmızı uyarı.</summary>
+    /// <summary>Kukla kısayolu: [Ctrl+Alt+K] [Değiştir] [Kaldır]; altta ipucu ya da kırmızı uyarı.</summary>
     private sealed class KisayolSatiri : Oge
     {
-        public Rectangle Deger, Degistir, Kapat;
+        public Rectangle Deger, Degistir, Kaldir;
     }
 
     private bool _yakalaniyor;     // "Değiştir"e basıldı: bir sonraki tuş kombinasyonu bekleniyor
     private string? _kisayolHata;  // kısa kırmızı uyarı (bir sonraki eyleme kadar)
 
-    private static readonly string[] Sekmeler = { "Genel", "Renk ve yazı", "Kukla ve alarm" };
+    private static readonly string[] Sekmeler = { "Genel", "Görünüm", "Uyarılar", "Kukla" };
     private readonly Rectangle[] _sekmeKutu = new Rectangle[Sekmeler.Length];
     private int _sekme;
     private int _sekmeUstunde = -1;
@@ -178,25 +181,13 @@ internal sealed class AyarlarFormu : Form
 
         string[] boyutlar = Array.ConvertAll(Ayarlar.BoyutSecenekleri, v => "%" + v.ToString(Bicim.Tr));
         // ---- Sekme 0: Genel ----
-        _ogeler.Add(new Bolum("Görünüm"));
-        _ogeler.Add(new Secim("Boyut", boyutlar, () => Array.IndexOf(Ayarlar.BoyutSecenekleri, _ayar.Boyut),
-            i => _b.BoyutSec(Ayarlar.BoyutSecenekleri[i])));
-        _ogeler.Add(new Kaydirici("Saydamlık", 30, 100, () => _ayar.Opaklik,
-            v => { _ayar.Opaklik = v; _b.OpaklikDegisti(); }, _ayar.Kaydet));
+        _ogeler.Add(new Bolum("Overlay"));
+        _ogeler.Add(new Anahtar("Sadece oyun öndeyken göster", null, _b.SadeceOyunda, _b.SadeceOyundaDegistir));
         _ogeler.Add(new Secim("Savaş dışında", new[] { "Soluk", "Gizle", "Hep görünür" }, () => (int)_ayar.SavasDisi,
             i => { _ayar.SavasDisi = (SavasDisiModu)i; _ayar.Kaydet(); _b.SavasDisiDegisti(); }));
         _ogeler.Add(new Kaydirici("Soluk opaklığı", Ayarlar.EnAzSolukOpaklik, Ayarlar.EnFazlaSolukOpaklik, () => _ayar.SolukOpaklik,
             v => { _ayar.SolukOpaklik = v; _b.SolukDegisti(); }, _ayar.Kaydet)
         { Etkin = () => _ayar.SavasDisi == SavasDisiModu.Soluk });
-        _ogeler.Add(new Anahtar("Sadece oyun öndeyken göster", null, _b.SadeceOyunda, _b.SadeceOyundaDegistir));
-        // Zamanlayıcı ayarları her tikte okur: burada yalnız kaydetmek yeter (geri sayım paneli kendini günceller).
-        _ogeler.Add(new Anahtar("Etkinlik geri sayımı", null, () => _ayar.Zamanlayici, () =>
-        {
-            _ayar.Zamanlayici = !_ayar.Zamanlayici;
-            _ayar.Kaydet();
-        }));
-        _ogeler.Add(new Secim("Bölge", EtkinlikTakvimi.BolgeAdlari, () => (int)_ayar.Bolge,
-            i => { _ayar.Bolge = (SunucuBolgesi)i; _ayar.Kaydet(); }));
         _ogeler.Add(new Anahtar("Sadece benim satırım", "Diğerleri arka planda sayılır; sıran #3 gibi görünür", () => _ayar.SadeceBen, () =>
         {
             _ayar.SadeceBen = !_ayar.SadeceBen;
@@ -221,9 +212,18 @@ internal sealed class AyarlarFormu : Form
             () => _b.Denetleniyor() ? "Denetleniyor…" : "Güncellemeleri denetle", _b.GuncellemeDenetle)
         { Etkin = () => !_b.Denetleniyor() });
 
-        // ---- Sekme 1: Renk ve yazı ----
+        // ---- Sekme 1: Görünüm ----
         int ilk = _ogeler.Count;
-        _ogeler.Add(new Bolum("Sınıf renkleri"));
+        _ogeler.Add(new Bolum("Pencere"));
+        _ogeler.Add(new Secim("Boyut", boyutlar, () => Array.IndexOf(Ayarlar.BoyutSecenekleri, _ayar.Boyut),
+            i => _b.BoyutSec(Ayarlar.BoyutSecenekleri[i])));
+        _ogeler.Add(new Kaydirici("Opaklık", 30, 100, () => _ayar.Opaklik,
+            v => { _ayar.Opaklik = v; _b.OpaklikDegisti(); }, _ayar.Kaydet));
+
+        // "Varsayılana dön" bölüm başlığının sağında: altındaki her şeyi (renkler, yazılar, çubuk) sıfırlar.
+        _ogeler.Add(new Bolum("Renk ve yazı"));
+        _ogeler.Add(new Dugme(() => "", () => "Varsayılana dön", () => RenkDegisti(_ayar.RenkSifirla))
+        { Etkin = () => !_ayar.RenkVarsayilan, Baslikta = true });
         for (int i = 1; i < Palet.SinifSirasi.Length; i++)
         {
             int si = i;
@@ -233,7 +233,6 @@ internal sealed class AyarlarFormu : Form
         }
         _ogeler.Add(new RenkSecim("Kendi satır rengim", null, () => Palet.YerelRenk, () => Palet.SabitSatir,
             () => _ayar.YerelRenk, Palet.Yerel, r => RenkDegisti(() => _ayar.YerelRenk = r), yarim: false));
-        _ogeler.Add(new Bolum("Yazı ve çubuk"));
         Action yaziBitti = () => { _ayar.Kaydet(); _b.YaziBitti(); };
         _ogeler.Add(new Kaydirici("Ad yazısı", Ayarlar.EnAzYazi, Ayarlar.EnFazlaYazi, () => _ayar.YaziAd,
             v => { _ayar.YaziAd = v; _b.GorunumDegisti(); }, yaziBitti));
@@ -243,11 +242,60 @@ internal sealed class AyarlarFormu : Form
             v => { _ayar.YaziBoss = v; _b.GorunumDegisti(); }, yaziBitti));
         _ogeler.Add(new Kaydirici("Pay çubuğu opaklığı", 0, 100, () => _ayar.CubukOpaklik,
             v => { _ayar.CubukOpaklik = v; _b.GorunumDegisti(); }, _ayar.Kaydet));
-        _ogeler.Add(new Dugme(() => "Tüm renkler ve yazılar", () => "Varsayılana dön", () => RenkDegisti(_ayar.RenkSifirla))
-        { Etkin = () => !_ayar.RenkVarsayilan });
         for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 1;
 
-        // ---- Sekme 2: Kukla ve alarm ----
+        // ---- Sekme 2: Uyarılar ----
+        ilk = _ogeler.Count;
+        _ogeler.Add(new Bolum("Gizli Küp"));
+        _ogeler.Add(new Dugme(() => "", () => "Dene", () => Zil.Kup(_ayar.KupSes)) { Etkin = () => _ayar.KupSesi, Baslikta = true });
+        _ogeler.Add(new Anahtar("Gizli Küp sesi", "Yakına bir küp gelince kısa, yumuşak ses", () => _ayar.KupSesi, () =>
+        {
+            _ayar.KupSesi = !_ayar.KupSesi;
+            _ayar.Kaydet();
+            if (_ayar.KupSesi) Zil.Kup(_ayar.KupSes); // açınca bir kez önizleme
+        }));
+        _ogeler.Add(new Kaydirici("Küp sesi düzeyi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.KupSes,
+            v => _ayar.KupSes = v, () => { _ayar.Kaydet(); Zil.Kup(_ayar.KupSes); }) // bırakınca bir kez önizleme
+        { Etkin = () => _ayar.KupSesi });
+
+        _ogeler.Add(new Bolum("Öfke ve gecikme"));
+        _ogeler.Add(new Anahtar("Öfke uyarısı sesi", "Öfkeye 30 sn kala ve yetişmeyecekse kısa ses", () => _ayar.OfkeSesi, () =>
+        {
+            _ayar.OfkeSesi = !_ayar.OfkeSesi;
+            _ayar.Kaydet();
+            if (_ayar.OfkeSesi)
+            {
+                try { System.Media.SystemSounds.Exclamation.Play(); } catch { /* önizleme */ }
+            }
+        }));
+        // Gecikme uyarısı: overlay her tikte ayara bakar, değişiklik hemen geçerli.
+        string[] pingEsikleri = Array.ConvertAll(PingUyarisi.Esikler, v => v.ToString(Bicim.Tr) + " ms");
+        _ogeler.Add(new Anahtar("Gecikme uyarısı", "Ping eşiği aşınca overlay'de kırmızı \"320 ms\"", () => _ayar.PingUyari, () =>
+        {
+            _ayar.PingUyari = !_ayar.PingUyari;
+            _ayar.Kaydet();
+        }));
+        _ogeler.Add(new Secim("Gecikme eşiği", pingEsikleri, () => Array.IndexOf(PingUyarisi.Esikler, _ayar.PingEsik),
+            i => { _ayar.PingEsik = PingUyarisi.Esikler[i]; _ayar.Kaydet(); }) { Etkin = () => _ayar.PingUyari });
+
+        _ogeler.Add(new Bolum("Etkinlik ve alarm"));
+        // Zamanlayıcı ayarları her tikte okur: burada yalnız kaydetmek yeter (geri sayım paneli kendini günceller).
+        _ogeler.Add(new Anahtar("Etkinlik geri sayımı", null, () => _ayar.Zamanlayici, () =>
+        {
+            _ayar.Zamanlayici = !_ayar.Zamanlayici;
+            _ayar.Kaydet();
+        }));
+        _ogeler.Add(new Secim("Sunucu bölgesi", EtkinlikTakvimi.BolgeAdlari, () => (int)_ayar.Bolge,
+            i => { _ayar.Bolge = (SunucuBolgesi)i; _ayar.Kaydet(); }));
+        _ogeler.Add(new Dugme(() => _b.AlarmKalan() is string k ? "Alarm · " + k + " kaldı" : "Alarm",
+            () => _b.AlarmKalan() is null ? "Kur…" : "Kapat",
+            () => { if (_b.AlarmKalan() is null) _b.AlarmKur(); else _b.AlarmIptal(); },
+            "Oyunda: Alt basılı tut, overlay'deki saate tıkla"));
+        _ogeler.Add(new Kaydirici("Alarm sesi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.AlarmSes,
+            v => _ayar.AlarmSes = v, () => { _ayar.Kaydet(); Zil.Cal(_ayar.AlarmSes); })); // bırakınca bir kez önizleme
+        for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 2;
+
+        // ---- Sekme 3: Kukla ----
         ilk = _ogeler.Count;
         string[] sureler = new string[Ayarlar.KuklaSureleri.Length + 1];
         for (int i = 0; i < Ayarlar.KuklaSureleri.Length; i++) sureler[i] = Ayarlar.KuklaSureleri[i].ToString(Bicim.Tr) + " sn";
@@ -269,47 +317,7 @@ internal sealed class AyarlarFormu : Form
             () => { if (_b.KuklaEtkin()) _b.KuklaIptal(); else _b.KuklaBaslat(); },
             "Sayaç sıfırlanır; ilk vuruşunla geri sayım başlar"));
         _ogeler.Add(new KisayolSatiri());
-
-        _ogeler.Add(new Bolum("Alarm"));
-        _ogeler.Add(new Kaydirici("Alarm sesi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.AlarmSes,
-            v => _ayar.AlarmSes = v, () => { _ayar.Kaydet(); Zil.Cal(_ayar.AlarmSes); })); // bırakınca bir kez önizleme
-        _ogeler.Add(new Dugme(() => _b.AlarmKalan() is string k ? "Alarm · " + k + " kaldı" : "Alarm",
-            () => _b.AlarmKalan() is null ? "Kur…" : "Kapat",
-            () => { if (_b.AlarmKalan() is null) _b.AlarmKur(); else _b.AlarmIptal(); },
-            "Oyunda: Alt basılı tut, overlay'deki saate tıkla"));
-
-        _ogeler.Add(new Bolum("Uyarı"));
-        _ogeler.Add(new Anahtar("Öfke uyarısı sesi", "Öfkeye 30 sn kala ve yetişmeyecekse kısa ses", () => _ayar.OfkeSesi, () =>
-        {
-            _ayar.OfkeSesi = !_ayar.OfkeSesi;
-            _ayar.Kaydet();
-            if (_ayar.OfkeSesi)
-            {
-                try { System.Media.SystemSounds.Exclamation.Play(); } catch { /* önizleme */ }
-            }
-        }));
-        // Gecikme uyarısı: overlay her tikte ayara bakar, değişiklik hemen geçerli.
-        string[] pingEsikleri = Array.ConvertAll(PingUyarisi.Esikler, v => v.ToString(Bicim.Tr) + " ms");
-        _ogeler.Add(new Anahtar("Gecikme uyarısı", "Ping eşiği aşınca overlay'de kırmızı \"320 ms\"", () => _ayar.PingUyari, () =>
-        {
-            _ayar.PingUyari = !_ayar.PingUyari;
-            _ayar.Kaydet();
-        }));
-        _ogeler.Add(new Secim("Gecikme eşiği", pingEsikleri, () => Array.IndexOf(PingUyarisi.Esikler, _ayar.PingEsik),
-            i => { _ayar.PingEsik = PingUyarisi.Esikler[i]; _ayar.Kaydet(); }) { Etkin = () => _ayar.PingUyari });
-
-        _ogeler.Add(new Bolum("Gizli Küp"));
-        _ogeler.Add(new Anahtar("Gizli Küp sesi", "Yakına bir küp gelince kısa, yumuşak ses", () => _ayar.KupSesi, () =>
-        {
-            _ayar.KupSesi = !_ayar.KupSesi;
-            _ayar.Kaydet();
-            if (_ayar.KupSesi) Zil.Kup(_ayar.KupSes); // açınca bir kez önizleme
-        }));
-        _ogeler.Add(new Kaydirici("Küp sesi düzeyi", Ayarlar.EnAzAlarmSes, Ayarlar.EnFazlaAlarmSes, () => _ayar.KupSes,
-            v => _ayar.KupSes = v, () => { _ayar.Kaydet(); Zil.Kup(_ayar.KupSes); }) // bırakınca bir kez önizleme
-        { Etkin = () => _ayar.KupSesi });
-        _ogeler.Add(new Dugme(() => "Küp sesi", () => "Dene", () => Zil.Kup(_ayar.KupSes)) { Etkin = () => _ayar.KupSesi });
-        for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 2;
+        for (int i = ilk; i < _ogeler.Count; i++) _ogeler[i].Sekme = 3;
 
         ClientSize = Yerlesim();
     }
@@ -352,13 +360,17 @@ internal sealed class AyarlarFormu : Form
             _sekmeKutu[i] = new Rectangle(x0 + i * sw, sy, i == Sekmeler.Length - 1 ? x1 - x0 - i * sw : sw, sh);
         int ust = sy + sh + P(4);
 
+        // Satır yükseklikleri: pencere %150 ölçekte de 1080p ekrana sığsın diye sıkı tutuldu.
+        int satir = P(34), satirAciklama = P(44), bolumH = P(28);
+
         // Her sekme aynı noktadan başlar; pencere en uzun sekmenin boyunda (sekme değişince boyut zıplamaz).
         int enAlt = ust;
         for (int t = 0; t < Sekmeler.Length; t++)
         {
             int y = ust;
+            Rectangle sonBolum = default;
             bool solDolu = false; // yarım genişlikli renk hücresi: önce sol, sonra sağ
-            int yarimH = P(36), yarimW = (x1 - x0 - P(16)) / 2;
+            int yarimH = P(32), yarimW = (x1 - x0 - P(16)) / 2;
             foreach (var o in _ogeler)
             {
                 if (o.Sekme != t) continue;
@@ -375,20 +387,29 @@ internal sealed class AyarlarFormu : Form
                     y += yarimH;
                     solDolu = false;
                 }
+                if (o is Dugme { Baslikta: true } bd)
+                {
+                    // Bölüm başlığının yazısıyla aynı hizada, sağda; satır eklemez.
+                    int dw = Olc(bd.Metin(), _yaziKucuk) + P(24);
+                    bd.Kutu = new Rectangle(x1 - dw, sonBolum.Y + P(8), dw, P(20));
+                    o.Alan = bd.Kutu;
+                    continue;
+                }
                 switch (o)
                 {
                     case Bolum:
-                        o.Alan = new Rectangle(x0, y, x1 - x0, P(34));
+                        o.Alan = sonBolum = new Rectangle(x0, y, x1 - x0, bolumH);
                         break;
                     case Secim s:
                     {
-                        o.Alan = new Rectangle(x0, y, x1 - x0, P(38));
                         int n = s.Secenekler.Length;
                         int parcaW = 0;
                         foreach (string m in s.Secenekler) parcaW = Math.Max(parcaW, Olc(m, _yaziKucuk) + P(16));
                         int toplam = parcaW * n;
-                        // Eşit parçalar etiketin yanına sığmıyorsa (ör. bölge seçimi) her parça kendi metni kadar geniş.
-                        bool dar = toplam > x1 - x0 - Olc(s.Etiket, _yazi) - P(12);
+                        int etiketW = Olc(s.Etiket, _yazi) + P(16);
+                        // Eşit parçalar etiketin yanına sığmıyorsa her parça kendi metni kadar geniş;
+                        // o da sığmıyorsa seçenekler etiketin altındaki satıra iner.
+                        bool dar = toplam > x1 - x0 - etiketW;
                         var genislik = new int[n];
                         if (dar)
                         {
@@ -396,7 +417,9 @@ internal sealed class AyarlarFormu : Form
                             for (int i = 0; i < n; i++) toplam += genislik[i] = Olc(s.Secenekler[i], _yaziKucuk) + P(12);
                         }
                         else Array.Fill(genislik, parcaW);
-                        int sx = x1 - toplam, syy = y + (P(38) - P(26)) / 2;
+                        s.IkiSatir = toplam > x1 - x0 - etiketW;
+                        o.Alan = new Rectangle(x0, y, x1 - x0, s.IkiSatir ? satir + P(30) : satir);
+                        int sx = x1 - toplam, syy = (s.IkiSatir ? y + satir - P(4) : y) + (satir - P(26)) / 2;
                         s.Parcalar = new Rectangle[n];
                         for (int i = 0; i < n; i++)
                         {
@@ -406,19 +429,19 @@ internal sealed class AyarlarFormu : Form
                         break;
                     }
                     case Kaydirici kd:
-                        o.Alan = new Rectangle(x0, y, x1 - x0, P(38));
-                        kd.Iz = new Rectangle(x1 - P(56) - P(170), y + P(38) / 2 - P(2), P(170), P(4));
+                        o.Alan = new Rectangle(x0, y, x1 - x0, satir);
+                        kd.Iz = new Rectangle(x1 - P(56) - P(170), y + satir / 2 - P(2), P(170), P(4));
                         break;
                     case Anahtar a:
                     {
-                        int h = a.Aciklama is null ? P(38) : P(48);
+                        int h = a.Aciklama is null ? satir : satirAciklama;
                         o.Alan = new Rectangle(x0, y, x1 - x0, h);
                         a.Dugme = new Rectangle(x1 - P(38), y + (h - P(20)) / 2, P(38), P(20));
                         break;
                     }
                     case Dugme d:
                     {
-                        int h = d.Aciklama is null ? P(42) : P(50);
+                        int h = d.Aciklama is null ? P(36) : satirAciklama;
                         o.Alan = new Rectangle(x0, y, x1 - x0, h);
                         int dw = Math.Max(Olc(d.Metin(), _yaziKucuk), P(96)) + P(28);
                         d.Kutu = new Rectangle(x1 - dw, y + (h - P(28)) / 2, dw, P(28));
@@ -426,16 +449,16 @@ internal sealed class AyarlarFormu : Form
                     }
                     case KisayolSatiri ks:
                     {
-                        o.Alan = new Rectangle(x0, y, x1 - x0, P(58));
-                        int by = y + P(6), bh = P(28);
-                        ks.Kapat = new Rectangle(x1 - P(64), by, P(64), bh);
-                        ks.Degistir = new Rectangle(ks.Kapat.Left - P(6) - P(84), by, P(84), bh);
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(54));
+                        int by = y + P(4), bh = P(28);
+                        ks.Kaldir = new Rectangle(x1 - P(64), by, P(64), bh);
+                        ks.Degistir = new Rectangle(ks.Kaldir.Left - P(6) - P(84), by, P(84), bh);
                         ks.Deger = new Rectangle(ks.Degistir.Left - P(8) - P(124), by, P(124), bh);
                         break;
                     }
                     case RenkSecim r:
-                        o.Alan = new Rectangle(x0, y, x1 - x0, P(40));
-                        r.Kutu = new Rectangle(x1 - P(44), y + (P(40) - P(20)) / 2, P(44), P(20));
+                        o.Alan = new Rectangle(x0, y, x1 - x0, P(36));
+                        r.Kutu = new Rectangle(x1 - P(44), y + (P(36) - P(20)) / 2, P(44), P(20));
                         break;
                 }
                 y += o.Alan.Height;
@@ -443,7 +466,7 @@ internal sealed class AyarlarFormu : Form
             if (solDolu) y += yarimH;
             enAlt = Math.Max(enAlt, y);
         }
-        return new Size(w, enAlt + P(10) + P(30) + P(10));
+        return new Size(w, enAlt + P(8) + P(30));
     }
 
     // ---------------- Pencere ----------------
@@ -509,11 +532,13 @@ internal sealed class AyarlarFormu : Form
             switch (o)
             {
                 case Bolum b:
-                    TextRenderer.DrawText(g, b.Baslik, _yaziBolum, new Rectangle(r.X, r.Y + P(12), r.Width, r.Height - P(12)), Palet.Soluk, Sol);
+                    TextRenderer.DrawText(g, b.Baslik, _yaziBolum, new Rectangle(r.X, r.Y + P(10), r.Width, r.Height - P(10)), Palet.Soluk, Sol);
                     break;
                 case Secim s:
                 {
-                    Etiket(g, s.Etiket, null, r, etkin);
+                    // Etiket seçeneklerin soluna kadar kısalır; seçenekler alt satırdaysa etiket üst satırın tamamını alır.
+                    if (s.IkiSatir) Etiket(g, s.Etiket, null, new Rectangle(r.X, r.Y, r.Width, P(34)), etkin, r.Right);
+                    else Etiket(g, s.Etiket, null, r, etkin, s.Parcalar[0].Left - P(10));
                     int secili = s.Secili();
                     var dis = Rectangle.FromLTRB(s.Parcalar[0].Left, s.Parcalar[0].Top, s.Parcalar[^1].Right, s.Parcalar[0].Bottom);
                     Cizim.YuvarlakDoldur(g, _fircaPanel, dis, P(5));
@@ -533,7 +558,7 @@ internal sealed class AyarlarFormu : Form
                 }
                 case Kaydirici k:
                 {
-                    Etiket(g, k.Etiket, null, r, etkin);
+                    Etiket(g, k.Etiket, null, r, etkin, k.Iz.Left - P(12));
                     int v = k.Deger();
                     float oran = (float)(v - k.Min) / Math.Max(1, k.Max - k.Min);
                     Cizim.YuvarlakDoldur(g, _fircaPanelUst, k.Iz, P(2));
@@ -562,7 +587,7 @@ internal sealed class AyarlarFormu : Form
                 }
                 case Dugme d:
                 {
-                    Etiket(g, d.Etiket(), d.Aciklama, r, true, d.Kutu.Left - P(10));
+                    if (!d.Baslikta) Etiket(g, d.Etiket(), d.Aciklama, r, true, d.Kutu.Left - P(10));
                     Cizim.YuvarlakDoldur(g, etkin && _ustunde == o ? _fircaSecili : _fircaPanelUst, d.Kutu, P(5));
                     TextRenderer.DrawText(g, d.Metin(), _yaziKucuk, d.Kutu, etkin ? Palet.Yazi : Palet.CokSoluk, Orta);
                     break;
@@ -576,8 +601,8 @@ internal sealed class AyarlarFormu : Form
             }
         }
 
-        TextRenderer.DrawText(g, "Değişiklikler hemen uygulanır ve kaydedilir.", _yaziKucuk,
-            new Rectangle(pad, h - P(40), w - 2 * pad, P(30)), Palet.CokSoluk, Sol);
+        TextRenderer.DrawText(g, "Her değişiklik anında kaydedilir.", _yaziKucuk,
+            new Rectangle(pad, h - P(30), w - 2 * pad, P(22)), Palet.CokSoluk, Sol);
 
         if (_palet is not null) CizPalet(g);
         g.DrawRectangle(_kalemKenar, 0, 0, w - 1, h - 1);
@@ -641,9 +666,9 @@ internal sealed class AyarlarFormu : Form
 
         Cizim.YuvarlakDoldur(g, _ustunde == ks && _kisayolUstunde == 1 ? _fircaSecili : _fircaPanelUst, ks.Degistir, P(5));
         TextRenderer.DrawText(g, _yakalaniyor ? "Vazgeç" : "Değiştir", _yaziKucuk, ks.Degistir, Palet.Yazi, Orta);
-        bool kapatEtkin = k.Length > 0 && !_yakalaniyor;
-        Cizim.YuvarlakDoldur(g, kapatEtkin && _ustunde == ks && _kisayolUstunde == 2 ? _fircaSecili : _fircaPanelUst, ks.Kapat, P(5));
-        TextRenderer.DrawText(g, "Kapat", _yaziKucuk, ks.Kapat, kapatEtkin ? Palet.Yazi : Palet.CokSoluk, Orta);
+        bool kaldirEtkin = k.Length > 0 && !_yakalaniyor;
+        Cizim.YuvarlakDoldur(g, kaldirEtkin && _ustunde == ks && _kisayolUstunde == 2 ? _fircaSecili : _fircaPanelUst, ks.Kaldir, P(5));
+        TextRenderer.DrawText(g, "Kaldır", _yaziKucuk, ks.Kaldir, kaldirEtkin ? Palet.Yazi : Palet.CokSoluk, Orta);
 
         string alt = _kisayolHata ?? (_yakalaniyor ? "En az bir Ctrl / Alt / Shift / Win + tuş · Esc: vazgeç"
             : k.Length == 0 ? "Kısayol kapalı; Değiştir ile yenisini ata"
@@ -652,7 +677,7 @@ internal sealed class AyarlarFormu : Form
             _kisayolHata is not null ? Palet.Kirmizi : Palet.Soluk, Sol);
     }
 
-    private int _kisayolUstunde; // 1 Değiştir, 2 Kapat
+    private int _kisayolUstunde; // 1 Değiştir, 2 Kaldır
 
     // ---------------- Kısayol yakalama ----------------
 
@@ -819,7 +844,7 @@ internal sealed class AyarlarFormu : Form
                 case Anahtar a when o.Alan.Contains(p): return o;   // satırın her yeri anahtarı değiştirir
                 case Dugme d when d.Kutu.Contains(p): return o;
                 case RenkSecim when o.Alan.Contains(p): return o;   // hücrenin her yeri paleti açar
-                case KisayolSatiri ks when ks.Degistir.Contains(p) || ks.Kapat.Contains(p): return o;
+                case KisayolSatiri ks when ks.Degistir.Contains(p) || ks.Kaldir.Contains(p): return o;
             }
         }
         return null;
